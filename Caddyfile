@@ -1,0 +1,7 @@
+{$AIVS_DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 600MB
+	}
+	reverse_proxy aivs:8080
+}

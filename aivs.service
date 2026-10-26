@@ -1,0 +1,20 @@
+# systemd unit for running AIVS without Docker (Ubuntu/Debian). Put behind Caddy or nginx for HTTPS.
+# Install: sudo cp deploy/aivs.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now aivs
+[Unit]
+Description=AIVS verification server
+After=network.target
+
+[Service]
+Type=simple
+User=aivs
+WorkingDirectory=/opt/aivs
+Environment=NODE_ENV=production HOST=127.0.0.1 PORT=8080 TRUST_PROXY=true COOKIE_SECURE=true
+# Keys (FACTCHECK_API_KEY etc.) go in /opt/aivs/.env, which AIVS reads itself; the values above win over it.
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
