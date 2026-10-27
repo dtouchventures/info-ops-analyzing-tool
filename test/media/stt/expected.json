@@ -1,0 +1,24 @@
+{
+ "note": "SYNTHETIC test recordings made with espeak-ng (robotic voices) and ffmpeg; no real people.",
+ "english.wav": {
+  "lang": "en",
+  "text": "The county government says the main road to Garissa will be closed for repairs from Monday. Motorists should use the bypass."
+ },
+ "kiswahili.mp3": {
+  "lang": "sw",
+  "text": "Serikali ya kaunti inasema barabara kuu ya Garissa itafungwa kwa ukarabati kuanzia Jumatatu. Madereva watumie njia mbadala."
+ },
+ "video.mp4": {
+  "lang": "en",
+  "text": "The county government says the main road to Garissa will be closed for repairs from Monday. Motorists should use the bypass."
+ },
+ "silence.wav": {
+  "silence": true
+ },
+ "video-no-sound.mp4": {
+  "no_audio": true
+ },
+ "not-audio.mp3": {
+  "invalid": true
+ }
+}
