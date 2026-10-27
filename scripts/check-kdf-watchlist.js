@@ -25,7 +25,7 @@ const day = iso => (iso ? iso.slice(0, 16).replace("T", " ") : "no date given   
 log(`AIVS default watchlist check ${nowISO()} (version ${JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version})`);
 let failed = false;
 try {
-  const sys = ctx.live.systemUser(), d = ctx.keywords.ensureDefault(sys), wl = ctx.watch.get(d.id);
+  const sys = ctx.live.systemUser(), d = ctx.keywords.ensureDefault(sys); ctx.keywords.addReadySources(sys); const wl = ctx.watch.get(d.id);
   log(`Watchlist “${wl.name}”: ${wl.status}. Keywords: ${wl.definition.terms.join(", ")}. Ambiguous (need context): ${(wl.definition.contextual || []).map(c => c.term).join(", ")}.`);
   log(`\nSources of the watchlist, each run once now:`);
   for (const s of wl.definition.sources) {

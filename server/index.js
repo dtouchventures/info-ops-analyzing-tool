@@ -41,7 +41,8 @@ const server = app.listen(config.port, config.host, () => {
   ctx.live.start();
   // the default KDF watchlist is created once (then edited from the dashboard); AI analysis of discovered items runs from a queue
   // that waits while the Ollama server cannot be reached; emerging topics are checked every 10 minutes
-  try { const d = ctx.keywords.ensureDefault(ctx.live.systemUser()); if (d) console.log(`  Default watchlist “KDF and Kenya Defence Forces Monitoring”: ${d.status}`); } catch (e) { console.warn("[monitor] default watchlist:", e.message); }
+  try { const d = ctx.keywords.ensureDefault(ctx.live.systemUser()); if (d) console.log(`  Default watchlist “KDF and Kenya Defence Forces Monitoring”: ${d.status}`);
+    const added = ctx.keywords.addReadySources(ctx.live.systemUser()); if (added.length) console.log(`  Default watchlist: newly connected source(s) added: ${added.join(", ")}`); } catch (e) { console.warn("[monitor] default watchlist:", e.message); }
   setInterval(() => ctx.keywords.aiTick().catch(e => console.warn("[monitor] AI queue:", e.message)), 60e3).unref();
   setInterval(() => { try { ctx.keywords.emergingTick(); } catch (e) { console.warn("[monitor] emerging topics:", e.message); } }, 10 * 60e3).unref();
   // a daily draft monitoring report for each active watchlist with new items (07:00 EAT by default)

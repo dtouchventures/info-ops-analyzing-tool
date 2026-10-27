@@ -6,6 +6,7 @@ Set-Location (Split-Path -Parent $PSScriptRoot)
 if (-not (Test-Path ".env")) { Write-Host ".env not found. Run start-windows.bat once first."; exit 1 }
 
 $groups = @(
+  @{ name = "Meta Page token (replace an exposed token; then run: npm run meta:token)"; keys = @(@{ k = "META_PAGE_ACCESS_TOKEN"; secret = $true; help = "developers.facebook.com/tools/explorer > your app > User Token with pages_show_list, pages_read_engagement > Generate. AIVS turns it into the Page token with npm run meta:token" }) },
   @{ name = "YouTube (free key; live watchlists, full video details)"; keys = @(@{ k = "YOUTUBE_API_KEY"; secret = $true; help = "Google Cloud Console > APIs and Services > YouTube Data API v3 > Credentials > API key" }) },
   @{ name = "X / Twitter (paid per post read)"; keys = @(@{ k = "X_BEARER_TOKEN"; secret = $true; help = "developer.x.com > your project > app > Keys and tokens > Bearer Token" }) },
   @{ name = "Facebook (Pages you manage, or Page Public Content Access)"; keys = @(

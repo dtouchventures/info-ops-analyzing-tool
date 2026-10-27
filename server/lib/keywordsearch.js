@@ -665,7 +665,23 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
     audit(user, "Default KDF watchlist set up", "watchlist", String(id), { status });
     return { id, status };
   }
+  // a source of the default watchlist that becomes connected later (a key added to .env) is added to it once; a source an analyst
+  // removes afterwards is not added again. The watchlist keeps running.
+  function addReadySources(user) {
+    const id = Number(db.prepare("SELECT value FROM settings WHERE key = 'default_kdf_watchlist'").get()?.value); if (!id || !user) return [];
+    const wl = db.prepare("SELECT id FROM watchlists WHERE id = ? AND deleted_at IS NULL").get(id) && watch.get(id); if (!wl) return [];
+    const offered = new Set(J(db.prepare("SELECT value FROM settings WHERE key = 'default_kdf_sources_offered'").get()?.value) || wl.definition.sources);
+    const add = KDF_DEFAULT.definition.sources.filter(k => !offered.has(k) && !wl.definition.sources.includes(k) && WATCH_SOURCES[k] && watchCollector.sourcesReady(k));
+    for (const k of add) offered.add(k); for (const k of wl.definition.sources) offered.add(k);
+    db.prepare("INSERT INTO settings(key, value) VALUES ('default_kdf_sources_offered', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify([...offered]));
+    if (!add.length) return [];
+    const wasActive = wl.status === "active", intervals = { ...wl.definition.intervals }; for (const k of add) intervals[k] = KDF_DEFAULT.definition.intervals[k] ?? intervals[k];
+    watch.update(user, id, { definition: { ...wl.definition, sources: [...wl.definition.sources, ...add], intervals } });
+    if (wasActive) { watch.recordPreview(user, id, { local: { matched: 0 }, live: [], note: `connected source(s) added: ${add.join(", ")}` }); try { watch.setStatus(user, id, "active", k => watchCollector.sourcesReady(k)); } catch (e) { console.warn("[monitor] default watchlist:", e.message); } }
+    audit(user, "Newly connected sources added to the default watchlist", "watchlist", String(id), { sources: add });
+    return add;
+  }
 
   return { overview, sources, start, run, get, results, list, feed, item, image, verify, report, reportGet, reports, reportFile, reviewReport, saveAsWatchlist, daily, running: () => [...running], parseQuery,
-    aiTick, aiQueueCounts, aiIndicator, retryAi, emerging, emergingTick, ensureDefault, contextualLibrary };
+    aiTick, aiQueueCounts, aiIndicator, retryAi, emerging, emergingTick, ensureDefault, addReadySources, contextualLibrary };
 }

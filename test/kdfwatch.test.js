@@ -5,7 +5,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { startServer, login } from "./helpers.js";
+import { startServer, login, reopenServer } from "./helpers.js";
 import { normaliseDefinition, matchPost, KDF_DEFAULT, xQuery, youtubeQuery } from "../server/lib/watch.js";
 import { markTestRecords } from "../server/lib/db.js";
 process.env.MONITOR_AUTO_REPORT_MIN_ITEMS = "3";
@@ -172,4 +172,19 @@ test("an emerging topic within the watchlist raises an alert", async () => {
   assert.ok(S.ctx.keywords.emergingTick() >= 1);
   assert.ok(S.ctx.db.prepare("SELECT 1 FROM watch_alerts WHERE watchlist_id = ? AND kind = 'narrative' AND title LIKE '%Garissa%'").get(wid));
   assert.equal(S.ctx.keywords.emergingTick(), 0, "once a day per topic");
+});
+
+test("a source connected later (a key added) is added to the default watchlist once; one an analyst removes is not added back", async () => {
+  const S3 = await startServer({ search: { gdelt: false }, watch: { enabled: false, metricsRefreshMinutes: 0 } });
+  const d = S3.ctx.keywords.ensureDefault(S3.ctx.live.systemUser()); assert.ok(!S3.ctx.watch.get(d.id).definition.sources.includes("mastodon"));
+  assert.deepEqual(S3.ctx.keywords.addReadySources(S3.ctx.live.systemUser()), [], "nothing new is connected"); await S3.close();
+  // AIVS restarted after MASTODON_INSTANCES was added to .env
+  const S4 = await reopenServer(S3.dataDir, { search: { gdelt: false }, watch: { enabled: false, metricsRefreshMinutes: 0 }, platforms: { mastodonInstances: "mastodon.social" } });
+  try {
+    const sys = S4.ctx.live.systemUser(); assert.ok(S4.ctx.watchCollector.sourcesReady("mastodon"));
+    assert.deepEqual(S4.ctx.keywords.addReadySources(sys), ["mastodon"]); const wl = S4.ctx.watch.get(d.id);
+    assert.ok(wl.definition.sources.includes("mastodon")); assert.equal(wl.status, "active", "it keeps running");
+    S4.ctx.watch.update(sys, d.id, { definition: { ...wl.definition, sources: wl.definition.sources.filter(k => k !== "mastodon") } });
+    assert.deepEqual(S4.ctx.keywords.addReadySources(sys), [], "not added back after an analyst removed it");
+  } finally { await S4.close(); }
 });
