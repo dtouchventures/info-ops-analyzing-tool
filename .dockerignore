@@ -1,0 +1,8 @@
+node_modules
+data
+backups
+.env
+*.log
+test
+browser-edition
+AIVS (no install).html

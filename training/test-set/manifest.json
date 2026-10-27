@@ -1,0 +1,100 @@
+[
+ {
+  "id": "T01",
+  "label": "Convoy \u2013 heavy recompression (q30)",
+  "file": "T01.jpg",
+  "expect": "REC-001",
+  "note": "Re-saved at low JPEG quality"
+ },
+ {
+  "id": "T02",
+  "label": "Convoy \u2013 20% centre crop",
+  "file": "T02.jpg",
+  "expect": "REC-001",
+  "note": "Cropped to remove edges"
+ },
+ {
+  "id": "T03",
+  "label": "Convoy \u2013 resized to 320px",
+  "file": "T03.jpg",
+  "expect": "REC-001",
+  "note": "Downscaled thumbnail"
+ },
+ {
+  "id": "T04",
+  "label": "Convoy \u2013 brightness +30%",
+  "file": "T04.jpg",
+  "expect": "REC-001",
+  "note": "Colour/brightness filter"
+ },
+ {
+  "id": "T05",
+  "label": "Convoy \u2013 red caption banner",
+  "file": "T05.jpg",
+  "expect": "REC-001",
+  "note": "Text banner added over 12% of frame"
+ },
+ {
+  "id": "T06",
+  "label": "Convoy \u2013 mirrored",
+  "file": "T06.jpg",
+  "expect": "REC-001",
+  "note": "Horizontally flipped (known hard case for dHash/pHash)"
+ },
+ {
+  "id": "T07",
+  "label": "Notice \u2013 screenshot-style recompress",
+  "file": "T07.jpg",
+  "expect": "REC-002",
+  "note": "Slight crop + recompression"
+ },
+ {
+  "id": "T08",
+  "label": "Notice \u2013 greyscale",
+  "file": "T08.jpg",
+  "expect": "REC-002",
+  "note": "Converted to greyscale"
+ },
+ {
+  "id": "T09",
+  "label": "Notice \u2013 35% crop (top half)",
+  "file": "T09.jpg",
+  "expect": "REC-002",
+  "note": "Heavy crop \u2013 only top 65% kept"
+ },
+ {
+  "id": "T10",
+  "label": "Patrol photo (not in archive)",
+  "file": "T10.jpg",
+  "expect": null,
+  "note": "New image, no earlier record exists"
+ },
+ {
+  "id": "T11",
+  "label": "Patrol \u2013 cropped (not in archive)",
+  "file": "T11.jpg",
+  "expect": null,
+  "note": "New image variant"
+ },
+ {
+  "id": "T12",
+  "label": "Unrelated scene A",
+  "file": "T12.jpg",
+  "expect": null,
+  "note": "Synthetic unrelated landscape"
+ },
+ {
+  "id": "T13",
+  "label": "Unrelated scene B",
+  "file": "T13.jpg",
+  "expect": null,
+  "note": "Synthetic unrelated landscape"
+ },
+ {
+  "id": "T14",
+  "label": "Unrelated scene C",
+  "file": "T14.jpg",
+  "expect": null,
+  "note": "Synthetic unrelated landscape"
+ }
+]

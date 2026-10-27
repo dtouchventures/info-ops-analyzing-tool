@@ -1,0 +1,6 @@
+# Pinned versions tested together (faster-whisper 1.2.1 does not work with PyAV 19)
+faster-whisper==1.2.1
+av==15.1.0
+fastapi==0.115.12
+uvicorn==0.34.2
+python-multipart==0.0.20

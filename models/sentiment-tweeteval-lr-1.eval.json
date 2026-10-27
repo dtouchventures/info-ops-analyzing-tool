@@ -1,0 +1,396 @@
+{
+  "id": "sentiment-tweeteval-lr-1",
+  "task": "sentiment",
+  "labels": [
+    "negative",
+    "neutral",
+    "positive"
+  ],
+  "trained_at": "2026-10-26T14:52:01.002Z",
+  "training_seconds": 64,
+  "method": "TF-IDF of words and word pairs (negation marked), multinomial logistic regression, Adam, L2, balanced class weights",
+  "hyperparameters": {
+    "l2": 0.00001,
+    "epochs": 6,
+    "batch": 64,
+    "learning_rate": 0.005,
+    "min_document_frequency": 3,
+    "max_features": 40000,
+    "seed": 42
+  },
+  "data": {
+    "name": "TweetEval, sentiment task (SemEval-2017 Task 4)",
+    "source": "https://github.com/cardiffnlp/tweeteval/tree/main/datasets/sentiment",
+    "citation": "Barbieri, Camacho-Collados, Espinosa-Anke and Neves (2020). TweetEval: Unified Benchmark and Comparative Evaluation for Tweet Classification. Findings of EMNLP 2020.",
+    "downloaded_at": "2026-10-26",
+    "language": "English",
+    "sizes": {
+      "train": 45615,
+      "validation": 2000,
+      "test": 12284
+    },
+    "label_counts": {
+      "train": {
+        "negative": 7093,
+        "neutral": 20673,
+        "positive": 17849
+      },
+      "validation": {
+        "negative": 312,
+        "neutral": 869,
+        "positive": 819
+      },
+      "test": {
+        "negative": 3972,
+        "neutral": 5937,
+        "positive": 2375
+      }
+    },
+    "files": [
+      {
+        "name": "train_text.txt",
+        "sha256": "368f01052ea6fd8ffc408a2a2e6ac9669e31542581a0396ef16591ea26eb98a6",
+        "bytes": 4970029
+      },
+      {
+        "name": "train_labels.txt",
+        "sha256": "122bfb1732fb6995b0e5c5f726c0ba457c469c3b6e60513007ce5037f23e65d4",
+        "bytes": 91230
+      },
+      {
+        "name": "val_text.txt",
+        "sha256": "e5b021e6fc45064c260b09814b803d8f56cada519c4d952d72f43d48a350a964",
+        "bytes": 219137
+      },
+      {
+        "name": "val_labels.txt",
+        "sha256": "b4566926c72e2e4e2916c864def94e76c4cdde52446af2c7ba4fc2006e057e51",
+        "bytes": 4000
+      },
+      {
+        "name": "test_text.txt",
+        "sha256": "09a93a55c63fd93f97485ef7302889d7edb4091cd49733aa37da094f0bfa0675",
+        "bytes": 1156877
+      },
+      {
+        "name": "test_labels.txt",
+        "sha256": "6afb4afe9374d1f983bcf9a7c79b108d0f37fdf020a83f30488309bed215db9d",
+        "bytes": 24568
+      }
+    ],
+    "limitations": [
+      "English tweets from 2013–2017 (SemEval): Kiswahili, Sheng and Kenyan slang are not represented, so results on them are weaker and were not measured.",
+      "Labels describe the tone of a tweet, not whether it is true, harmful or coordinated.",
+      "Sarcasm and irony are often misread."
+    ]
+  },
+  "selection": {
+    "metric": "validation macro-F1",
+    "grid": [
+      {
+        "learning_rate": 0.005,
+        "l2": 0.000001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6167,
+        "validation_accuracy": 0.6355
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.000001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6337,
+        "validation_accuracy": 0.653
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.000001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6361,
+        "validation_accuracy": 0.656
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.00001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6167,
+        "validation_accuracy": 0.6355
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.00001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6347,
+        "validation_accuracy": 0.654
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.00001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6373,
+        "validation_accuracy": 0.657
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.0001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6129,
+        "validation_accuracy": 0.6315
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.0001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6366,
+        "validation_accuracy": 0.655
+      },
+      {
+        "learning_rate": 0.005,
+        "l2": 0.0001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6344,
+        "validation_accuracy": 0.6535
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.000001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6373,
+        "validation_accuracy": 0.6575
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.000001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6364,
+        "validation_accuracy": 0.659
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.000001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6281,
+        "validation_accuracy": 0.654
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.00001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6357,
+        "validation_accuracy": 0.656
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.00001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6355,
+        "validation_accuracy": 0.658
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.00001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6263,
+        "validation_accuracy": 0.6505
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.0001,
+        "epochs": 2,
+        "validation_macro_f1": 0.6364,
+        "validation_accuracy": 0.6545
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.0001,
+        "epochs": 4,
+        "validation_macro_f1": 0.6214,
+        "validation_accuracy": 0.6425
+      },
+      {
+        "learning_rate": 0.02,
+        "l2": 0.0001,
+        "epochs": 6,
+        "validation_macro_f1": 0.6091,
+        "validation_accuracy": 0.6315
+      }
+    ],
+    "process_note": "Honest record: a first run (learning rate 0.05 only) scored 0.5545 accuracy on the test set; the learning-rate grid was then widened. The choice within the grid used the validation split only, but the test set had been seen once, so these scores may be slightly optimistic."
+  },
+  "test": {
+    "n": 12284,
+    "accuracy": 0.5946,
+    "macro": {
+      "precision": 0.5933,
+      "recall": 0.6065,
+      "f1": 0.594
+    },
+    "per_class": [
+      {
+        "label": "negative",
+        "precision": 0.5391,
+        "recall": 0.6926,
+        "f1": 0.6063,
+        "support": 3972
+      },
+      {
+        "label": "neutral",
+        "precision": 0.664,
+        "recall": 0.5269,
+        "f1": 0.5875,
+        "support": 5937
+      },
+      {
+        "label": "positive",
+        "precision": 0.5769,
+        "recall": 0.6,
+        "f1": 0.5882,
+        "support": 2375
+      }
+    ],
+    "confusion_matrix": {
+      "labels": [
+        "negative",
+        "neutral",
+        "positive"
+      ],
+      "rows_are": "true label",
+      "columns_are": "predicted label",
+      "matrix": [
+        [
+          2751,
+          985,
+          236
+        ],
+        [
+          2000,
+          3128,
+          809
+        ],
+        [
+          352,
+          598,
+          1425
+        ]
+      ]
+    }
+  },
+  "baselines": {
+    "word_list": {
+      "method": "AIVS word list (lexicon-1); 'mixed' counted as neutral",
+      "n": 12284,
+      "accuracy": 0.5594,
+      "macro": {
+        "precision": 0.5813,
+        "recall": 0.497,
+        "f1": 0.4916
+      },
+      "per_class": [
+        {
+          "label": "negative",
+          "precision": 0.6788,
+          "recall": 0.2304,
+          "f1": 0.344,
+          "support": 3972
+        },
+        {
+          "label": "neutral",
+          "precision": 0.5516,
+          "recall": 0.8319,
+          "f1": 0.6634,
+          "support": 5937
+        },
+        {
+          "label": "positive",
+          "precision": 0.5136,
+          "recall": 0.4286,
+          "f1": 0.4673,
+          "support": 2375
+        }
+      ],
+      "confusion_matrix": {
+        "labels": [
+          "negative",
+          "neutral",
+          "positive"
+        ],
+        "rows_are": "true label",
+        "columns_are": "predicted label",
+        "matrix": [
+          [
+            915,
+            2706,
+            351
+          ],
+          [
+            385,
+            4939,
+            613
+          ],
+          [
+            48,
+            1309,
+            1018
+          ]
+        ]
+      }
+    },
+    "majority_class": {
+      "n": 12284,
+      "accuracy": 0.4833,
+      "macro": {
+        "precision": 0.1611,
+        "recall": 0.3333,
+        "f1": 0.2172
+      },
+      "per_class": [
+        {
+          "label": "negative",
+          "precision": 0,
+          "recall": 0,
+          "f1": 0,
+          "support": 3972
+        },
+        {
+          "label": "neutral",
+          "precision": 0.4833,
+          "recall": 1,
+          "f1": 0.6517,
+          "support": 5937
+        },
+        {
+          "label": "positive",
+          "precision": 0,
+          "recall": 0,
+          "f1": 0,
+          "support": 2375
+        }
+      ],
+      "confusion_matrix": {
+        "labels": [
+          "negative",
+          "neutral",
+          "positive"
+        ],
+        "rows_are": "true label",
+        "columns_are": "predicted label",
+        "matrix": [
+          [
+            0,
+            3972,
+            0
+          ],
+          [
+            0,
+            5937,
+            0
+          ],
+          [
+            0,
+            2375,
+            0
+          ]
+        ]
+      }
+    }
+  }
+}
