@@ -39,8 +39,9 @@ export function usageOf(headers) {
   return out;
 }
 
-export function makeGraph({ token, version = "v26.0", base = "https://graph.facebook.com", appId = "", appSecret = "", timeoutMs = 20000, userAgent = "AIVS-live-monitor", fetchImpl = fetch } = {}) {
-  const secrets = () => [token, appSecret, appId && appSecret ? `${appId}|${appSecret}` : null].filter(s => s && s.length > 6);
+export function makeGraph({ token, version = "v26.0", base = "https://graph.facebook.com", appId = "", appSecret = "", timeoutMs = 20000, userAgent = "AIVS-live-monitor", fetchImpl = fetch, extraSecrets = [] } = {}) {
+  // extraSecrets: other tokens in use (Page tokens obtained from a user token) are hidden from messages as well
+  const secrets = () => [token, appSecret, appId && appSecret ? `${appId}|${appSecret}` : null, ...extraSecrets].filter(s => s && s.length > 6);
   const redact = s => { let t = String(s ?? ""); for (const x of secrets()) t = t.split(x).join("[token]"); return t.replace(/access_token=[^&\s"]+/g, "access_token=[token]").replace(/(EAA[A-Za-z0-9]{20,})/g, "[token]"); };
   const root = `${String(base).replace(/\/$/, "")}/${version}`;
   let lastUsage = null;
@@ -118,7 +119,12 @@ export function makeGraph({ token, version = "v26.0", base = "https://graph.face
   }
   async function postsByIds(ids, fields = ENGAGEMENT_FIELDS) { return ids.length ? getRetry("", { ids: ids.join(","), fields }) : {}; }
   async function igMedia(igUserId, { limit = 25 } = {}) { return getRetry(`${encodeURIComponent(igUserId)}/media`, { fields: IG_FIELDS, limit }); }
-  return { get, validate, pagePosts, postsByIds, igMedia, redact, usage: () => lastUsage, configured: () => !!token };
+  // the Page's own access token, obtained with a user token from a person who manages the Page (pages_show_list)
+  async function pageToken(pageId) { const j = await get(encodeURIComponent(pageId), { fields: "id,name,access_token" }); return { id: j.id, name: j.name || null, token: j.access_token || null }; }
+  // a long-lived user token from a short-lived one (needs META_APP_ID and META_APP_SECRET); Page tokens from it do not expire
+  async function longLived() { if (!appId || !appSecret) throw new GraphError("config", "META_APP_ID and META_APP_SECRET are needed to extend the token.");
+    const j = await get("oauth/access_token", { grant_type: "fb_exchange_token", client_id: appId, client_secret: appSecret, fb_exchange_token: token }, { auth: token }); return { token: j.access_token, expires_in: j.expires_in ?? null }; }
+  return { get, validate, pagePosts, postsByIds, igMedia, pageToken, longLived, redact, usage: () => lastUsage, configured: () => !!token };
 }
 
 // a Graph post → the fields AIVS keeps (nothing is invented: missing values stay null and are labelled)

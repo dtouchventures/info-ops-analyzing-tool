@@ -41,7 +41,8 @@ try {
   log(`Pages to read: ${sources.map(s => s.external_id).join(", ")}`);
   // 1
   const tok = await L.checkToken({ force: true });
-  check("1 Meta connection authenticates", tok.state === "valid", tok.state === "valid" ? `token belongs to “${tok.subject_name}” (${tok.subject_id}); expiry ${tok.expiry_known ? tok.expires_at : "not known (set META_APP_ID and META_APP_SECRET to read it)"}${tok.scopes ? `; permissions ${tok.scopes.join(", ")}` : ""}` : safe(tok.error || tok.needs));
+  check("1 Meta connection authenticates and can read the Page(s)", tok.state === "valid" && tok.page_ok !== false, tok.state === "valid" ? `token belongs to “${tok.subject_name}” (${tok.subject_id}); ${(tok.pages || []).map(p => `${p.name || p.page_id}: ${p.ok ? "readable" : "NOT readable"} (${p.how})`).join("; ")}; expiry ${tok.expiry_known ? tok.expires_at : "not known (set META_APP_ID and META_APP_SECRET to read it)"}${tok.scopes ? `; permissions ${tok.scopes.join(", ")}` : ""}` : safe(tok.error || tok.needs));
+  if (tok.page_ok === false) log("      To fix: run  npm run meta:token  (it turns a manager's token into the Page's token and saves it in .env), or generate a Page access token in Graph API Explorer.");
   // 2 and 3
   const first = [];
   for (const s of sources) first.push({ s, r: await L.sync(s.id, { kind: "manual" }) });

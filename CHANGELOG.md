@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.26.1 — Facebook token set-up made reliable (27 October 2026)
+
+- **A person's token works:** when `META_PAGE_ACCESS_TOKEN` belongs to a person who manages the Page (Meta then refuses the Page's posts with code 190, subcode 2069032), AIVS asks Meta for the Page's own token and uses it for that Page. The Page's token is kept in memory only and hidden from every message.
+- **The connection check is honest:** "Check the Meta connection" and `npm run check:facebook` now say whether each Page can actually be read, and with which token. Check 1 no longer passes for a token that cannot read the Page.
+- **New `npm run meta:token`:** it turns the token in `.env` into the Page's own token and saves it back, without printing it. With `META_APP_ID` and `META_APP_SECRET` set, the token is first extended to a long-lived one, so the saved Page token does not expire.
+- **`.env` fix:** an empty line such as `META_PAGE_ACCESS_TOKEN=` no longer hides a later line that gives the same setting a value.
+- **Test fix:** the WhatsApp webhook test's wrong signature is now always different from the right one. Before, it matched by chance about once in 4,000 runs.
+
 ## 1.26.0 — Live Facebook monitoring with automatic analysis, verification, alerts and reports (27 October 2026)
 
 - **Live Facebook Monitoring** (`server/lib/livemonitor.js`, `server/lib/meta-graph.js`, new menu item **Live Monitoring**).

@@ -10,7 +10,9 @@ const envFile = path.join(ROOT, ".env");
 if (fs.existsSync(envFile) && !process.env.AIVS_SKIP_DOTENV) {
   for (const line of fs.readFileSync(envFile, "utf8").split(/\r?\n/)) {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (m && !line.trim().startsWith("#") && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    const v = m ? m[2].replace(/^["']|["']$/g, "") : "";
+    // an empty line (KEY=) does not hide a later line that gives the same key a value
+    if (m && !line.trim().startsWith("#") && v !== "" && process.env[m[1]] === undefined) process.env[m[1]] = v;
   }
 }
 const env = process.env;

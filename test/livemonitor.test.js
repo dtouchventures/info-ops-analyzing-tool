@@ -9,7 +9,7 @@ import { startServer, login } from "./helpers.js";
 import { classify, usageOf, postRow, makeGraph } from "../server/lib/meta-graph.js";
 import { confidenceOf, analysePost } from "../server/lib/livemonitor.js";
 
-const TOKEN = "EAATESTPAGETOKEN0123456789abcdefTEST", PAGE = "900000000000001", APP = "1234567", SECRET = "appsecret-test-0001";
+const USER = "EAATESTUSERTOKEN0123456789abcdefUSER", TOKEN = "EAATESTPAGETOKEN0123456789abcdefTEST", PAGE = "900000000000001", APP = "1234567", SECRET = "appsecret-test-0001";
 const G = { mode: "ok", calls: [], posts: null, debugExpires: null };
 const H = h => new Date(Date.now() - h * 3600e3).toISOString().replace(/\.\d+Z$/, "+0000");
 function fixturePosts() {
@@ -29,6 +29,11 @@ before(async () => {
     const p = u.pathname.slice(7);
     if (G.mode === "network") { req.socket.destroy(); return; }
     if (p === "debug_token") return q.access_token === `${APP}|${SECRET}` ? json(res, 200, { data: { is_valid: true, type: "PAGE", expires_at: G.debugExpires ?? 0, scopes: ["pages_read_engagement", "pages_show_list"] } }) : json(res, 400, { error: { message: "bad app token", code: 190 } });
+    if (q.access_token === USER) {   // a person who manages the Page: Meta gives the Page's own token, but not its posts
+      if (p === "me") return json(res, 200, { id: "555000000000001", name: "Fixture Manager" });
+      if (p === PAGE && /access_token/.test(q.fields || "")) return json(res, 200, { id: PAGE, name: "Test Fixture Page", access_token: TOKEN });
+      return json(res, 400, { error: { message: "Invalid OAuth 2.0 Access Token", type: "OAuthException", code: 190, error_subcode: 2069032 } });
+    }
     if (q.access_token !== TOKEN) return json(res, 400, { error: { message: `Invalid OAuth access token - Cannot parse access token ${q.access_token}`, type: "OAuthException", code: 190 } });
     if (G.mode === "expired") return json(res, 400, { error: { message: `Error validating access token: Session has expired. token=${TOKEN}`, type: "OAuthException", code: 190, error_subcode: 463 } });
     if (G.mode === "rate") return json(res, 400, { error: { message: "(#80001) There have been too many calls to this Page account.", code: 80001 } }, { "x-business-use-case-usage": JSON.stringify({ [PAGE]: [{ type: "pages", call_count: 100, total_cputime: 30, total_time: 40, estimated_time_to_regain_access: 30 }] }) });
@@ -231,4 +236,18 @@ test("confidence and local analysis are documented and conservative", () => {
   assert.ok(conflict.criteria.some(c => c.points < 0));
   const a = analysePost({ id: 1, message: "TEST FIXTURE: Breaking! Send KSh 500 to this number to claim your prize. Share now!", created_time: H(1) }, { source: { name: "P" } });
   assert.ok(a.indicators.length); assert.ok(a.inferences.some(t => /do not show that this post is false/.test(t)));
+});
+
+test("a token of a person who manages the Page: AIVS obtains the Page's own token and collects; the derived token is never shown", async () => {
+  G.mode = "ok"; G.posts = null;
+  const S2 = await startServer({ allowPrivateFetch: true, live: { pageToken: USER, pageIds: PAGE, graphBase: F, tickSeconds: 3600 } });
+  try {
+    S2.ctx.live.ensureSources();
+    const v = await S2.ctx.live.checkToken({ force: true });
+    assert.equal(v.subject_name, "Fixture Manager"); assert.equal(v.page_ok, true); assert.match(v.pages[0].how, /obtained the Page's own token/);
+    const sid = S2.ctx.db.prepare("SELECT id FROM social_sources").get().id, r = await S2.ctx.live.sync(sid);
+    assert.equal(r.new_posts, 3, JSON.stringify(r));
+    const dump = JSON.stringify([v, S2.ctx.db.prepare("SELECT * FROM social_syncs").all(), S2.ctx.db.prepare("SELECT * FROM social_api_errors").all(), S2.ctx.db.prepare("SELECT * FROM audit_log").all()]);
+    assert.ok(!dump.includes(TOKEN) && !dump.includes(USER));
+  } finally { await S2.ctx.investigations.close(); await S2.close(); }
 });

@@ -123,7 +123,22 @@ export function analysePost(post, { source, history = [] } = {}) {
 export function makeLiveMonitor(db, { config, investigations, watch, storage, audit, version = "dev", graphFactory = makeGraph }) {
   const L = { enabled: true, pageToken: "", pageIds: "", graphVersion: "v26.0", graphBase: "https://graph.facebook.com", appId: "", appSecret: "", intervalMinutes: 5, initialPosts: 25, maxPagesPerSync: 5,
     autoAnalyse: true, analyseConcurrency: 1, storeImages: true, engagementRefreshMinutes: 30, timeoutMs: 20000, tickSeconds: 30, igUserId: "", igToken: "", ...(config.live || {}) };
-  const graph = graphFactory({ token: L.pageToken, version: L.graphVersion, base: L.graphBase, appId: L.appId, appSecret: L.appSecret, timeoutMs: L.timeoutMs, userAgent: `AIVS-live-monitor/${version}` });
+  const derived = [];   // Page tokens obtained at run time (kept in memory only, never stored)
+  const graphOpts = { version: L.graphVersion, base: L.graphBase, appId: L.appId, appSecret: L.appSecret, timeoutMs: L.timeoutMs, userAgent: `AIVS-live-monitor/${version}`, extraSecrets: derived };
+  const graph = graphFactory({ token: L.pageToken, ...graphOpts });
+  // Meta reads a Page's posts only with that Page's token. When the configured token belongs to a person who manages the
+  // Page, the Page's token is requested from Meta with it (GET /{page-id}?fields=access_token) and used for that Page.
+  const pageGraphs = new Map();
+  async function graphForPage(pageId) {
+    const tok = svc.get("meta_token");
+    if (tok?.subject_id && tok.subject_id === pageId) return graph;
+    if (pageGraphs.has(pageId)) return pageGraphs.get(pageId);
+    let t; try { t = await graph.pageToken(pageId); usage("page token", "ok"); } catch (e) { usage("page token", "error"); if (e.kind === "token") throw e; return graph; }
+    if (!t.token) return graph;
+    derived.push(t.token);
+    const g = graphFactory({ token: t.token, ...graphOpts }); pageGraphs.set(pageId, g);
+    return g;
+  }
   const ig = graphFactory({ token: L.igToken, version: L.graphVersion, base: L.graphBase, timeoutMs: L.timeoutMs, userAgent: `AIVS-live-monitor/${version}` });
   const tokenPrint = L.pageToken ? sha(L.pageToken).slice(0, 12) : null;
   const svc = { get: k => J(db.prepare("SELECT value_json FROM social_service WHERE key = ?").get(k)?.value_json), set: (k, v) => db.prepare("INSERT INTO social_service(key,value_json,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at").run(k, JSON.stringify(v), nowISO()) };
@@ -175,6 +190,17 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
       const soon = t.expires_at && t.expires_at !== "never" && Date.parse(t.expires_at) - Date.now() < 7 * 864e5;
       v = { state: t.valid ? "valid" : "invalid", subject_id: t.subject_id, subject_name: t.subject_name, expires_at: t.expires_at, data_access_expires_at: t.data_access_expires_at, type: t.type,
         scopes: t.scopes, expiry_known: t.debug, expiry_note: t.debug ? null : "Set META_APP_ID and META_APP_SECRET to let AIVS read the token's expiry date from Meta.", debug_error: t.debug_error || null, checked_at: nowISO(), fingerprint: tokenPrint, expiring_soon: !!soon };
+      // whose token is it? A person's token is usable only if Meta gives AIVS the Page's own token with it
+      const pages = db.prepare("SELECT external_id FROM social_sources WHERE platform = 'facebook' AND is_training = 0 AND enabled = 1").all().map(r => r.external_id);
+      v.pages = [];
+      for (const pid of pages) {
+        if (pid === t.subject_id) { v.pages.push({ page_id: pid, name: t.subject_name, ok: true, how: "the token is this Page's own token" }); continue; }
+        try { const pt = await graph.pageToken(pid); usage("page token", "ok");
+          if (pt.token) { derived.push(pt.token); pageGraphs.set(pid, graphFactory({ token: pt.token, ...graphOpts })); }
+          v.pages.push({ page_id: pid, name: pt.name, ok: !!pt.token, how: pt.token ? `the token belongs to ${t.subject_name || "a person"}, who manages this Page; AIVS obtained the Page's own token from Meta` : `the token belongs to ${t.subject_name || "someone else"}, and Meta did not give AIVS this Page's token (the person must manage the Page, and the token needs pages_show_list and pages_read_engagement)` }); }
+        catch (e) { usage("page token", "error"); v.pages.push({ page_id: pid, ok: false, how: `Meta refused: ${graph.redact(e.message).slice(0, 200)}` }); }
+      }
+      v.page_ok = v.pages.length ? v.pages.every(x => x.ok) : null;
       if (soon) raise({ kind: "collection", key: `token-expiry:${tokenPrint}`, group: "collection:meta", priority: "medium", priorityReasons: ["the Page access token expires within 7 days"], title: "Meta access token expires soon",
         reason: `The Page access token expires on ${t.expires_at}. Generate a new one and set META_PAGE_ACCESS_TOKEN on the server before then, or collection will stop.`, detail: { expires_at: t.expires_at } });
     } catch (e) {
@@ -248,8 +274,9 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
       let rows = [], meta = { requests: 0, pages: 0, field_note: null, fields_level: src.fields_level, more: false };
       if (src.platform === "facebook") {
         if (!graph.configured()) throw new GraphError("config", "No Meta access token is set on the server (META_PAGE_ACCESS_TOKEN).");
-        if (!src.name) { try { const j = await graph.get(encodeURIComponent(src.external_id), { fields: "id,name,link" }); meta.requests++; db.prepare("UPDATE social_sources SET name = ?, url = ? WHERE id = ?").run(j.name || null, j.link || null, src.id); src.name = j.name; } catch (e) { if (e.kind === "token") throw e; } }
-        const r = await graph.pagePosts(src.external_id, { since, limit: since ? 50 : Math.min(25, L.initialPosts), maxPosts: since ? 1000 : L.initialPosts, maxPages: L.maxPagesPerSync, fields: src.fields_level === "basic" ? BASIC_FIELDS : FULL_FIELDS });
+        const pg = await graphForPage(src.external_id);
+        if (!src.name) { try { const j = await pg.get(encodeURIComponent(src.external_id), { fields: "id,name,link" }); meta.requests++; db.prepare("UPDATE social_sources SET name = ?, url = ? WHERE id = ?").run(j.name || null, j.link || null, src.id); src.name = j.name; } catch (e) { if (e.kind === "token") throw e; } }
+        const r = await pg.pagePosts(src.external_id, { since, limit: since ? 50 : Math.min(25, L.initialPosts), maxPosts: since ? 1000 : L.initialPosts, maxPages: L.maxPagesPerSync, fields: src.fields_level === "basic" ? BASIC_FIELDS : FULL_FIELDS });
         meta = { ...meta, ...r, requests: meta.requests + r.requests }; rows = r.posts.map(postRow);
       } else if (src.platform === "instagram") {
         if (!svc.get("instagram_test")?.ok) throw new GraphError("config", "Instagram is not connected: run the Instagram connection test first.");
@@ -275,6 +302,7 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
       // posts read before the failure are kept, and the position moves only as far as those posts
       let res = null;
       if (e.partial?.posts?.length) { const rows = e.partial.posts.map(postRow); res = store(src, rows); for (const p of res.fresh) await storeImage(p); afterCollect(src, res.fresh); }
+      if (e.kind === "token") pageGraphs.delete(src.external_id);
       const failures = (src.failures || 0) + 1, kindE = e.kind || "error";
       const waitMin = kindE === "rate" ? Math.max(15, e.regain_minutes || 15 * 2 ** Math.min(4, failures - 1)) : kindE === "token" || kindE === "permission" ? 360 : kindE === "network" || kindE === "temporary" ? Math.min(30, 2 ** (failures - 1)) : 60;
       const status = kindE === "token" ? "token_refused" : kindE === "permission" ? "not_permitted" : kindE === "rate" ? "rate_limited" : kindE === "config" ? "not_configured" : "retrying";
@@ -476,7 +504,7 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
       db.prepare("UPDATE social_sources SET last_engagement_at = ? WHERE id = ?").run(nowISO(), src.id);
       if (!posts.length) continue;
       try {
-        const j = await graph.postsByIds(posts.map(p => p.post_id)); usage("engagement refresh", "ok");
+        const j = await (await graphForPage(src.external_id)).postsByIds(posts.map(p => p.post_id)); usage("engagement refresh", "ok");
         const base = median(db.prepare("SELECT coalesce(likes,0)+coalesce(comments,0)+coalesce(shares,0) e FROM social_posts WHERE source_id = ? AND created_time >= ? AND likes IS NOT NULL").all(src.id, new Date(Date.now() - 30 * 864e5).toISOString()).map(x => x.e));
         const enough = db.prepare("SELECT COUNT(*) n FROM social_posts WHERE source_id = ? AND likes IS NOT NULL").get(src.id).n >= 5;
         for (const p of posts) {
