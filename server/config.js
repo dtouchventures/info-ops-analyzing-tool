@@ -56,6 +56,9 @@ export const config = {
     gdelt: env.SEARCH_GDELT !== "false", gdeltBase: env.GDELT_BASE_URL || "https://api.gdeltproject.org",
     wikipedia: env.SEARCH_WIKIPEDIA !== "false", wikipediaBase: env.WIKIPEDIA_BASE_URL || "https://{lang}.wikipedia.org"
   },
+  // one-click automatic investigations: total time per investigation, how many run at once, and whether case content may
+  // go to an AI service outside your network (off: only Ollama on your own network is used automatically)
+  investigate: { timeoutMs: int(env.INVESTIGATE_TIMEOUT_S, 900) * 1000, concurrency: int(env.INVESTIGATE_CONCURRENCY, 2), allowExternalAI: env.INVESTIGATE_ALLOW_EXTERNAL_AI === "true" },
   // social media post lookup through the platforms' public embed services (no key except Facebook/Instagram)
   social: { metaToken: env.META_OEMBED_TOKEN || "", timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },
   // optional local AI for social media analysis (Ollama on this computer or an institution server; never the internet)

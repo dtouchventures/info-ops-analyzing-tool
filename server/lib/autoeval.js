@@ -103,16 +103,25 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
       e.relevance = rel[i];
       const [tier, outlet] = classify(e); e.tier = tier; e.tier_label = TIERS[tier][1]; e.publisher = e.source_publisher || outlet || hostOf(e.source_url) || e.reference;
       e.domain = e.source_url ? registrable(hostOf(e.source_url)) : `${e.connector}:${e.id}`;
-      let [stance, strength, basis] = ruleStance(cl, e); let method = "rules";
+      const [stance, strength, basis] = ruleStance(cl, e);
+      Object.assign(e, { stance, stance_strength: strength, stance_basis: basis, stance_method: e.rating ? "published rating" : "rules" });
+      // The AI's reading is recorded beside the rule result but never replaces it (verdicts come only from the rules).
+      // A reading whose quote is not really in the source is discarded; a reading that disagrees is flagged for a person.
       const a = aiStances[e.id];
-      if (a && !e.rating && ["supports", "contradicts", "related"].includes(a.stance) && quoteOk(a.quote, e)) { stance = a.stance; strength = a.stance === "related" ? "none" : "moderate"; basis = `AI reading of the quoted words “${String(a.quote).slice(0, 160)}”`; method = "ai (quote checked)"; }
-      Object.assign(e, { stance, stance_strength: strength, stance_basis: basis, stance_method: method });
+      if (a && ["supports", "contradicts", "related"].includes(a.stance)) {
+        if (quoteOk(a.quote, e)) { e.ai_stance = a.stance; e.ai_quote = String(a.quote).slice(0, 200); e.ai_disagrees = a.stance !== stance; }
+        else e.ai_rejected = "the quoted words are not in the source";
+      }
     });
     // independence: the most reliable, most relevant item of a group stands for it
     mine.sort((a, b) => (TIERS[b.tier][0] + b.relevance) - (TIERS[a.tier][0] + a.relevance));
+    // Only items that say the same thing (same stance, no published rating of their own) are grouped, so a contradicting
+    // source or a fact-check is never folded into a supporting one from the same site.
     mine.forEach((e, i) => {
+      if (e.rating) return;
       for (let j = 0; j < i; j++) {
-        const o = mine[j], same = o.domain === e.domain, near = jaccard(`${o.source_title} ${o.snippet}`, `${e.source_title} ${e.snippet}`) >= 0.6;
+        const o = mine[j]; if (o.rating || o.stance !== e.stance) continue;
+        const same = o.domain === e.domain, near = jaccard(`${o.source_title} ${o.snippet}`, `${e.source_title} ${e.snippet}`) >= 0.6;
         if (same || near) { e.repeat_of = o.repeat_of || o.id; e.repeat_reason = same ? "same organisation" : "near-identical wording (likely the same original report)"; break; }
       }
     });
@@ -123,6 +132,7 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
       else if (isNaN(cd)) { e.date_score = 0.6; e.date_note = null; }
       else { const d = Math.round((pd - cd) / 864e5); [e.date_score, e.date_note] = Math.abs(d) <= 14 ? [1, "published within two weeks of the claim"] : d < -14 ? [0.5, `published ${-d} days before the claim (possible earlier event or recycled story)`] : [0.7, `published ${d} days after the claim`]; }
       if (e.date_kind === "last edited" || e.connector === "reference") e.date_note = "the date is the article's last edit, not an event date";
+      else if (e.connector === "news" && e.source_published_at) e.date_note = `${e.date_note ? e.date_note + "; " : ""}date is when the GDELT index first saw the article (close to, not the same as, publication)`;
       const s = { strong: 1, moderate: 0.6, weak: 0.3 }[e.stance_strength] || 0;
       e.score = Math.round((0.45 * e.relevance + 0.25 * TIERS[e.tier][0] + 0.15 * s + 0.1 * e.date_score + 0.05 * ((e.source_published_at ? 0.5 : 0) + (e.source_url ? 0.5 : 0)) - (e.repeat_of ? 0.12 : 0)) * 1000) / 1000;
     }
@@ -135,7 +145,7 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
 export function topFor(compared, claimId, n = 5) {
   const mine = compared.filter(e => e.claim_id === claimId && (e.stance !== "related" || e.relevance >= 0.2));
   const best = mine.slice(0, n);
-  for (const e of mine.slice(n)) if (e.stance === "contradicts" && !e.repeat_of) best.push(e);
+  for (const e of mine.slice(n)) if (e.stance === "contradicts" || e.ai_disagrees) best.push(e);
   return best;
 }
 
@@ -166,7 +176,7 @@ export function assessClaim(cl, compared, searched) {
   } else {
     verdict = "insufficient"; strength = sup.length || con.length ? "weak" : "none";
     reason = !searched ? "No outside evidence source could be searched (none is configured or none answered), so the claim could not be checked against outside evidence."
-      : sup.length || con.length ? `Only weak or lower-reliability evidence was found (${sup.length} consistent, ${con.length} contradicting item(s)); a fact-check, an official source or two independent reliable sources are needed.`
+      : sup.length || con.length ? `Only weak or lower-reliability evidence was found (${mine.filter(e => e.stance === "supports").length} consistent, ${mine.filter(e => e.stance === "contradicts").length} contradicting item(s)); a fact-check, an official source or two independent reliable sources are needed.`
       : mine.length ? `${mine.length} related item(s) were found, but none confirms or refutes the claim.` : "No relevant evidence was found by the sources searched.";
   }
   return { verdict, strength, reason, supporting: ids(sup), contradicting: ids(con) };
@@ -205,7 +215,9 @@ export function ioIndicators({ flags = [], injection = [], compared = [], hashta
 
 // ---------------------------------------------------------------- AI output checks
 const PCT = /\d+(\.\d+)?\s*(%|percent|per cent)|\bprobabilit|\b\d+(\.\d+)?\s*(in|out of)\s*\d+\s*chance/i;
-export function checkSections(data, ids) {
+const TRUE_WORDS = /\b(is|are|was|were) (true|accurate|correct|genuine|authentic|verified|confirmed)\b|\bhas been (confirmed|verified)\b|\bis supported by the (available )?evidence\b/i;
+const FALSE_WORDS = /\b(is|are|was|were) (false|fake|untrue|a hoax|fabricated|misleading|incorrect)\b|\bhas been (debunked|refuted)\b|\bis contradicted by\b/i;
+export function checkSections(data, ids, verdict = null) {
   const out = { background: [], analysis: [], assessment: [], recommendations: [], removed: [] };
   if (!data || typeof data !== "object") return out;
   for (const k of ["background", "analysis", "assessment", "recommendations"]) {
@@ -216,6 +228,9 @@ export function checkSections(data, ids) {
       if (bad.length) out.removed.push(`cites evidence that does not exist (${bad.join(", ")}): ${s.slice(0, 120)}`);
       else if (PCT.test(s)) out.removed.push(`gives a percentage or probability: ${s.slice(0, 120)}`);
       else if (/https?:\/\/|www\./i.test(s)) out.removed.push(`contains a link: ${s.slice(0, 120)}`);
+      else if (verdict && verdict !== "supported" && TRUE_WORDS.test(s)) out.removed.push(`states the claim is true, but the rule-based assessment is ${AUTO_VERDICTS[verdict]}: ${s.slice(0, 120)}`);
+      else if (verdict && verdict !== "contradicted" && FALSE_WORDS.test(s)) out.removed.push(`states the claim is false, but the rule-based assessment is ${AUTO_VERDICTS[verdict]}: ${s.slice(0, 120)}`);
+      else if (/\b(I|we) (have )?(checked|verified|confirmed|reviewed|approved)\b|\b(analyst|reviewer) (has |have )?(checked|verified|approved)\b/i.test(s)) out.removed.push(`speaks as if a person checked or approved it: ${s.slice(0, 120)}`);
       else out[k].push(s.slice(0, 600));
     }
   }

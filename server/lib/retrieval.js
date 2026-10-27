@@ -65,7 +65,7 @@ export function makeRetrieval(db, { config, audit, usage }) {
       } },
     holdings: { label: "Earlier AIVS investigations", configured: true, needs: null, external: null, async run() { return []; } },   // handled per claim below
     // free public indexes, no key (switch off with SEARCH_GDELT=false or SEARCH_WIKIPEDIA=false)
-    news: { label: "News coverage index (GDELT)", configured: !!S.gdelt, needs: "SEARCH_GDELT=true (free GDELT DOC 2.0 API; no key)", external: "GDELT Project",
+    news: { label: "News coverage index (GDELT)", configured: !!S.gdelt, needs: "on unless SEARCH_GDELT=false (free GDELT DOC 2.0 API, no key; claim keywords are sent to GDELT)", external: "GDELT Project",
       async run(q, { lang }) {
         const words = [...tokens(q)].filter(w => !/^\d+$/.test(w)).slice(0, 6); if (words.length < 2) return [];
         const u = new URL("/api/v2/doc/doc", S.gdeltBase); u.searchParams.set("query", words.join(" ") + (lang === "sw" ? " sourcelang:swahili" : ""));
@@ -74,7 +74,7 @@ export function makeRetrieval(db, { config, audit, usage }) {
         const gd = s => { const m = /^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})Z?$/.exec(s || ""); return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : null; };
         return (j.articles || []).filter(a => isHttp(a.url)).map(a => ({ title: a.title, url: a.url, publisher: a.domain || host(a.url), published_at: gd(a.seendate), snippet: a.title || "", language: a.language || null }));
       } },
-    reference: { label: "Wikipedia (background reference)", configured: !!S.wikipedia, needs: "SEARCH_WIKIPEDIA=true (free MediaWiki search API; no key)", external: "Wikimedia",
+    reference: { label: "Wikipedia (background reference)", configured: !!S.wikipedia, needs: "on unless SEARCH_WIKIPEDIA=false (free Wikipedia search API, no key; claim keywords are sent to Wikimedia)", external: "Wikimedia",
       async run(q, { lang }) {
         const wl = lang === "sw" ? "sw" : "en", base = S.wikipediaBase.replace("{lang}", wl);
         const u = new URL("/w/api.php", base); for (const [k, v] of [["action", "query"], ["list", "search"], ["srsearch", q.slice(0, 250)], ["format", "json"], ["srlimit", "5"]]) u.searchParams.set(k, v);
@@ -94,7 +94,8 @@ export function makeRetrieval(db, { config, audit, usage }) {
   // Run the selected connectors for the case's checkable claims; store results as suggestions.
   async function retrieve(user, caseId, { claimIds, use } = {}, cases) {
     const c = cases.mustCase(caseId); cases.requireEdit(user, c);
-    const want = (use && use.length ? use : Object.keys(connectors)).filter(k => connectors[k]);
+    // without an explicit list, the free public indexes (GDELT, Wikipedia) are not used: they are chosen explicitly (automatic investigations, or the search box)
+    const want = (use && use.length ? use : Object.keys(connectors).filter(k => !["news", "reference"].includes(k))).filter(k => connectors[k]);
     const claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(caseId)
       .filter(cl => !claimIds?.length || claimIds.includes(cl.id));
     const checkable = claims.filter(cl => cl.kind !== "media" && (!cl.claim_type || cl.claim_type === "factual"));

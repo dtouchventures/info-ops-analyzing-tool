@@ -9,26 +9,44 @@
   - **server-side OCR** of images and screenshots with Tesseract.js and the bundled English and Kiswahili data (offline), followed by AIVS's screenshot reader for the account, platform and post time;
   - PDF and Word text with the existing document reader.
   A normal case is created, so the archived copy, media, OCR text, evidence suggestions and history are kept as for a manual case.
-- **Evidence research** uses every configured connector, plus two new free ones: the GDELT news index and Wikipedia (`SEARCH_GDELT`, `SEARCH_WIKIPEDIA`; on by default, claim keywords are sent to them).
+- **Evidence research** uses every configured connector, plus two new free ones: the GDELT news index and Wikipedia. They are on by default for automatic investigations (claim keywords are sent to them); `SEARCH_GDELT=false` or `SEARCH_WIKIPEDIA=false` switches them off. A manual evidence search uses them only when they are chosen. GDELT's date is when it first saw the article, and the report says so.
 - **Comparison** (`server/lib/autoeval.js`):
   - relevance by TF-IDF over words and character trigrams;
   - the source's category (official, fact-checker, news, knowledge base, earlier case, reference, other, social);
-  - independence: near-identical wording or the same organisation counts once;
+  - independence: near-identical wording or the same organisation counts once, but only among sources that say the same thing. A denial or a fact-check is never folded into a supporting report;
   - dates, including reports published well before the claim;
-  - stance: a published rating first, then the AI's reading only when its quoted words really appear in the source, then conservative wording rules.
+  - stance: a published rating first, then conservative wording rules. The AI's reading is shown beside the rule result only when its quoted words really appear in the source. It never decides: where it differs, the source is flagged for a person to check.
   A mention of the topic is never counted as support. Different figures, for example 120 cases against 12, are not support. The 3–5 best sources per claim are shown, contradicting sources are always shown, and everything else is kept in the record.
 - **Assessment** by fixed rules: Supported, Contradicted, Mixed evidence, Insufficient evidence or Unverifiable per claim and overall, with a qualitative strength (strong, moderate, weak, none) and its reason. No percentages are given. Observed information-operations indicators (red flags, repeated wording across sites, hashtags, the account or wording in imported datasets) are listed as observations, never as proof of coordination.
-- **AI (Ollama).** The model set in AIVS's AI settings (`AI_PROVIDER=ollama`, `AI_MODEL`; `set-ai-ollama.bat` sets `qwen3:4b-instruct`) is used only after the health check confirms the model is installed and answers. It sees only the submission and the numbered evidence (retrieval-augmented generation). Its drafted sentences are dropped if they cite evidence that doesn't exist, give percentages or contain links. The verdicts always come from the rules. Without AI, a rule-based writer produces the same sections, and the report says why AI was not used.
+- **AI (Ollama).** The model set in AIVS's AI settings (`AI_PROVIDER=ollama`, `AI_MODEL`; `set-ai-ollama.bat` sets `qwen3:4b-instruct`) is used only after the health check confirms the model is installed and answers.
+  - **Where it runs:** automatically, only on your own network. A cloud AI service is not used unless `INVESTIGATE_ALLOW_EXTERNAL_AI=true`.
+  - **Audit and injection:** every send is audited (purpose, model, endpoint, size). If the submission contains instructions aimed at AI, nothing is sent.
+  - **What it sees:** only the submission and the numbered evidence, inside fenced blocks (retrieval-augmented generation).
+  - **Checks on its text:** drafted sentences are dropped if they cite evidence that doesn't exist, give percentages, contain links, state a verdict different from the rules, or speak as if a person checked the evidence. Sections drafted by AI are marked.
+  - **Verdicts** always come from the rules. Without AI, a rule-based writer produces the same sections, and the report says why AI was not used.
 - **Single-page report**:
   - A Background, B Analysis, C Assessment (with indicators and limitations), D Recommendations, E References with links and dates;
   - report ID `AIVS-YYYYMMDD-NNN`, investigation date, source publication date and completion date, all in East Africa Time;
   - HTML, PDF and Word (.docx);
-  - labelled **"AI-generated · not reviewed by an analyst"**. A reviewer (not the submitter) can record a review with a note, and the label then names them.
+  - labelled **"AI-generated · not reviewed by an analyst"**. A reviewer (not the submitter) can record one review with a note; the label then reads "AI-generated · reviewed by …".
   The analyst's own verdicts and the approval workflow are untouched.
 - **Reports** has a new *Automatic reports* list with a date filter. The **dashboard** shows recent automatic reports, and the Verify card opens the one-click page.
-- Database migration 14 adds the `investigations` table. A copy of the database is saved before the upgrade, as for every migration. Investigations that were running when the server stopped are marked as interrupted.
+- **Time limits:**
+  - each investigation has a total limit (`INVESTIGATE_TIMEOUT_S`, default 900), and every stage has its own ceiling within it;
+  - when the limit is reached, the investigation stops at its next step and is marked failed with the stage it was in. It can't be rewritten later;
+  - uploaded files are removed only once the work has stopped;
+  - a stuck OCR reader is replaced.
+- Database migration 14 adds the `investigations` table. A copy of the database is saved before the upgrade, as for every migration. Investigations that were running when the server stopped are marked as interrupted, and their temporary uploads are deleted.
 - Fix: the screenshot reader's count pattern could take seconds or more on long digit runs (exponential backtracking). It is now linear.
-- Tests: `npm test` 181 (24 new in `test/investigate.test.js`: the ten required scenarios, AI with checked quotes, a model that isn't installed, a broken AI answer, no reachable search service, unreadable pages and images, private links, escaping, prompt injection, reports by date, review by another person); `npm run test:e2e` adds the one-click page on desktop and phone.
+- **Tests:**
+  - `npm test`: 187, all pass. `test/investigate.test.js` adds 30:
+    - the ten required scenarios;
+    - AI: quotes checked against the sources, a model that isn't installed, a broken AI answer, a cloud AI service refused;
+    - failures: no reachable search service, unreadable pages and images, the time limit;
+    - safety: private links, escaping, prompt injection;
+    - evidence: a denial from the same organisation, fact-check grouping, AI text that states another verdict;
+    - reports: the Word file with characters XML cannot hold, reports by date, one review by another person.
+  - `npm run test:e2e`: 203 checks, all pass, including the one-click page on desktop and phone.
 
 ## 1.22.0 — Automatic public-content fact-checking reports
 

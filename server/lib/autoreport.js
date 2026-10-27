@@ -9,7 +9,8 @@ import { AUTO_VERDICTS, STRENGTH } from "./autoeval.js";
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const isHttp = u => /^https?:\/\//i.test(String(u || ""));
 // all times in East Africa Time (UTC+3, no daylight saving)
-export const eat = (iso, withTime = true) => { if (!iso) return "Not known"; const d = new Date(Date.parse(iso) + 3 * 3600e3); if (isNaN(d)) return "Not known";
+export const eat = (iso, withTime = true) => { if (!iso) return "Not known"; if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso))) withTime = false;   // a date without a time is not given one
+  const d = new Date(Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(String(iso)) ? `${iso}T00:00:00+03:00` : iso) + 3 * 3600e3); if (isNaN(d)) return "Not known";
   const m = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()], p = n => String(n).padStart(2, "0");
   return `${p(d.getUTCDate())} ${m} ${d.getUTCFullYear()}${withTime ? `, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} EAT` : ""}`; };
 const cites = ids => ids.length ? " " + ids.slice(0, 4).map(i => `[${i}]`).join(" ") : "";
@@ -34,6 +35,8 @@ export function writeSections(r) {
   if (reps.length) an.push(`${reps.length} item(s) repeat the wording of another item and were counted once, as repeated reporting of the same source.`);
   const early = r.evidence.filter(e => /before the claim/.test(e.date_note || "") && e.relevance >= 0.35);
   if (early.length) an.push(`Some closely matching reports were published well before the submission's date, which can indicate an earlier event or recycled content.${cites(early.map(e => e.id))}`);
+  const dis = r.evidence.filter(e => e.ai_disagrees);
+  if (dis.length) an.push(`The AI model read ${dis.length} source(s) differently from the rule-based comparison; the rules decided, and these sources should be checked by a person.${cites(dis.map(e => e.id))}`);
   if (r.io.observed.length) an.push(`Indicators observed: ${r.io.observed.slice(0, 4).map(i => i.indicator.replace(/\.$/, "")).join("; ")}.`);
   const gaps = r.claims.filter((c, i) => r.assessments[i].verdict === "insufficient").map(c => `claim ${c.seq}`);
   if (gaps.length) an.push(`Information gaps: no decisive evidence for ${gaps.join(", ")}.`);
@@ -87,16 +90,17 @@ details{margin-top:10px;border:1px solid var(--line);border-radius:6px;padding:6
 @media (max-width:560px){.rep{padding:14px}.top h1{font-size:18px}th:nth-child(3),td:nth-child(3){display:none}}`;
 const link = (u, t) => isHttp(u) ? `<a href="${esc(u)}" rel="noopener noreferrer" target="_blank">${esc(t || u)}</a>` : esc(t || u);
 const withCites = (s, ids) => esc(s).replace(/\[(E-\d+)\]/g, (m, id) => ids.has(id) ? `<a href="#${id}">[${id}]</a>` : m);
-export function label(r) { return r.review?.status === "reviewed" ? `Reviewed by ${r.review.by} on ${eat(r.review.at)}` : "AI-generated · not reviewed by an analyst"; }
+export function label(r) { return r.review?.status === "reviewed" ? `AI-generated · reviewed by ${r.review.by} on ${eat(r.review.at)}` : "AI-generated · not reviewed by an analyst"; }
 export function toHtml(r, { standalone = true } = {}) {
   const o = r.overall, x = r.source, ids = new Set(r.evidence.map(e => e.id)), { main, rest } = references(r), S = r.sections;
-  const ref = e => `<li id="${esc(e.id)}"><b>[${esc(e.id)}]</b> ${link(e.source_url, e.source_title || e.reference)}<div class="s">${esc(e.publisher)} · ${esc(e.source_published_at ? eat(e.source_published_at, false) : "date not known")} · ${esc(e.tier_label)} · claim ${esc(e.claim_seq)}: ${esc(STANCE[e.stance])} (${esc(e.stance_basis)})${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.repeat_of ? ` · repeats ${esc(e.repeat_of)}` : ""} · found via ${esc(e.connector_label)}, ${esc(eat(e.retrieved_at))}</div></li>`;
+  const ref = e => `<li id="${esc(e.id)}"><b>[${esc(e.id)}]</b> ${link(e.source_url, e.source_title || e.reference)}<div class="s">${esc(e.publisher)} · ${esc(e.source_published_at ? eat(e.source_published_at, false) : "date not known")} · ${esc(e.tier_label)} · claim ${esc(e.claim_seq)}: ${esc(STANCE[e.stance])} (${esc(e.stance_basis)})${e.ai_stance ? ` · AI reading: ${esc(STANCE[e.ai_stance])}${e.ai_disagrees ? " (differs; check this source)" : ""}` : ""}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.repeat_of ? ` · repeats ${esc(e.repeat_of)}` : ""} · found via ${esc(e.connector_label)}, ${esc(eat(e.retrieved_at))}</div></li>`;
   const rows = r.claims.map((c, i) => { const a = r.assessments[i]; return `<tr><td>${c.seq}</td><td>${esc(c.text)}<div class="s">${esc(a.reason)}</div></td><td>${esc(STRENGTH[a.strength])}</td><td><span class="tag" style="--vc:${VC[a.verdict]}">${esc(AUTO_VERDICTS[a.verdict])}</span></td></tr>`; }).join("");
   const ind = r.io.observed.map(i => `<li>${esc(i.indicator)}${i.cue ? ` <span class="s">(seen: “${esc(i.cue)}”)</span>` : ""}<div class="s">${esc(i.check)}</div></li>`).join("");
   const body = `<div class="rep"><div class="top"><h1>${esc(r.subject)}</h1><span class="lab${r.review?.status === "reviewed" ? " ok" : ""}">${esc(label(r))}</span>${r.training ? ' <span class="lab tr">Training case (synthetic material)</span>' : ""}
   <div class="meta"><div><b>Report</b> ${esc(r.report_id)}</div><div><b>Investigation date</b> ${esc(eat(r.created_at))}</div><div><b>Source published</b> ${esc(x.published_at ? eat(x.published_at) : "Not known")}</div>
   <div><b>Analysis completed</b> ${esc(eat(r.completed_at))}</div><div><b>Source</b> ${x.url ? link(x.url, x.platform || x.url) : esc(x.platform || x.input_type)}</div><div><b>Case</b> ${r.case_id ? esc(r.case_id) : "not created (no readable content)"}</div></div></div>
   <div class="v" style="--vc:${VC[o.verdict]}"><b>${esc(o.label)}</b><span>Evidence strength: ${esc(o.strength_label)}</span></div>
+  ${r.written_by === "ai" ? `<p class="s"><b>Sections A–D were drafted by the AI model ${esc(r.ai.model)} from the listed evidence and checked automatically. The assessment labels come from fixed rules.</b></p>` : ""}
   <h2>A. Background</h2>${S.background.map(s => `<p>${withCites(s, ids)}</p>`).join("")}
   <h2>B. Analysis</h2>${S.analysis.map(s => `<p>${withCites(s, ids)}</p>`).join("")}${rows ? `<table><tr><th>#</th><th>Claim</th><th>Evidence strength</th><th>Assessment</th></tr>${rows}</table>` : ""}
   <h2>C. Assessment</h2>${S.assessment.map(s => `<p>${withCites(s, ids)}</p>`).join("")}${ind ? `<p class="s"><b>Information operations indicators (observed):</b></p><ul>${ind}</ul>` : ""}
@@ -109,8 +113,10 @@ export function toHtml(r, { standalone = true } = {}) {
 }
 
 // ---------------------------------------------------------------- PDF
-const safe = s => String(s ?? "").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/·/g, "-").replace(/→/g, "->").replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff]/g, "");
+let replaced = 0;
+const safe = s => String(s ?? "").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/·/g, "-").replace(/→/g, "->").replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff]/gu, () => { replaced++; return "?"; });
 export function toPdf(r) {
+  replaced = 0;
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margins: { top: 48, bottom: 54, left: 50, right: 50 }, info: { Title: `${r.report_id} - AIVS report`, Author: "AIVS (automatic)", Subject: safe(r.subject) } });
     const chunks = []; doc.on("data", c => chunks.push(c)); doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject);
@@ -132,13 +138,14 @@ export function toPdf(r) {
     h2("E. References"); const { main, rest } = references(r);
     if (!main.length) p("No relevant evidence was retrieved.", { size: 8.5, color: MUTED });
     for (const e of main) { p(`[${e.id}] ${e.source_title || e.reference}`, { bold: true, size: 8.5 }); p(`${e.publisher} - ${e.source_published_at ? eat(e.source_published_at, false) : "date not known"} - ${e.tier_label} - claim ${e.claim_seq}: ${STANCE[e.stance]}${e.rating ? ` - rating "${e.rating}"` : ""}${e.source_url ? ` - ${e.source_url}` : ""}`, { size: 7.5, color: MUTED }); doc.moveDown(0.15); }
-    if (rest.length) p(`${rest.length} further evidence item(s) are kept in the investigation record for audit.`, { size: 8, color: MUTED });
+    if (rest.length) p(`${rest.length} further evidence item(s) are kept in the investigation record for audit (see the HTML report).`, { size: 8, color: MUTED });
+    if (replaced) p(`${replaced} character(s) outside the PDF font were shown as "?"; the HTML and Word reports keep the exact text.`, { size: 7.5, color: MUTED });
     doc.end();
   });
 }
 
 // ---------------------------------------------------------------- Word (.docx, Office Open XML in a zip)
-const xml = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+const xml = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "");
 const run = (t, { b, color, size } = {}) => `<w:r><w:rPr>${b ? "<w:b/>" : ""}${color ? `<w:color w:val="${color}"/>` : ""}${size ? `<w:sz w:val="${size}"/>` : ""}</w:rPr><w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
 const para = (t, o = {}) => `<w:p>${o.style ? `<w:pPr><w:pStyle w:val="${o.style}"/></w:pPr>` : ""}${run(t, o)}</w:p>`;
 function zip(files) {
@@ -147,8 +154,8 @@ function zip(files) {
   const local = [], central = []; let off = 0;
   for (const [name, text] of files) {
     const data = Buffer.from(text, "utf8"), comp = zlib.deflateRawSync(data), n = Buffer.from(name), c = crc(data);
-    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(8, 8); h.writeUInt32LE(0, 10); h.writeUInt32LE(c, 14); h.writeUInt32LE(comp.length, 18); h.writeUInt32LE(data.length, 22); h.writeUInt16LE(n.length, 26); h.writeUInt16LE(0, 28);
-    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0x0800, 8); cd.writeUInt16LE(8, 10); cd.writeUInt32LE(0, 12); cd.writeUInt32LE(c, 16); cd.writeUInt32LE(comp.length, 20); cd.writeUInt32LE(data.length, 24); cd.writeUInt16LE(n.length, 28); cd.writeUInt32LE(off, 42);
+    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(8, 8); h.writeUInt32LE(0x00210000, 10); h.writeUInt32LE(c, 14); h.writeUInt32LE(comp.length, 18); h.writeUInt32LE(data.length, 22); h.writeUInt16LE(n.length, 26); h.writeUInt16LE(0, 28);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0x0800, 8); cd.writeUInt16LE(8, 10); cd.writeUInt32LE(0x00210000, 12); cd.writeUInt32LE(c, 16); cd.writeUInt32LE(comp.length, 20); cd.writeUInt32LE(data.length, 24); cd.writeUInt16LE(n.length, 28); cd.writeUInt32LE(off, 42);
     local.push(h, n, comp); central.push(cd, n); off += 30 + n.length + comp.length;
   }
   const cdBuf = Buffer.concat(central), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10); end.writeUInt32LE(cdBuf.length, 12); end.writeUInt32LE(off, 16);

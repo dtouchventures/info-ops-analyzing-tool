@@ -10,6 +10,9 @@ import path from "node:path";
 import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { startServer, login } from "./helpers.js";
+import { checkSections, compare } from "../server/lib/autoeval.js";
+import { toDocx } from "../server/lib/autoreport.js";
+import { extractDocument } from "../server/lib/docs.js";
 
 let F, fake, S, NS, AI, ana, rev, anaNS, anaAI;
 const ollama = { models: ["qwen3:4b-instruct"], mode: "good" };
@@ -30,6 +33,9 @@ function factchecks(q) {
 }
 function brave(q) {
   if (/cholera|garissa/i.test(q) && !/site:/.test(q)) return CHOLERA;
+  if (/kisumu/i.test(q) && /protest/i.test(q) && !/site:/.test(q)) return [
+    { title: "Police arrest 40 protesters in Kisumu on Tuesday", url: "https://nation.africa/kenya/counties/kisumu/arrests", description: "Police in Kisumu arrested 40 protesters on Tuesday, officers said.", page_age: "2026-10-21T10:00:00Z" },
+    { title: "Kisumu police deny reports that 40 protesters were arrested", url: "https://nation.africa/kenya/counties/kisumu/police-deny", description: "Kisumu police denied reports that 40 protesters were arrested on Tuesday and said the claim is false.", page_age: "2026-10-22T10:00:00Z" }];
   if (/mandera/i.test(q) && /hospital/i.test(q) && !/site:/.test(q)) return [
     { title: "Governor opens new Mandera referral hospital", url: "https://www.the-star.co.ke/counties/mandera-hospital-opened", description: "The governor opened the new Mandera referral hospital on Monday, county officials said.", page_age: "2026-10-19T10:00:00Z" },
     { title: "Ministry: claims that Mandera hospital has opened are false", url: "https://www.health.go.ke/press/mandera-hospital-not-open", description: "The Ministry of Health denied that the Mandera referral hospital has opened; it said construction is not complete and the claim is false.", page_age: "2026-10-20T10:00:00Z" }];
@@ -67,6 +73,7 @@ before(async () => {
   fake = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x"), q = Object.fromEntries(u.searchParams), json = (c, o) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (u.pathname === "/news/cholera") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(ARTICLE); }
+    if (u.pathname === "/news/slow") { setTimeout(() => { res.writeHead(200, { "content-type": "text/html" }); res.end(ARTICLE); }, 4000); return; }
     if (u.pathname === "/news/empty") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<html><body><div id=app></div></body></html>"); }
     if (u.pathname === "/v1alpha1/claims:search") return q.key === "fc-key" ? json(200, { claims: factchecks(q.query || "") }) : json(400, { error: { message: "API key not valid" } });
     if (u.pathname === "/res/v1/web/search") return req.headers["x-subscription-token"] === "brave-key" ? json(200, { web: { results: brave(q.q || "") } }) : json(401, { error: "bad token" });
@@ -181,11 +188,15 @@ test("an opinion is unverifiable", async () => {
 });
 
 // ---- AI (Ollama through the AIVS AI settings)
-test("AI: stances accepted only with real quotes; bad sentences removed; verdict stays rule-based", async () => {
+test("AI: readings kept only with real quotes and never decide; bad sentences removed; every send audited", async () => {
   ollama.mode = "good";
   const inv = await investigate(anaAI, { text: "The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026." }), r = inv.result;
   assert.equal(inv.status, "done", inv.error); assert.ok(r.ai.used, JSON.stringify(r.ai)); assert.equal(r.written_by, "ai");
-  const viaAI = r.evidence.filter(e => e.stance_method.startsWith("ai")); assert.ok(viaAI.length); assert.ok(viaAI.every(e => /Ministry of Health confirms 12/.test(e.stance_basis)));
+  assert.ok(r.evidence.some(e => e.ai_stance === "supports" && /Ministry of Health confirms 12/.test(e.ai_quote)), "a reading with a real quote is kept");
+  assert.ok(r.evidence.some(e => e.ai_rejected), "readings whose quote is not in the source are discarded");
+  assert.ok(r.evidence.every(e => ["rules", "published rating"].includes(e.stance_method)), "the rules decide every stance");
+  const sent = AI.ctx.db.prepare("SELECT details FROM audit_log WHERE action = 'Case content sent to AI service (automatic investigation)' AND entity_id = ?").all(inv.case_id);
+  assert.ok(sent.length >= 2 && sent.every(x => /qwen3:4b-instruct/.test(x.details)), "each AI send is audited with the model");
   const all = Object.values(r.sections).flat().join(" "); assert.ok(!/E-999999|95%|bad\.example/.test(all), all);
   assert.ok(r.ai.notes.some(n => /removed by the checks/.test(n))); assert.match(r.sections.assessment[0], /^Overall: Supported/); assert.equal(r.overall.verdict, "supported");
 });
@@ -199,7 +210,7 @@ test("AI: a model that is not installed is reported and the rule-based writer is
 });
 test("AI: an answer that is not JSON falls back to rules", async () => {
   ollama.mode = "broken";
-  try { const r = (await investigate(anaAI, { text: "Garissa County has recorded 12 new cholera cases, the Ministry of Health confirmed." })).result; assert.equal(r.written_by, "rules"); assert.ok(r.ai.notes.some(n => /not used/.test(n))); }
+  try { const r = (await investigate(anaAI, { text: "Garissa County has recorded 12 new cholera cases, the Ministry of Health confirmed." })).result; assert.equal(r.written_by, "rules"); assert.ok(r.ai.notes.some(n => /not used/.test(n)), JSON.stringify(r.ai)); }
   finally { ollama.mode = "good"; }
 });
 
@@ -238,7 +249,49 @@ test("reports by date (EAT) and optional human review by another person", async 
   assert.equal((await ana.get("/api/investigations?from=2020-01-01&to=2020-01-02")).body.investigations.length, 0);
   assert.equal((await ana.post(`/api/investigations/${inv.id}/review`, { note: "checked" })).status, 403, "analysts cannot review");
   const ok = await rev.post(`/api/investigations/${inv.id}/review`, { note: "Opened the two official sources; they match." }); assert.equal(ok.status, 200);
-  const html = (await rev.get(`/api/investigations/${inv.id}/report.html`)).body; assert.ok(html.includes("Reviewed by REV"));
+  const html = (await rev.get(`/api/investigations/${inv.id}/report.html`)).body; assert.ok(html.includes("AI-generated · reviewed by REV"));
+  assert.equal((await (await login(S.base, "rev2")).post(`/api/investigations/${inv.id}/review`, { note: "again" })).status, 409, "a second review cannot overwrite the first");
   const audit = S.ctx.db.prepare("SELECT action FROM audit_log WHERE entity = 'investigation' AND entity_id = ?").all(inv.id).map(x => x.action);
   assert.deepEqual(audit, ["Automatic investigation submitted", "Automatic investigation completed", "Automatic report reviewed"]);
+});
+
+// ---- regression tests for the independent code review
+test("a denial from the same organisation is not folded into its supporting report", async () => {
+  const r = (await investigate(ana, { text: "Police in Kisumu arrested 40 protesters on Tuesday, officers said." })).result, a = r.assessments[0];
+  assert.ok(a.contradicting.length, JSON.stringify(r.evidence.map(e => [e.id, e.stance, e.repeat_of])));
+  assert.equal(a.verdict, "mixed"); for (const id of a.contradicting) assert.ok(r.top[r.claims[0].id].includes(id));
+});
+test("a published rating is never grouped under another source, and the AI cannot overturn a contradiction", () => {
+  const cl = { id: "c1", text: "The Ministry of Health confirmed 12 new cholera cases in Garissa County.", kind: "statement", claim_type: "factual", names: ["Garissa", "Ministry of Health"] };
+  const ev = [{ id: "E-1", claim_id: "c1", connector: "web", source_url: "https://www.health.go.ke/a", source_title: "Ministry of Health confirms 12 new cholera cases in Garissa County", snippet: "The Ministry of Health confirmed 12 new cholera cases in Garissa County." },
+    { id: "E-2", claim_id: "c1", connector: "factcheck", source_url: "https://factcheck.afp.com/x", source_title: "Ministry of Health confirms 12 new cholera cases in Garissa County", snippet: "The Ministry of Health confirmed 12 new cholera cases in Garissa County.", rating: "False" },
+    { id: "E-3", claim_id: "c1", connector: "web", source_url: "https://nation.africa/x", source_title: "Reports of 12 cholera cases in Garissa are false, ministry says", snippet: "The Ministry of Health denied that 12 new cholera cases were found in Garissa County; the claim is false." }];
+  const out = compare([cl], ev, { aiStances: { "E-3": { stance: "related", quote: "The Ministry of Health denied that 12 new cholera cases" } } });
+  const by = Object.fromEntries(out.map(e => [e.id, e]));
+  assert.ok(!by["E-2"].repeat_of && by["E-2"].stance === "contradicts"); assert.equal(by["E-3"].stance, "contradicts"); assert.ok(by["E-3"].ai_disagrees);
+});
+test("AI text that states a different verdict, or speaks as a reviewer, is removed", () => {
+  const c = checkSections({ analysis: ["The claim is true according to [E-1].", "Sources report the same subject [E-1]."], assessment: ["I have checked and verified the sources."], recommendations: ["The post has been debunked."] }, new Set(["E-1"]), "insufficient");
+  assert.deepEqual(c.analysis, ["Sources report the same subject [E-1]."]); assert.equal(c.assessment.length, 0); assert.equal(c.recommendations.length, 0); assert.equal(c.removed.length, 3);
+});
+test("after the time limit the investigation stops for good: no late result, no 'completed' audit", async () => {
+  const T = await startServer({ allowPrivateFetch: true, investigate: { timeoutMs: 1500 } }), u = await login(T.base, "ana");
+  try {
+    const inv = await investigate(u, { url: `${F}/news/slow` });
+    assert.equal(inv.status, "failed"); assert.match(inv.error, /did not finish/); assert.ok(inv.stages.some(st => st.status === "failed"), "the running stage is marked failed");
+    await new Promise(ok => setTimeout(ok, 5000));
+    const again = (await u.get(`/api/investigations/${inv.id}`)).body; assert.equal(again.status, "failed"); assert.equal(again.result, null);
+    const acts = T.ctx.db.prepare("SELECT action FROM audit_log WHERE entity = 'investigation' AND entity_id = ?").all(inv.id).map(x => x.action);
+    assert.ok(!acts.includes("Automatic investigation completed"), acts.join(", "));
+  } finally { await T.ctx.investigations.close(); await T.close(); }
+});
+test("an AI service outside the network is not used automatically", async () => {
+  const T = await startServer({ search: { factcheckKey: "fc-key", factcheckBase: F, timeoutMs: 3000 }, ai: { provider: "openai", model: "gpt-x", apiKey: "k", baseUrl: "https://api.example.com/v1", timeoutMs: 3000, maxImages: 6, trainingOnly: false } }), u = await login(T.base, "ana");
+  try { const r = (await investigate(u, { text: "KDF recruitment requires a KSh 2,000 fee paid on WhatsApp before Friday." })).result; assert.ok(!r.ai.used); assert.match(r.ai.reason, /outside your network/); }
+  finally { await T.ctx.investigations.close(); await T.close(); }
+});
+test("the Word report opens even with characters XML cannot hold", async () => {
+  const inv = await investigate(ana, { text: "Garissa County has recorded 12 new cholera cases, the Ministry of Health confirmed." }), r = inv.result;
+  r.subject = "Odd \uffff characters \ud800 here"; const d = await extractDocument(toDocx(r), "report.docx");
+  assert.match(d.text, /Odd/); assert.match(d.text, /Background/);
 });
