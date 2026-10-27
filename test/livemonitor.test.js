@@ -131,7 +131,7 @@ test("automatic analysis and verification: every new post is analysed; a contrad
   assert.match(inv.result.source.method, /Graph API/); assert.ok(inv.case_id);
   const pdf = Buffer.from(await (await fetch(`${S.base}/api/investigations/${d.investigation.id}/report.pdf`, { headers: { cookie: ana.cookie } })).arrayBuffer());
   assert.equal((pdf.toString("latin1").match(/\/Type \/Page\b/g) || []).length, 1, "one-page PDF report");
-  const html = (await ana.get(`/api/investigations/${d.investigation.id}/report.html`)).body; assert.match(html, /AI-Generated \(not reviewed\)/);
+  const html = (await ana.get(`/api/investigations/${d.investigation.id}/report.html`)).body; assert.match(html, /DRAFT — NOT APPROVED/);
   const al = (await ana.get("/api/live/alerts?group=1")).body;
   const v = al.alerts.find(a => a.kind === "verification" && a.post_id === fee.id); assert.ok(v, JSON.stringify(al.alerts.map(a => a.kind)));
   assert.ok(v.priority_reasons.length && v.detail.priority_rule, "the priority is explained"); assert.ok(al.groups.length >= 1);
@@ -139,13 +139,14 @@ test("automatic analysis and verification: every new post is analysed; a contrad
   assert.ok(list.posts.filter(p => p.id !== fee.id).every(p => p.verification !== "contradicted"));
 });
 
-test("analyst review, approval and alert actions; escalation needs a reason", async () => {
+test("analyst review, HOD-only approval and alert actions; escalation needs a reason", async () => {
   const fee = (await ana.get("/api/live/posts?verification=contradicted")).body.posts[0], invId = fee.investigation_id;
-  assert.equal((await rev.post(`/api/investigations/${invId}/approve`, { note: "x" })).status, 409, "a report is reviewed before it is approved");
   assert.equal((await rev.post(`/api/investigations/${invId}/review`, { note: "Checked the fact-check and the post." })).status, 200);
-  assert.equal((await rev.post(`/api/investigations/${invId}/approve`, { note: "ok" })).status, 403, "the reviewer cannot also approve");
-  assert.equal((await admin.post(`/api/investigations/${invId}/approve`, { note: "Approved for internal reporting." })).status, 200);
-  assert.match((await ana.get(`/api/investigations/${invId}/report.html`)).body, /Approved by ADMIN/);
+  // 1.32: approval is by the Head of Department only; neither a reviewer nor an administrator can approve
+  assert.equal((await rev.post(`/api/investigations/${invId}/approve`, { note: "ok" })).status, 409);
+  assert.equal((await admin.post(`/api/investigations/${invId}/approve`, { note: "Approved for internal reporting." })).status, 409);
+  assert.equal((await admin.post(`/api/investigations/${invId}/decision`, { action: "approve" })).status, 403, "an administrator has no HOD approval authority");
+  assert.match((await ana.get(`/api/investigations/${invId}/report.html`)).body, /DRAFT — NOT APPROVED \([^)]*reviewed by REV/);
   const a = (await ana.get("/api/live/alerts?kind=verification")).body.alerts[0];
   assert.equal((await ana.post(`/api/live/alerts/${a.id}/action`, { action: "escalate" })).status, 400);
   const r = await ana.post(`/api/live/alerts/${a.id}/action`, { action: "escalate", note: "Possible recruitment fraud; senior analyst to decide on a public clarification." });

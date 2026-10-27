@@ -47,7 +47,7 @@ before(async () => {
       if (/Rewrite the four sections/.test(p)) return j(200, { message: { content: JSON.stringify({ background: "AIVS searched the connected public sources for the analyst's keywords about a ferry accident near Lamu and found several news items and one video. The subject matters because public information about the accident may shape understanding of maritime safety and the security response on the coast in the coming days.",
         analysis: "The items form one main narrative about a ferry accident near Lamu and the search for missing people [1]. Reports disagree on the number of people missing: one gives twelve and another twenty, so the figure remains unresolved. The same headline about rescue teams appears on two sites, which is repetition of wording and not evidence of coordination. No official statement was found among the results, which leaves an information gap about the confirmed facts and the response by the authorities.",
         assessment: "Available reporting indicates public discussion of a ferry accident near Lamu across several independent news sources. Conflicting figures mean the number of missing people remains unresolved until confirmed by an authoritative source. There are no indicators of coordinated activity in the available data. Overall: monitoring summary. Evidence strength: Moderate, based on the number of independent sources found.",
-        recommendations: ["Confirm the number of missing people with the responsible authority before reporting it.", "Keep the keywords as a recurring watchlist and review new items daily.", "Refer this AI-generated assessment for authorised human review before any operational use."] }) }, model: "qwen3:4b-instruct" });
+        recommendations: ["There is a need to avoid relying on either figure for the missing people in public communication until it is established.", "There is a need to keep the keywords under monitoring through the AIVS watchlist and review new items daily.", "There is a need to refer this AI-generated assessment for authorised human review before any operational use."] }) }, model: "qwen3:4b-instruct" });
       return j(200, { message: { content: "{}" }, model: "qwen3:4b-instruct" }); }); return; }
     res.writeHead(404); res.end();
   });
@@ -121,10 +121,11 @@ test("analysis and draft report: narratives, contradictions, repetition, gaps; O
   assert.ok(a.recommendations.some(x => /human review/.test(x)));
   const pdf = Buffer.from(await (await fetch(`${S.base}/api/monitor/reports/${r.body.id}/file.pdf`, { headers: { cookie: ana.cookie } })).arrayBuffer());
   assert.equal((pdf.toString("latin1").match(/\/Type \/Page\b/g) || []).length, 1);
-  const html = (await ana.get(`/api/monitor/reports/${r.body.id}/file.html`)).body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/(\d\.) (\w)/g, "$1 $2"); for (const h of ["1. BACKGROUND", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", "PUBLIC INFORMATION MONITORING REPORT", "AI-Generated (not reviewed)"]) assert.ok(html.includes(h), h);
+  const html = (await ana.get(`/api/monitor/reports/${r.body.id}/file.html`)).body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/(\d\.) (\w)/g, "$1 $2"); for (const h of ["1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", "PUBLIC INFORMATION MONITORING REPORT", "DRAFT — NOT APPROVED"]) assert.ok(html.includes(h), h);
+  assert.ok(a.recommendations.every(x => x.startsWith("There is a need to ")), "every recommendation begins with “There is a need to”");
   assert.equal((await ana.post(`/api/monitor/reports/${r.body.id}/review`, { note: "x" })).status, 403, "analyst cannot review");
   assert.equal((await rev.post(`/api/monitor/reports/${r.body.id}/review`, { note: "Checked the two figures against the articles." })).status, 200);
-  assert.match((await ana.get(`/api/monitor/reports/${r.body.id}/file.html`)).body, /Reviewed by REV/);
+  assert.match((await ana.get(`/api/monitor/reports/${r.body.id}/file.html`)).body, /DRAFT — NOT APPROVED \([^)]*reviewed\)/);
 });
 
 test("a search saved as a watchlist repeats automatically and its new items are found, matched and alerted", async () => {

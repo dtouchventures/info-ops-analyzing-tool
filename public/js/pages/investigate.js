@@ -17,7 +17,7 @@ let timer = null;
 export async function render(el, params = []) {
   clearTimeout(timer);
   crumbs(`<b>Verify Information</b>${App.training ? " · training records" : ""}`);
-  if (!App.can("case.create")) { el.innerHTML = `<div class="callout warn"><div>Your role can read reports but cannot start investigations. See <a href="#/reports">Reports</a>.</div></div>`; return; }
+  if (!App.can("case.create") && !(/^INV-/.test(params[0] || "") && App.can("case.read"))) { el.innerHTML = `<div class="callout warn"><div>Your role can read reports but cannot start investigations. See <a href="#/reports">Reports</a>.</div></div>`; return; }
   el.innerHTML = `<div class="pagehead"><div><h1>Verify Information</h1><p>Paste a link. AIVS extracts the post or article with its images, detects the claims, searches for evidence, checks the images and writes a preliminary report. You do not need to type anything else.</p></div>
       <div class="row"><a class="btn ghost sm" href="#/start" title="The earlier, step-by-step investigation">Step-by-step investigation</a></div></div>
     <div class="card" id="invForm"><div class="bd">
@@ -44,6 +44,7 @@ export async function render(el, params = []) {
       <div id="ires"></div>
       <div id="invOut" hidden>
         <div class="row" style="margin:12px 0 8px;flex-wrap:wrap;gap:8px" id="iacts"></div>
+        <div id="iappr"></div>
         <div class="card"><div class="hd"><h3>Information Operations Assessment</h3><span class="small muted">One-page assessment · full evidence in Supporting evidence</span></div><div class="bd" style="padding:0">
           <iframe id="irep" title="Information Operations Assessment" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" style="width:100%;height:78vh;min-height:520px;border:0;border-radius:0 0 10px 10px;background:#fff"></iframe></div></div>
       </div>
@@ -143,6 +144,42 @@ function fixForm(inv) {
     <div class="row" style="margin-top:8px;gap:10px;flex-wrap:wrap"><label class="btn ghost sm" for="fxFile" style="cursor:pointer">Add a screenshot or file</label><input id="fxFile" type="file" multiple accept="image/*,.pdf,.docx" style="position:absolute;opacity:0;width:1px;height:1px"><span id="fxNames" class="small muted"></span>
       <button class="btn primary sm" id="fxGo">Analyse again with this</button></div><div id="fxErr" class="callout bad" style="margin-top:8px" hidden></div></div></div>`;
 }
+// ---------------------------------------------------------------- Head of Department approval of the report (1.32)
+const ASTATUS = { draft: ["AI draft — analyst review", "grey"], pending: ["Pending HOD approval", "info"], returned: ["Returned for revision", "warn"], rejected: ["Rejected", "con"], approved: ["Approved by the Head of Department", "sup"] };
+async function approvalPanel(inv, base, refresh) {
+  const st = await api.get(`/api/investigations/${encodeURIComponent(inv.id)}/approval`), me = App.me.id;
+  const mine = inv.created_by === me || App.can("case.approve"), canEdit = App.can("report.submit") && mine && ["draft", "returned", "approved", "pending"].includes(st.status);
+  const canSubmit = App.can("report.submit") && mine && ["draft", "returned"].includes(st.status);
+  const canDecide = App.can("report.hod") && st.status === "pending" && st.assigned_hod === me && st.submitted_by_id !== me && inv.created_by !== me;
+  const [lab, cls] = ASTATUS[st.status] || ASTATUS.draft;
+  $("#iappr").innerHTML = `<div class="card" style="margin:0 0 12px" id="apprCard"><div class="hd"><h3>Report approval</h3><span class="chip ${cls}" id="apprStatus">${esc(lab)}</span></div><div class="bd small">
+    <div>AI Draft → Analyst review → Pending HOD approval → HOD review → Approved → Final approved PDF. ${st.status === "approved" ? `<b>Approval ${esc(st.approval_ref)}</b> by ${esc(st.approver_name)}${st.approver_designation ? `, ${esc(st.approver_designation)}` : ""} on ${esc(eat(st.decided_at))}. <a href="${base}.pdf" download>Final approved PDF</a>` : "The PDF is marked “DRAFT — NOT APPROVED” until the Head of Department approves it."}</div>
+    ${st.assigned_hod_name ? `<div>Assigned Head of Department: <b>${esc(st.assigned_hod_name)}</b>${st.submitted_at ? ` · submitted by ${esc(st.submitted_by || "")} on ${esc(eat(st.submitted_at))}` : ""}</div>` : ""}
+    ${st.decision_note && ["returned", "rejected"].includes(st.status) ? `<div class="callout ${st.status === "rejected" ? "bad" : "warn"}" style="margin-top:6px"><div><b>${st.status === "rejected" ? "Reason for rejection" : "What to revise"}:</b> ${esc(st.decision_note)}</div></div>` : ""}
+    ${canSubmit || canEdit ? `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:flex-end">${canEdit ? `<button class="btn sm" id="apEdit">Revise the report</button>` : ""}
+      ${canSubmit ? `<div><label class="f" for="apHod">Head of Department</label><select id="apHod">${st.hods.length ? st.hods.map(h => `<option value="${h.id}">${esc(h.name)}${h.designation ? ` — ${esc(h.designation)}` : ""}</option>`).join("") : `<option value="">No Head of Department is set up</option>`}</select></div>
+      <div style="flex:1;min-width:200px"><label class="f" for="apNote">Note for the HOD (optional)</label><input id="apNote" style="width:100%"></div><button class="btn primary sm" id="apSubmit" ${st.hods.length ? "" : "disabled"}>Submit for HOD approval</button>` : ""}</div>` : ""}
+    ${canDecide ? `<div style="margin-top:8px"><label class="f" for="apDec">Decision note (required to return or reject)</label><textarea id="apDec" rows="2" style="width:100%"></textarea>
+      <div class="row" style="gap:8px;margin-top:6px"><button class="btn primary sm" id="apApprove">Approve</button><button class="btn sm" id="apReturn">Return for revision</button><button class="btn sm ghost" id="apReject">Reject</button>
+      <a class="btn sm ghost" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Examine the evidence</a></div></div>` : ""}
+    <div id="apErr" class="callout bad" style="margin-top:8px" hidden></div>
+    ${st.events?.length ? `<details style="margin-top:8px"><summary>Approval history (${st.events.length})</summary><ul style="margin:4px 0 0 18px">${st.events.map(e => `<li>${esc(eat(e.at))} · ${esc(e.by_name)}: ${esc(e.action)}${e.note ? ` — ${esc(e.note)}` : ""} <span class="tiny sub">v${e.version}</span></li>`).join("")}</ul></details>` : ""}</div></div>`;
+  const fail2 = e => { $("#apErr").innerHTML = `<div>${esc(errMsg(e))}</div>`; $("#apErr").hidden = false; };
+  const act = async (fn, okMsg) => { try { await fn(); refresh(); } catch (e) { fail2(e); } };
+  $("#apSubmit")?.addEventListener("click", () => act(() => api.post(`/api/investigations/${encodeURIComponent(inv.id)}/submit`, { hod_id: +$("#apHod").value, note: $("#apNote").value })));
+  for (const [idb, action] of [["#apApprove", "approve"], ["#apReturn", "return"], ["#apReject", "reject"]]) $(idb)?.addEventListener("click", () => act(() => api.post(`/api/investigations/${encodeURIComponent(inv.id)}/decision`, { action, note: $("#apDec").value })));
+  $("#apEdit")?.addEventListener("click", async () => {
+    const { modal } = await import("../ui.js"), a = await api.get(`${base}.json`);
+    const r = await modal("Revise the report", `<p class="small sub" style="margin-top:0">Changes after submission or approval withdraw the report from approval: it must be submitted again. Every recommendation must begin with “There is a need to…”.</p>
+      ${["background", "analysis", "assessment"].map(k => `<label class="f" for="ed_${k}">${{ background: "1. Executive summary / background information", analysis: "2. Analysis", assessment: "3. Assessment" }[k]}</label><textarea id="ed_${k}" rows="${k === "background" ? 3 : 5}" style="width:100%">${esc(a[k])}</textarea>`).join("")}
+      <label class="f" for="ed_rec">4. Recommendations (3–5, one per line)</label><textarea id="ed_rec" rows="5" style="width:100%">${esc(a.recommendations.join("\n"))}</textarea>`,
+      [{ label: "Cancel", value: null }, { label: "Save revision", kind: "primary", value: el => ({ background: $("#ed_background", el).value, analysis: $("#ed_analysis", el).value, assessment: $("#ed_assessment", el).value, recommendations: $("#ed_rec", el).value.split("\n").map(x => x.trim()).filter(Boolean) }),
+        validate: async el => { const b = { background: $("#ed_background", el).value, analysis: $("#ed_analysis", el).value, assessment: $("#ed_assessment", el).value, recommendations: $("#ed_rec", el).value.split("\n").map(x => x.trim()).filter(Boolean) };
+          const bad = b.recommendations.find(x => !x.startsWith("There is a need to ")); if (bad) return `Every recommendation must begin with “There is a need to…” (${bad.slice(0, 40)}…).`;
+          try { await api.put(`/api/investigations/${encodeURIComponent(inv.id)}/assessment`, b); return null; } catch (e) { return errMsg(e); } } }], { wide: true });
+    if (r.value) refresh();
+  });
+}
 // the AI's reading of the content (Ollama), kept apart from the evidence: it is not verification
 function aiFindings(a) {
   if (!a) return "";
@@ -163,11 +200,13 @@ function results(inv) {
       ${f?.attempts?.length ? `<p class="tiny sub" style="margin:6px 0 0">Facebook: ${esc(f.attempts.map(a => `${a.method}: ${a.result}${a.detail ? ` (${a.detail})` : ""}`).join("; "))}</p>` : ""}</div></div>${b.can_continue ? continueForm(inv, b) : ""}`; }
   const r = inv.result, o = r.overall, by = Object.fromEntries(r.evidence.map(e => [e.id, e]));
   const pv = r.source.provenance ? `<div class="callout info" style="margin-top:12px" id="iprov"><div><b>Content supplied by ${esc(r.source.provenance.supplied_by)}, not retrieved automatically.</b> ${esc(r.source.provenance.platform || "The platform")} did not allow automatic extraction${r.source.provenance.continues ? ` (report ${esc(r.source.provenance.continues)})` : ""}. Analysed: ${esc(r.source.provenance.items.join(", "))}. Original link kept: ${httpLink(r.source.provenance.original_link, r.source.provenance.original_link)}.</div></div>` : "";
-  const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span></li>`;
+  const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.page_read ? " · full text read" : e.read_error ? " · page could not be read" : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span></li>`;
+  const IOV = { supported: "True", contradicted: "False", misleading: "Misleading", not_verifiable: "Unverified", insufficient: "Insufficient Evidence", mixed: "Insufficient Evidence" }, CONF = { strong: "High", moderate: "Moderate", weak: "Low", none: "Low" };
   const claims = r.claims.map((c, i) => { const a = r.assessments[i], top = (r.top[c.id] || []).map(id => by[id]).filter(Boolean);
     const sup = top.filter(e => e.stance === "supports"), con = top.filter(e => e.stance === "contradicts" || e.stance === "misleading"), rel = top.filter(e => e.stance === "related");
-    return `<div class="card" style="margin-top:10px"><div class="bd"><div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><b>Claim ${c.seq}</b><span class="chip ${VC[a.verdict]}">${esc({ supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: a.conflicting ? "Insufficient evidence (sources disagree)" : "Insufficient evidence", not_verifiable: "Unverifiable", mixed: "Insufficient evidence (sources disagree)" }[a.verdict])} · ${esc({ strong: "strong", moderate: "moderate", weak: "weak", none: "no" }[a.strength])} evidence</span></div>
+    return `<div class="card" style="margin-top:10px"><div class="bd"><div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><b>Principal claim ${i + 1}${r.claims.length > 1 ? ` of ${r.claims.length}` : ""}</b><span class="chip ${VC[a.verdict]}">${esc(IOV[a.verdict] || "")} · confidence ${esc(CONF[a.strength] || "Low")}</span><span class="chip grey">${esc({ supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: a.conflicting ? "Insufficient evidence (sources disagree)" : "Insufficient evidence", not_verifiable: "Unverifiable", mixed: "Insufficient evidence (sources disagree)" }[a.verdict])} · ${esc({ strong: "strong", moderate: "moderate", weak: "weak", none: "no" }[a.strength])} evidence</span></div>
       <p style="margin:6px 0">${esc(c.text)}</p><p class="small sub" style="margin:0 0 6px">${esc(a.reason)}</p>
+      <p class="tiny sub" style="margin:0 0 6px">Original source: ${esc(r.source.platform || r.source.input_type || "submission")}${r.source.published_at ? ` · published ${esc(eat(r.source.published_at.slice(0, 10)))}` : " · publication date not established"}${a.verdict === "insufficient" ? " · Gap: no independent reliable source settles it" : ""}</p>
       ${sup.length ? `<div class="small"><b>Supporting evidence</b><ul style="margin:4px 0 6px 18px">${sup.map(evRow).join("")}</ul></div>` : ""}
       ${con.length ? `<div class="small"><b>Contradicting evidence</b><ul style="margin:4px 0 6px 18px">${con.map(evRow).join("")}</ul></div>` : ""}
       ${rel.length ? `<details class="small"><summary>Related sources (${rel.length})</summary><ul style="margin:4px 0 6px 18px">${rel.map(evRow).join("")}</ul></details>` : ""}</div></div>`; }).join("");
@@ -180,12 +219,13 @@ function results(inv) {
       <p class="small" style="margin:6px 0">${esc(r.sections.assessment.slice(0, 2).join(" "))}</p>
       <p class="tiny sub" style="margin:4px 0 0">AI-generated preliminary assessment · ${esc(r.review?.status === "reviewed" ? `reviewed by ${r.review.by}` : "not reviewed by an analyst")}. The strength label describes the evidence found, not the probability that the claim is true.${r.ai.used ? ` AI model: ${esc(r.ai.model)}.` : ` AI not used: ${esc(r.ai.reason || "")}`}</p></div></div>
     ${aiFindings(r.ai?.content)}
-    <h3 style="margin:16px 0 4px">Claims and evidence</h3>${claims || '<p class="small sub">No claim could be checked.</p>'}
+    <h3 style="margin:16px 0 4px">Principal claims and evidence <span class="tiny sub">(at most two; checked automatically)</span></h3>${claims || '<p class="small sub">No claim could be checked.</p>'}
+    ${r.other_claims?.length ? `<details class="small" style="margin-top:6px"><summary>Further statements recorded but not prioritised (${r.other_claims.length})</summary><ul style="margin:4px 0 0 18px">${r.other_claims.map(c => `<li>${esc(c.text)}</li>`).join("")}</ul></details>` : ""}
     ${imgs ? `<h3 style="margin:16px 0 4px">Image verification</h3><div class="card"><div class="bd">${imgs}<p class="tiny sub">${esc(r.media.note)}</p></div></div>` : ""}
     <div class="grid g2" style="margin-top:12px;align-items:start">
       <div class="card"><div class="hd"><h3>Evidence sources</h3></div><div class="bd small">${r.search.length ? `<ul style="margin:0 0 0 18px">${r.search.map(s => `<li>${esc(s.label)}: ${s.status === "ok" || s.status === "partial" ? `${s.results} result(s)` : s.status === "not_configured" ? "not configured" : `<span style="color:var(--con)">${esc((s.errors || [])[0] || s.status)}</span>`}</li>`).join("")}</ul>` : "No search was run."}
         ${cred.length ? `<p class="tiny sub" style="margin:8px 0 0">Source credibility (independent sources): ${cred.map(([k, n]) => `${esc(k)} ${n}`).join(" · ")}</p>` : ""}</div></div>
-      <div class="card"><div class="hd"><h3>Recommended next steps</h3></div><div class="bd small"><ul style="margin:0 0 0 18px">${r.sections.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div></div></div>`;
+      <div class="card"><div class="hd"><h3>Recommendations</h3></div><div class="bd small"><ul style="margin:0 0 0 18px">${(r.io_assessment?.recommendations || r.sections.recommendations).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div></div></div>`;
 }
 async function follow(el, id) {
   $("#invForm").hidden = true; $("#invRun").hidden = false;
@@ -199,11 +239,12 @@ async function follow(el, id) {
     if (!inv.preview) preview({ platform: r.source.platform, url: r.source.url, title: r.source.title, text: r.content, claims: r.claims, notes: r.source.notes });
     $("#ifix").innerHTML = fixForm(inv); $("#ires").innerHTML = results(inv);
     $("#iacts").innerHTML = `<span class="chip ${VC[r.overall.verdict]}" style="font-size:14px">${esc(r.overall.label)} · ${esc(r.overall.strength_label)}</span>
-      ${!r.blocked ? `<button class="btn sm primary" id="igen" title="Write the one-page report again from the stored evidence, with the AI model if it is available now">Generate Report</button>` : ""}<a class="btn sm ${r.blocked ? "primary" : ""}" href="${base}.pdf" download>Download Report (PDF)</a><a class="btn sm" href="${base}.docx" download>Word</a><a class="btn sm ghost" href="${base}.html?download=1">HTML</a>
+      ${!r.blocked && App.can("case.create") ? `<button class="btn sm primary" id="igen" title="Write the one-page report again from the stored evidence, with the AI model if it is available now">Generate Report</button>` : ""}<a class="btn sm ${r.blocked ? "primary" : ""}" href="${base}.pdf" download>Report PDF</a><a class="btn sm" href="${base}.docx" download>Word</a><a class="btn sm ghost" href="${base}.html?download=1">HTML</a>
       <a class="btn sm ghost" id="idet" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Supporting evidence</a><a class="btn sm ghost" href="${base.replace(/report$/, "details")}.pdf" download>Evidence (PDF)</a>
       ${inv.case_id ? `<a class="btn sm ghost" href="#/case/${esc(inv.case_id)}">Open case ${esc(inv.case_id)}</a>` : ""}<a class="btn sm ghost" href="#/investigate">New investigation</a>
       ${App.can("case.approve") && !r.review?.at && inv.created_by !== App.me.id ? `<button class="btn sm ghost" id="irev">Record a review</button>` : ""}`;
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();
+    if (!r.blocked) approvalPanel(inv, base, () => follow(el, id)).catch(e => { $("#iappr").innerHTML = `<div class="callout bad"><div>${esc(errMsg(e))}</div></div>`; });
     $("#invOut").hidden = false;
     const rb = $("#irev"); if (rb) rb.onclick = async () => { const note = prompt("What did you check? (recorded with your name)"); if (!note) return; try { await api.post(`/api/investigations/${encodeURIComponent(inv.id)}/review`, { note }); follow(el, id); } catch (e) { alert(errMsg(e)); } };
     const bm = $("#ctBm"); if (bm) bm.onclick = e => { e.preventDefault(); alert("Drag this button to your bookmarks bar, then use it on the post's page."); };

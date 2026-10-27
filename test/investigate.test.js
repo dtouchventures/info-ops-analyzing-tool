@@ -71,12 +71,19 @@ async function common(client, inv) {
   }
   // the one-page Information Operations Assessment
   const html = (await client.get(`/api/investigations/${inv.id}/report.html`)).body, plain = html.replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  for (const h of ["AIVS — INFORMATION OPERATIONS ASSESSMENT REPORT", "1. BACKGROUND", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", "KEY REFERENCES", "LIMITATIONS", "REPORT STATUS", inv.report_id, "AI-Generated (not reviewed)", "not an official KDF intelligence document"]) assert.ok(plain.includes(h), h);
+  // 1.32: exactly four body sections, KDF IO orientation, at most two principal claims, recommendations "There is a need to…", draft marking
+  for (const h of ["AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", "1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", inv.report_id, "DRAFT — NOT APPROVED", "Head of Department approval is required"]) assert.ok(plain.includes(h), h);
+  for (const h of ["KEY REFERENCES", "LIMITATIONS", "REPORT STATUS", "METHODOLOGY", "ADDITIONAL FINDINGS", "APPROVED BY HEAD OF DEPARTMENT"]) assert.ok(!plain.includes(h), `no ${h}`);
+  assert.equal((html.match(/<h2>/g) || []).length, 4, "exactly four body sections");
   const a = (await client.get(`/api/investigations/${inv.id}/report.json`)).body, W = t => String(t).trim().split(/\s+/).filter(Boolean).length;
-  assert.ok(W(a.background) <= 80 && W(a.analysis) <= 130 && W(a.assessment) <= 100 && W(a.recommendations.join(" ")) <= 70, JSON.stringify([W(a.background), W(a.analysis), W(a.assessment), W(a.recommendations.join(" "))]));
-  assert.ok(a.recommendations.length >= 2 && a.recommendations.length <= 4 && a.references.length <= 3);
+  assert.ok(W(a.background) <= 80 && W(a.analysis) <= 180 && W(a.assessment) <= 130 && W(a.recommendations.join(" ")) <= 115, JSON.stringify([W(a.background), W(a.analysis), W(a.assessment), W(a.recommendations.join(" "))]));
+  assert.ok(a.recommendations.length >= 3 && a.recommendations.length <= 5 && a.references.length <= 4, JSON.stringify(a.recommendations));
+  assert.ok(a.recommendations.every(x => x.startsWith("There is a need to ")), "every recommendation begins with “There is a need to”");
+  assert.ok(!a.recommendations.some(x => /visit|website|search for evidence|verify .* manually/i.test(x)), "no manual verification chores");
+  assert.ok(r.claims.length <= 2 && a.claims.length <= 2, "at most two principal claims"); assert.ok(["True", "False", "Misleading", "Unverified", "Insufficient Evidence"].includes(a.verdict_label), a.verdict_label);
+  assert.match(a.assessment, /misinformation|disinformation|malinformation/, "classification addressed");
   if (process.env.DUMP_ASSESSMENT) console.log("ASSESSMENT", JSON.stringify({ words: W(plain), bg: W(a.background), an: W(a.analysis), as: W(a.assessment), rec: W(a.recommendations.join(" ")), a }));
-  assert.ok(W(plain) <= 430, `about ${W(plain)} words on the page`);
+  assert.ok(W(plain) <= 560, `about ${W(plain)} words on the page`);
   for (const m of a.analysis.match(/\[(\d)\]/g) || []) assert.ok(a.references.some(f => `[${f.n}]` === m), `cited ${m} exists`);
   assert.ok(!/\b(hostile|foreign (actor|state)|state-sponsored|troll farm|botnet)\b/i.test(plain), "no unsupported attribution");
   const details = (await client.get(`/api/investigations/${inv.id}/details.html`)).body;
@@ -149,7 +156,7 @@ test("2. Facebook link: restricted, nothing invented, qualified report asks for 
   // nothing readable: the investigation stops, says "Extraction blocked", and no later step claims to have run
   assert.equal(r.overall.verdict, "extraction_blocked"); assert.equal(r.overall.label, "Extraction blocked"); assert.ok(r.sections.recommendations.some(s => /screenshot/i.test(s)));
   assert.equal(inv.stages.find(s => s.key === "extract").status, "warning", "a platform restriction is not a system failure"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
-  assert.equal(r.ai.used, false); assert.match((await ana.get(`/api/investigations/${inv.id}/report.html`)).body, /Extraction blocked/);
+  assert.equal(r.ai.used, false); const rep = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.match(rep, /content could not be read, so no claim could be verified/); assert.match(rep, /Verdict: Insufficient Evidence/);
 });
 // 2a ---- 1.30: a Facebook post the Meta API cannot read; the analyst continues with pasted text or a screenshot
 async function continueWith(client, id, fields, files = []) {
@@ -169,7 +176,7 @@ test("2a. Facebook post that cannot be read: the analyst pastes the text and the
   assert.equal(r.overall.verdict, "supported"); assert.ok(r.claims.length >= 1); assert.ok(r.evidence.length >= 1, "evidence was searched");
   assert.match(r.sections.background.join(" "), /did not allow automatic extraction.*supplied by ANA.*not retrieved automatically/);
   assert.ok(r.limitations.some(l => /Analyst-supplied content/.test(l)));
-  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.match(html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "), /supplied by an analyst, not retrieved automatically/); assert.match(html, /Confirm the analyst-supplied content/);
+  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; const txt = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "); assert.match(txt, /did not allow automatic extraction; the content was supplied by an analyst/); assert.match(txt, /could not be compared with the live post/);
 });
 test("2b. Facebook post that cannot be read: a screenshot is read by OCR and the investigation continues; the text model is not asked to interpret images", async () => {
   const first = await investigate(ana, { url: "https://www.facebook.com/KenyaDefenceForces/posts/3333333333" });
@@ -326,7 +333,7 @@ test("reports by date (EAT) and optional human review by another person", async 
   assert.equal((await ana.get("/api/investigations?from=2020-01-01&to=2020-01-02")).body.investigations.length, 0);
   assert.equal((await ana.post(`/api/investigations/${inv.id}/review`, { note: "checked" })).status, 403, "analysts cannot review");
   const ok = await rev.post(`/api/investigations/${inv.id}/review`, { note: "Opened the two official sources; they match." }); assert.equal(ok.status, 200);
-  const html = (await rev.get(`/api/investigations/${inv.id}/report.html`)).body; assert.ok(html.includes("Reviewed by REV on"), "the one-page status shows the review");
+  const html = (await rev.get(`/api/investigations/${inv.id}/report.html`)).body; assert.ok(/reviewed by REV/.test(html) && html.includes("DRAFT — NOT APPROVED"), "the one-page status shows the review, still not approved");
   assert.ok((await rev.get(`/api/investigations/${inv.id}/details.html`)).body.includes("AI-generated · reviewed by REV"));
   assert.equal((await (await login(S.base, "rev2")).post(`/api/investigations/${inv.id}/review`, { note: "again" })).status, 409, "a second review cannot overwrite the first");
   const audit = S.ctx.db.prepare("SELECT action FROM audit_log WHERE entity = 'investigation' AND entity_id = ?").all(inv.id).map(x => x.action);

@@ -27,7 +27,7 @@ import { classifySentiment, themesOf, THEMES, SENTIMENT_LABELS, topicClusters, s
 import { extractEntities, extractHashtags, splitSentences, classifyStatement, redFlags } from "../../shared/text.js";
 import { figures, negates } from "./autoeval.js";
 import { VERIFY_LABELS, VERDICT_TO_STATUS } from "./livemonitor.js";
-import { checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, words } from "./ioassessment.js";
+import { checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, words, applyApproval, validRecommendation } from "./ioassessment.js";
 import { docxFromBody } from "./autoreport.js";
 
 // sources an analyst can search on demand, and what their access really is
@@ -159,19 +159,20 @@ export function draftReport(sit, items, { reference, subject, status = "AI-Gener
     "There are no indicators of coordinated activity in the available data; account and timing data were not assessed.",
     `Overall: ${sit.total ? "monitoring summary" : "no results"}. Evidence strength: ${strength}, based on the number and type of independent sources found.`,
     sit.gaps.length ? `Key gap: ${sit.gaps[0].replace(/\.$/, "")}.` : null].filter(Boolean).join(" ");
+  // recommendations of the KDF Information Operations format: each begins "There is a need to…"; verification itself is AIVS's task
   const rec = [];
-  if (sit.contradictions.length) rec.push("Verify the conflicting items against the responsible authority or an established fact-checker before relying on either.");
-  if (sit.gaps.some(g => /official/.test(g))) rec.push("Seek an official statement or record on the subject.");
-  if (sit.indicators.length) rec.push("Run the flagged items through Verify Information before any use.");
-  if (sit.narratives.some(n => n.emerging) || sit.repeated.length) rec.push("Keep the search as a recurring watchlist and review new items daily.");
-  if (!rec.length) rec.push("Keep the search as a recurring watchlist if the subject remains of interest.");
-  rec.push("Refer this AI-generated assessment for authorised human review before any operational use.");
+  if (sit.contradictions.length) rec.push("There is a need to avoid relying on either of the conflicting reports in public communication until the facts are established.");
+  if (sit.indicators.length) rec.push("There is a need to raise public awareness of the misleading features observed in some items, through authorised KDF communication channels.");
+  if (sit.narratives.some(n => n.emerging) || sit.repeated.length) rec.push("There is a need to monitor the emerging narrative through the AIVS watchlist for renewed circulation or amplification.");
+  else rec.push("There is a need to keep the subject under monitoring through the AIVS watchlist while it remains of interest.");
+  rec.push("There is a need to provide timely and accurate information on the subject through authorised KDF channels where public interest warrants it.");
+  rec.push("There is a need to preserve the items collected and escalate significant concerns for authorised review.");
   return { title: "AIVS — PUBLIC INFORMATION MONITORING REPORT", header: { reference, date: eatStamp(nowISO()), subject: subject.slice(0, 120), source: plat, source_url: null, area: [...new Set(items.flatMap(i => i.analysis?.entities?.locations || []))].slice(0, 3).join(", ") || "Not established", priority: sit.contradictions.length || sit.indicators.length ? "Priority" : "Routine", status },
-    background, analysis, assessment: as, recommendations: [...new Set(rec)].slice(0, 4), references: refs, limitation: sit.gaps[0] ? `The most important limitation is that ${sit.gaps[0].replace(/\.$/, "").replace(/^./, c => c.toLowerCase())}.` : "Only the connected sources were searched; content outside them was not seen.",
+    background, analysis, assessment: as, recommendations: [...new Set(rec)].slice(0, 5), references: refs, limitation: sit.gaps[0] ? `The most important limitation is that ${sit.gaps[0].replace(/\.$/, "").replace(/^./, c => c.toLowerCase())}.` : "Only the connected sources were searched; content outside them was not seen.",
     report_status: `Generated automatically by AIVS ${version}; not reviewed or approved by a person. Analytical support product; not an official KDF intelligence document.`, verdict_label: sit.total ? "Monitoring summary" : "No results", strength, written_by: "rules", training };
 }
 
-export function makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version = "dev", live = null, ai = null }) {
+export function makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version = "dev", live = null, ai = null, approvals = null }) {
   const W = { searchMaxPerSource: 50, ...(config.watch || {}) };
   const running = new Set();
   const SRC = () => watchCollector.status().sources;
@@ -420,12 +421,30 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
     return reportGet(id);
   }
   function reportGet(id) { const r = db.prepare("SELECT * FROM monitor_reports WHERE id = ? OR report_id = ?").get(id, id); if (!r) throw new HttpError(404, "No such report."); return { id: r.id, report_id: r.report_id, created_at: r.created_at, origin: r.origin, search_id: r.search_id, watchlist_id: r.watchlist_id, written_by: r.written_by, reviewed_at: r.reviewed_at, approved_at: r.approved_at, report: J(r.report_json), situation: J(r.situation_json) }; }
-  function reports(limit = 50) { return db.prepare("SELECT r.id, r.report_id, r.created_at, r.origin, r.search_id, r.watchlist_id, r.written_by, r.reviewed_at, r.approved_at, s.query, w.name watchlist FROM monitor_reports r LEFT JOIN monitor_searches s ON s.id = r.search_id LEFT JOIN watchlists w ON w.id = r.watchlist_id ORDER BY r.id DESC LIMIT ?").all(Math.min(200, +limit || 50)); }
+  function reports(limit = 50) { return db.prepare("SELECT r.id, r.report_id, r.created_at, r.origin, r.search_id, r.watchlist_id, r.written_by, r.reviewed_at, r.approved_at, s.query, w.name watchlist, coalesce(ap.status, 'draft') approval_status, ap.approval_ref FROM monitor_reports r LEFT JOIN monitor_searches s ON s.id = r.search_id LEFT JOIN watchlists w ON w.id = r.watchlist_id LEFT JOIN report_approvals ap ON ap.kind = 'monitor_report' AND ap.ref_id = CAST(r.id AS TEXT) WHERE r.is_training = 0 ORDER BY r.id DESC LIMIT ?").all(Math.min(200, +limit || 50)); }
+  // ---------------------------------------------------------------- Head of Department approval of monitoring reports (1.32)
+  const withApproval = r => { const a = r.report; if (!approvals) return a; const ap = approvals.info("monitor_report", r.id, a); return applyApproval(a, ap.approved ? ap : { ...ap, label: [ap.label, r.reviewed_at ? "reviewed" : null].filter(Boolean).join("; ") }); };
+  function approvalState(id) { const r = reportGet(id); return { ...approvals.state("monitor_report", r.id), hods: approvals.hods([ownerOf(r.id)]).map(u => ({ id: u.id, name: u.display_name, designation: u.designation })) }; }
+  const ownerOf = id => db.prepare("SELECT created_by FROM monitor_reports WHERE id = ?").get(id)?.created_by ?? null;
+  function submitReport(user, id, { hod_id, note }) { const r = reportGet(id); return approvals.submit(user, "monitor_report", r.id, r.report, { reportRef: r.report_id, createdBy: ownerOf(r.id), hodId: hod_id, note }); }
+  async function decideReport(user, id, b) { const r = reportGet(id); return approvals.decide(user, "monitor_report", r.id, r.report, b, async ap => (await assessmentPdf(applyApproval(r.report, ap))).buf, { createdBy: ownerOf(r.id) }); }
+  function editAssessment(user, id, b = {}) {
+    const r = reportGet(id), a = r.report, out = {};
+    if (approvals.state("monitor_report", r.id).status === "rejected") throw new HttpError(409, "A rejected report cannot be revised; draft a new report.");
+    for (const k of ["background", "analysis", "assessment"]) { const t = String(b[k] ?? a[k]).replace(/\s+/g, " ").trim(); if (words(t) < 10 || words(t) > 220) throw new HttpError(400, `${k}: keep it between 10 and 220 words.`); out[k] = t; }
+    const recs = (Array.isArray(b.recommendations) ? b.recommendations : a.recommendations).map(x => String(x).replace(/\s+/g, " ").trim()).filter(Boolean);
+    if (recs.length < 3 || recs.length > 5) throw new HttpError(400, "Give 3 to 5 recommendations.");
+    for (const [i, x] of recs.entries()) { const why = validRecommendation(x); if (why) throw new HttpError(400, `Recommendation ${i + 1} ${why}.`); }
+    const next = { ...a, ...out, recommendations: recs, written_by: "analyst", edited_by: user.display_name, edited_at: nowISO() };
+    db.prepare("UPDATE monitor_reports SET report_json = ? WHERE id = ?").run(JSON.stringify(next), r.id);
+    audit(user, "Monitoring report revised by the analyst", "monitor_report", r.report_id, {});
+    approvals.ensure("monitor_report", r.id, r.report_id, ownerOf(r.id));
+    return approvals.changed(user, "monitor_report", r.id, next, "revised by the analyst");
+  }
   async function reportFile(id, fmt) {
-    const r = reportGet(id), a = r.report;
-    if (r.reviewed_at && a.header.status.startsWith("AI-Generated")) a.header.status = "Reviewed";
+    const r = reportGet(id), a = withApproval(r);
     if (fmt === "html") return { body: assessmentHtml(a), type: "text/html; charset=utf-8", name: `${r.report_id}.html` };
-    if (fmt === "pdf") return { body: (await assessmentPdf(a)).buf, type: "application/pdf", name: `${r.report_id}.pdf` };
+    if (fmt === "pdf") { const fin = a.approval && approvals.finalPdf("monitor_report", r.id, r.report); return fin ? { body: fin, type: "application/pdf", name: `${r.report_id}-approved.pdf` } : { body: (await assessmentPdf(a)).buf, type: "application/pdf", name: `${r.report_id}-draft.pdf` }; }
     if (fmt === "docx") return { body: docxFromBody(assessmentDocxXml(a)), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}.docx` };
     return { body: JSON.stringify(r, null, 2), type: "application/json", name: `${r.report_id}.json` };
   }
@@ -683,5 +702,5 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   }
 
   return { overview, sources, start, run, get, results, list, feed, item, image, verify, report, reportGet, reports, reportFile, reviewReport, saveAsWatchlist, daily, running: () => [...running], parseQuery,
-    aiTick, aiQueueCounts, aiIndicator, retryAi, emerging, emergingTick, ensureDefault, addReadySources, contextualLibrary };
+    approvalState, submitReport, decideReport, editAssessment, aiTick, aiQueueCounts, aiIndicator, retryAi, emerging, emergingTick, ensureDefault, addReadySources, contextualLibrary };
 }

@@ -256,7 +256,32 @@ export function markTestRecords(db) {
     monitor_searches: "UPDATE monitor_searches SET is_training = 1 WHERE is_training = 0 AND id IN (SELECT search_id FROM monitor_search_results x JOIN watch_posts p ON p.id = x.post_id GROUP BY search_id HAVING MIN(p.is_training) = 1)" })) n[k] = db.prepare(sql).run().changes;
   return n;
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// Migration 20 (1.32): Head of Department approval of reports. A "hod" role (and a designation for each user), the approval record
+// of each report (investigation or monitoring report), its versions and a hash-chained event log. The users table is rebuilt
+// only to allow the new role; every row is kept.
+function mig20(db) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get(), a = "role IN ('admin','reviewer','analyst','viewer')";
+  if (row.sql.replace(/\s+/g, " ").includes(a)) {
+    const idx = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'users' AND sql IS NOT NULL").all().map(r => r.sql), n = db.prepare("SELECT COUNT(*) n FROM users").get().n;
+    db.exec(row.sql.replace(/\s+/g, " ").replace(a, "role IN ('admin','reviewer','analyst','viewer','hod')").replace(/^CREATE TABLE\s+"?\w+"?/i, 'CREATE TABLE "users__new"'));
+    db.exec('INSERT INTO "users__new" SELECT * FROM "users"; DROP TABLE "users"; ALTER TABLE "users__new" RENAME TO "users";');
+    for (const i of idx) db.exec(i);
+    if (db.prepare("SELECT COUNT(*) n FROM users").get().n !== n) throw new Error("Migration 20: row count changed for users");
+  }
+  if (!db.prepare("PRAGMA table_info(users)").all().some(c => c.name === "designation")) db.exec("ALTER TABLE users ADD COLUMN designation TEXT");
+  db.exec(`
+  CREATE TABLE IF NOT EXISTS report_approvals (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('investigation','monitor_report')), ref_id TEXT NOT NULL, report_ref TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','pending','returned','rejected','approved')), version INTEGER NOT NULL DEFAULT 1, content_sha256 TEXT,
+    created_by INTEGER REFERENCES users(id), submitted_by INTEGER REFERENCES users(id), submitted_at TEXT, submit_note TEXT, assigned_hod INTEGER REFERENCES users(id),
+    decided_by INTEGER REFERENCES users(id), decided_at TEXT, decision_note TEXT, approval_ref TEXT UNIQUE, approved_sha256 TEXT, pdf_sha256 TEXT, verify_code TEXT,
+    approver_name TEXT, approver_designation TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (kind, ref_id));
+  CREATE TABLE IF NOT EXISTS report_versions (id INTEGER PRIMARY KEY, approval_id INTEGER NOT NULL REFERENCES report_approvals(id), version INTEGER NOT NULL, content_json TEXT NOT NULL, content_sha256 TEXT NOT NULL,
+    changed_by INTEGER REFERENCES users(id), changed_at TEXT NOT NULL, reason TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS report_approval_events (id INTEGER PRIMARY KEY, approval_id INTEGER NOT NULL REFERENCES report_approvals(id), action TEXT NOT NULL, from_status TEXT, to_status TEXT, version INTEGER,
+    content_sha256 TEXT, by_user INTEGER REFERENCES users(id), by_name TEXT, at TEXT NOT NULL, note TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS report_approvals_status ON report_approvals(status, assigned_hod);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -269,6 +294,9 @@ export function openDb(file) {
     db.pragma("wal_checkpoint(TRUNCATE)");
     const copy = `${file}.before-v${MIGRATIONS.length}-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.bak`;
     fs.copyFileSync(file, copy); console.log(`  Database upgrade ${v} -> ${MIGRATIONS.length}: a copy of the previous database was saved as ${path.basename(copy)}`);
+    // only the two most recent upgrade copies are kept, so repeated upgrades do not fill the disk (daily backups are separate)
+    try { const dir = path.dirname(file), base = path.basename(file), olds = fs.readdirSync(dir).filter(f => f.startsWith(`${base}.before-v`) && f.endsWith(".bak")).map(f => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+      for (const o of olds.slice(2)) { fs.rmSync(path.join(dir, o.f), { force: true }); console.log(`  Removed an older upgrade copy: ${o.f}`); } } catch {}
   }
   for (let i = v; i < MIGRATIONS.length; i++) {
     const m = MIGRATIONS[i];

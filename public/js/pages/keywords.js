@@ -246,11 +246,21 @@ export async function watchlistsView(body) {
 
 // ---------------------------------------------------------------- monitoring reports
 export async function reportsView(body) {
-  const r = await api.get("/api/monitor/reports");
-  body.innerHTML = r.reports.length ? `<table class="t"><thead><tr><th>Reference</th><th>Subject</th><th>Made</th><th>Text</th><th>Status</th><th></th></tr></thead><tbody>${r.reports.map(x => `<tr><td class="mono small">${esc(x.report_id)}</td>
-      <td class="small">${esc(x.query || x.watchlist || "")}</td><td class="small">${fmtDT(x.created_at)} · ${esc(x.origin)}</td><td class="small">${x.written_by === "ai" ? "AI-drafted, checked" : "rule-based"}</td><td>${x.reviewed_at ? chip("Reviewed", "sup") : chip("AI-generated, not reviewed", "warn")}</td>
-      <td><div class="row" style="gap:6px"><a class="btn sm" href="/api/monitor/reports/${x.id}/file.html" target="_blank" rel="noopener">Open</a><a class="btn sm ghost" href="/api/monitor/reports/${x.id}/file.pdf" download>PDF</a><a class="btn sm ghost" href="/api/monitor/reports/${x.id}/file.docx" download>Word</a></div></td></tr>`).join("")}</tbody></table>`
+  const r = await api.get("/api/monitor/reports"), AST = { draft: ["Draft — not approved", "grey"], pending: ["Pending HOD approval", "info"], returned: ["Returned for revision", "warn"], rejected: ["Rejected", "con"], approved: ["Approved by the HOD", "sup"] };
+  body.innerHTML = r.reports.length ? `<table class="t"><thead><tr><th>Reference</th><th>Subject</th><th>Made</th><th>Text</th><th>Approval</th><th></th></tr></thead><tbody>${r.reports.map(x => `<tr><td class="mono small">${esc(x.report_id)}${x.approval_ref ? `<div class="tiny sub">${esc(x.approval_ref)}</div>` : ""}</td>
+      <td class="small">${esc(x.query || x.watchlist || "")}</td><td class="small">${fmtDT(x.created_at)} · ${esc(x.origin)}</td><td class="small">${x.written_by === "ai" ? "AI-drafted, checked" : x.written_by === "analyst" ? "revised by an analyst" : "rule-based"}</td><td>${chip(...(AST[x.approval_status] || AST.draft))}</td>
+      <td><div class="row" style="gap:6px"><a class="btn sm" href="/api/monitor/reports/${x.id}/file.html" target="_blank" rel="noopener">Open</a><a class="btn sm ghost" href="/api/monitor/reports/${x.id}/file.pdf" download>PDF</a><a class="btn sm ghost" href="/api/monitor/reports/${x.id}/file.docx" download>Word</a>
+        ${App.can("report.submit") && ["draft", "returned"].includes(x.approval_status) ? `<button class="btn sm primary" data-msub="${x.id}">Submit for HOD approval</button>` : ""}</div></td></tr>`).join("")}</tbody></table>`
     : empty("No monitoring reports", "Run a search and choose Analyse and draft report. Each active watchlist with new items also gets a daily draft at 07:00 EAT.");
+  for (const b of $$("[data-msub]", body)) b.onclick = async () => {
+    const { modal } = await import("../ui.js"), st = await api.get(`/api/monitor/reports/${b.dataset.msub}/approval`);
+    if (!st.hods.length) { fail(new Error("No Head of Department approver is set up. An administrator assigns the Head of Department role in Settings › Users.")); return; }
+    const m = await modal("Submit for HOD approval", `<label class="f" for="msh">Head of Department</label><select id="msh">${st.hods.map(h => `<option value="${h.id}">${esc(h.name)}${h.designation ? ` — ${esc(h.designation)}` : ""}</option>`).join("")}</select><label class="f" for="msn">Note (optional)</label><input id="msn" style="width:100%">`,
+      [{ label: "Cancel", value: null }, { label: "Submit", kind: "primary", value: el => ({ hod_id: +el.querySelector("#msh").value, note: el.querySelector("#msn").value }) }]);
+    if (!m.value) return;
+    try { await api.post(`/api/monitor/reports/${b.dataset.msub}/submit`, m.value); toast("Submitted for HOD approval."); } catch (e) { fail(e); }
+    reportsView(body);
+  };
 }
 
 // ---------------------------------------------------------------- source status

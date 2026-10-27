@@ -44,6 +44,7 @@ import { suggestSource, parseSourceLink } from "../shared/text.js";
 import { makeLimiter } from "./lib/ratelimit.js";
 import { makeLiveMonitor } from "./lib/livemonitor.js";
 import { makeKeywordSearch } from "./lib/keywordsearch.js";
+import { makeApprovals } from "./lib/approvals.js";
 import { submissionHashes, ham, levelOf } from "./lib/hashing.js";
 import { sniff } from "./lib/sniff.js";
 import { THRESH } from "./lib/hashing.js";
@@ -93,11 +94,12 @@ export function createApp(config) {
   }
   const VERSION0 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
-  const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
+  const approvals = makeApprovals(db, { audit, storage, config });
+  const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0, approvals });
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
-  const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai });
-  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
+  const ctx = { approvals, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -124,6 +126,17 @@ export function createApp(config) {
     const o = req.headers.origin;
     if (o && new URL(o).host !== req.headers.host) return next(new HttpError(403, "Request rejected (cross-site origin)."));
     next();
+  });
+  // the page printed on approved reports: a reference and code are checked; nothing about the report's content is shown
+  app.get("/verify-report", (req, res) => {
+    const e = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const q = req.query.ref && req.query.code ? approvals.verify(req.query.ref, req.query.code) : null;
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'");
+    res.type("html").send(`<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify an AIVS report</title><style>body{font:15px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;color:#111827}input{width:100%;padding:8px;margin:4px 0 10px;font:inherit}button{padding:8px 16px;font:inherit}.ok{border-left:5px solid #05603a;padding:8px 12px;background:#ecfdf3}.bad{border-left:5px solid #9b1c1c;padding:8px 12px;background:#fef3f2}</style></head><body>
+      <h1>Verify an approved AIVS report</h1><p>Enter the approval reference and the verification code printed at the foot of the report.</p>
+      <form method="get" action="/verify-report"><label>Approval reference<input name="ref" value="${e(req.query.ref)}" placeholder="APR-20261028-001"></label><label>Verification code<input name="code" value="${e(req.query.code)}" placeholder="XXXX-XXXX-XXXX-XXXX"></label><button>Verify</button></form>
+      ${q ? (q.valid ? `<div class="ok"><b>Genuine.</b> Report ${e(q.report_ref)} was approved by ${e(q.approved_by)}${q.designation ? `, ${e(q.designation)}` : ""}, on ${e(q.approved_at)} (${e(q.approval_ref)}). ${e(q.status)}.</div>` : `<div class="bad"><b>Not confirmed.</b> ${e(q.message || q.status)}</div>`) : ""}
+      <p style="font-size:13px;color:#475467">This page confirms only whether a released report is genuine and still approved. It does not show the report or its evidence.</p></body></html>`);
   });
   // WhatsApp Business webhook (Meta calls this; no AIVS sign-in). Verified with the app secret over the exact bytes received.
   app.get("/webhooks/whatsapp", (req, res) => {
@@ -160,7 +173,7 @@ export function createApp(config) {
 
   const api = express.Router();
   const h = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-  const users = () => db.prepare("SELECT id, username, display_name, role, active, must_change_password, created_at, last_login_at FROM users ORDER BY active DESC, display_name").all();
+  const users = () => db.prepare("SELECT id, username, display_name, role, designation, active, must_change_password, created_at, last_login_at FROM users ORDER BY active DESC, display_name").all();
   const scopeOf = req => (req.query.training === "1" ? 1 : 0);
 
   // ---------------------------------------------------------------- auth
@@ -188,6 +201,12 @@ export function createApp(config) {
     audit(req.user, "Password changed", "user", String(u.id)); res.json({ ok: true });
   }));
 
+  // verification of a released, approved report (no sign-in): says only whether the reference and code are genuine and current
+  const verifyHits = new Map();
+  api.get("/public/verify-report", (req, res) => {
+    const k = req.ip, n = (verifyHits.get(k) || []).filter(t => Date.now() - t < 600e3); if (n.length >= 30) return res.status(429).json({ valid: false, message: "Too many checks; try again later." });
+    n.push(Date.now()); verifyHits.set(k, n); res.json(approvals.verify(req.query.ref, req.query.code));
+  });
   api.use(requireUser);
   const upload = multer({ dest: storage.tmpDir, limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 20, fields: 20 } });
   const cleanup = files => (files || []).forEach(f => fs.rmSync(f.path, { force: true }));
@@ -1185,6 +1204,17 @@ export function createApp(config) {
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   api.get("/investigations/services", (req, res) => { const s = investigations.services(); res.json({ reverse_search: s.reverse_search, ai_vision: s.ai_vision, evidence: s.evidence, ai: { configured: s.ai.configured, model: s.ai.model || null, local: !!s.ai.local, reason: s.ai.reason || null } }); });
+  // ---------------------------------------------------------------- Head of Department approval (1.32)
+  api.get("/approvals", (req, res) => res.json(approvals.list(req.user, req.query)));
+  api.get("/approvals/hods", (req, res) => res.json({ hods: approvals.hods([req.user.id]).map(u => ({ id: u.id, name: u.display_name, designation: u.designation })) }));
+  api.get("/investigations/:id/approval", (req, res) => res.json(investigations.approvalState(req.params.id)));
+  api.post("/investigations/:id/submit", requirePerm("report.submit"), h((req, res) => res.json(investigations.submitReport(req.user, req.params.id, req.body || {}))));
+  api.post("/investigations/:id/decision", requirePerm("report.hod"), h(async (req, res) => res.json(await investigations.decideReport(req.user, req.params.id, req.body || {}))));
+  api.put("/investigations/:id/assessment", requirePerm("report.submit"), h((req, res) => res.json(investigations.editAssessment(req.user, req.params.id, req.body || {}))));
+  api.get("/monitor/reports/:id/approval", (req, res) => res.json(keywords.approvalState(+req.params.id)));
+  api.post("/monitor/reports/:id/submit", requirePerm("report.submit"), h((req, res) => res.json(keywords.submitReport(req.user, +req.params.id, req.body || {}))));
+  api.post("/monitor/reports/:id/decision", requirePerm("report.hod"), h(async (req, res) => res.json(await keywords.decideReport(req.user, +req.params.id, req.body || {}))));
+  api.put("/monitor/reports/:id/assessment", requirePerm("report.submit"), h((req, res) => res.json(keywords.editAssessment(req.user, +req.params.id, req.body || {}))));
   api.post("/investigations/capture", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.capture(req.user, req.body || {}))));
   api.post("/investigations/:id/report", requirePerm("case.create"), h(async (req, res) => res.json(await investigations.regenerate(req.user, req.params.id))));
   api.post("/investigations/:id/rerun", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
@@ -1270,7 +1300,7 @@ export function createApp(config) {
     if (!ROLES.includes(role)) throw new HttpError(400, "Choose a role.");
     if (db.prepare("SELECT 1 FROM users WHERE username = ?").get(username)) throw new HttpError(409, "That username is taken.");
     const pw = tempPassword();
-    const id = db.prepare("INSERT INTO users(username,display_name,role,password_hash,must_change_password,created_at) VALUES (?,?,?,?,1,?)").run(username, String(display_name).trim().slice(0, 80), role, hashPassword(pw), nowISO()).lastInsertRowid;
+    const id = db.prepare("INSERT INTO users(username,display_name,role,designation,password_hash,must_change_password,created_at) VALUES (?,?,?,?,?,1,?)").run(username, String(display_name).trim().slice(0, 80), role, String(req.body.designation || "").trim().slice(0, 120) || null, hashPassword(pw), nowISO()).lastInsertRowid;
     audit(req.user, "User created", "user", String(id), { username, role }); res.status(201).json({ id, temporary_password: pw });
   }));
   api.patch("/users/:uid", requirePerm("users.manage"), h((req, res) => {
@@ -1279,6 +1309,7 @@ export function createApp(config) {
     if (req.body.role !== undefined) { if (!ROLES.includes(req.body.role)) throw new HttpError(400, "Unknown role."); set.role = req.body.role; }
     if (req.body.active !== undefined) set.active = req.body.active ? 1 : 0;
     if (req.body.display_name !== undefined) set.display_name = String(req.body.display_name).trim().slice(0, 80);
+    if (req.body.designation !== undefined) set.designation = String(req.body.designation || "").trim().slice(0, 120) || null;
     if (u.id === req.user.id && (set.active === 0 || (set.role && set.role !== "admin"))) throw new HttpError(400, "You cannot disable or demote your own account.");
     if ((set.active === 0 || (set.role && set.role !== "admin")) && u.role === "admin" && db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1").get().n <= 1) throw new HttpError(400, "Keep at least one active administrator.");
     if (!Object.keys(set).length) return res.json({ ok: true });

@@ -2,12 +2,14 @@
 import crypto from "node:crypto";
 import { nowISO } from "./db.js";
 
-export const ROLES = ["admin", "reviewer", "analyst", "viewer"];
-export const ROLE_LABELS = { admin: "Administrator", reviewer: "Reviewer", analyst: "Analyst", viewer: "Viewer (read-only)" };
+export const ROLES = ["admin", "reviewer", "analyst", "hod", "viewer"];
+export const ROLE_LABELS = { admin: "Administrator", reviewer: "Reviewer", analyst: "Analyst", hod: "Head of Department (report approval)", viewer: "Viewer (read-only)" };
 
 // permission -> roles allowed. Case-level ownership rules are applied in canEditCase().
 export const PERMISSIONS = {
-  "case.read":       { roles: ["admin", "reviewer", "analyst", "viewer"], label: "View cases, evidence and reports" },
+  "case.read":       { roles: ["admin", "reviewer", "analyst", "hod", "viewer"], label: "View cases, evidence and reports" },
+  "report.submit":   { roles: ["admin", "reviewer", "analyst"], label: "Review AIVS draft reports, revise them and submit them for Head of Department approval" },
+  "report.hod":      { roles: ["hod"], label: "Approve, reject or return reports assigned to them (Head of Department; never their own reports). Administrators do not have this by default" },
   "case.create":     { roles: ["admin", "reviewer", "analyst"], label: "Create cases and upload media" },
   "case.edit":       { roles: ["admin", "reviewer", "analyst"], label: "Edit claims, evidence and findings (analysts: own or assigned cases)" },
   "case.assign":     { roles: ["admin", "reviewer"], label: "Assign cases to analysts" },
