@@ -92,6 +92,8 @@ test("English voice note: uploaded, transcribed in the background with timestamp
   assert.match(t.label, /^MACHINE-GENERATED TRANSCRIPT/); assert.match(t.label, new RegExp(m.id));
   const media = S.ctx.db.prepare("SELECT sha256 FROM media WHERE id = ?").get(m.id); assert.ok(fs.existsSync(S.ctx.storage.pathOf(media.sha256)), "the original recording is kept unchanged");
   assert.equal(t.media_sha256, media.sha256);
+  // the request to forget the job follows the saved transcript; on a slower computer it can arrive a moment later
+  for (let i = 0; i < 50 && !calls.some(c => c.startsWith("DELETE /v1/jobs/")); i++) await new Promise(r => setTimeout(r, 100));
   assert.ok(calls.some(c => c.startsWith("DELETE /v1/jobs/")), "AIVS tells the service to forget the job once it has the transcript");
 });
 
