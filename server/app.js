@@ -20,6 +20,7 @@ import { reportPdf, reportCsv } from "./lib/pdf.js";
 import { makeRetrieval, OFFICIAL_SOURCES } from "./lib/retrieval.js";
 import { makeIo, sampleDataset, normText, CAVEATS as IO_CAVEATS, parseFile, detectMapping } from "./lib/io.js";
 import { extractDocument } from "./lib/docs.js";
+import { makeInvestigations } from "./lib/investigate.js";
 import { makeAssistant } from "./lib/assistant.js";
 import { makeCoverage } from "./lib/coverage.js";
 import { makeKb, sampleKb } from "./lib/kb.js";
@@ -90,7 +91,8 @@ export function createApp(config) {
   }
   const VERSION0 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
-  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector };
+  const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
+  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations };
 
   const app = express();
   app.disable("x-powered-by");
@@ -187,7 +189,7 @@ export function createApp(config) {
   // rate limits: everything, plus a tighter budget for work that fetches, stores or computes a lot
   const RL = { windowMs: 300000, general: 1500, heavy: 60, ...(config.rateLimit || {}) };
   const general = makeLimiter({ windowMs: RL.windowMs, limit: RL.general, name: "General" }), heavy = makeLimiter({ windowMs: RL.windowMs, limit: RL.heavy, name: "Heavy" });
-  const HEAVY = /^\/(verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample)$/;
+  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample)$/;
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
@@ -1140,6 +1142,22 @@ export function createApp(config) {
   }));
 
   // ---------------------------------------------------------------- reports
+  // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
+  api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
+    const b = req.body || {};
+    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
+    catch (e) { cleanup(req.files || []); throw e; }
+  }));
+  api.get("/investigations", (req, res) => res.json({ investigations: investigations.list({ from: req.query.from, to: req.query.to, training: scopeOf(req) === 1, limit: req.query.limit }), timezone: "EAT (UTC+3)" }));
+  api.get("/investigations/:id", (req, res) => res.json(investigations.get(req.params.id)));
+  api.get("/investigations/:id/report.:fmt(html|pdf|docx|json)", h(async (req, res) => {
+    const f = await investigations.file(req.params.id, req.params.fmt);
+    if (req.params.fmt === "html") res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
+    if (req.params.fmt !== "html" || req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${f.name}"`);
+    res.type(f.type).send(f.body);
+  }));
+  api.post("/investigations/:id/review", requirePerm("case.approve"), h((req, res) => { investigations.review(req.user, req.params.id, req.body?.note); res.json(investigations.get(req.params.id)); }));
+
   api.get("/reports", (req, res) => {
     const t = scopeOf(req);
     res.json({

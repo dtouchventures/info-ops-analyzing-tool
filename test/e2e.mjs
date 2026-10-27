@@ -568,8 +568,9 @@ const audit = async (p, where) => (await p.evaluate(() => [...document.querySele
 let guidedDead = [], guidedSeen = 0;
 { const g = await session("ana2", "guided");
   check("guided menu shows the six services and no secondary tools", (await g.$$(".nav > a")).length === 6 && !(await g.$("#navMore")) && !(await g.isVisible('a[href="#/dashboard"]')));
-  await g.click('.nav a[data-nav="verify"]'); await g.waitForSelector("#sGo");
-  check("Verify Information has sub-tabs for new investigation, cases and the review queue", (await g.$$eval(".subnav a", x => x.map(e => e.textContent))).join("|") === "New investigation|Cases|Review queue");
+  await g.click('.nav a[data-nav="verify"]'); await g.waitForSelector("#igo");
+  check("Verify Information opens the one-click page, with sub-tabs for analysis, cases and the review queue", (await g.$$eval(".subnav a", x => x.map(e => e.textContent))).join("|") === "Analyze information|Cases|Review queue" && (await g.textContent("#igo")).trim() === "Analyze Information");
+  await g.click('a[href="#/start"]'); await g.waitForSelector("#sGo");
   await g.click("#sGo"); await g.waitForSelector("#siMiss:not([hidden])");
   check("step 1 explains missing content beside the field", (await g.textContent("#siMiss")).includes("Paste the text or a link"));
   await g.fill("#si", "https://x.com/practice_desk/status/1849000000000000000"); await g.waitForFunction(() => document.querySelector("#pt")?.value.includes("water project funds"), null, { timeout: 10000 });
@@ -757,8 +758,36 @@ let watchDead = [], watchSeen = 0;
   await shot(p, "01b-dashboard-watchlist-after-import");
   await ctx.close(); await SD.close();
 }
+// ---- 1.22: one-click automatic investigation (no evidence service is configured in this test server, so the
+// report must say the evidence is insufficient and why), on a desktop and on a phone-sized screen
+{ await a.goto(S.base + "/#/investigate"); await a.waitForSelector("#igo");
+  await a.click("#igo"); await a.waitForSelector("#ierr:not([hidden])"); check("Analyze Information without input explains what is missing", (await a.textContent("#ierr")).includes("Paste a link or some text"));
+  await a.fill("#iv", "PRACTICE: The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026. Share this before it is deleted!");
+  await a.click("#igo"); await a.waitForSelector("#istages li", { timeout: 10000 });
+  check("the six processing stages are shown", JSON.stringify(await a.$$eval("#istages li", x => x.map(e => e.textContent.replace(/^\d\.\s*/, "").split(/\s{2,}|[a-z]\d/)[0]))).includes("Extracting information"));
+  await a.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
+  const rep = a.frameLocator("#irep"), body = await rep.locator("body").innerText();
+  check("the completed report appears automatically with all five sections", ["A. BACKGROUND", "B. ANALYSIS", "C. ASSESSMENT", "D. RECOMMENDATIONS", "E. REFERENCES"].every(h => body.toUpperCase().includes(h)), body.slice(0, 200));
+  check("the report is labelled AI-generated and not reviewed, with its dates", /AI-generated · not reviewed by an analyst/.test(body) && /Investigation date/.test(body) && /EAT/.test(body));
+  check("without evidence sources the report says the evidence is insufficient (nothing invented)", /Insufficient evidence/.test(body) && /Avoid drawing conclusions/.test(body));
+  check("PDF and Word downloads are offered", !!(await a.$('#iacts a[href$="report.pdf"]')) && !!(await a.$('#iacts a[href$="report.docx"]')));
+  const pdf = await a.evaluate(async () => { const h = document.querySelector('#iacts a[href$="report.pdf"]').getAttribute("href"); const r = await fetch(h); return [r.status, (await r.text()).slice(0, 4)]; });
+  check("the PDF report downloads", pdf[0] === 200 && pdf[1] === "%PDF", JSON.stringify(pdf));
+  await shot(a, "40-automatic-report");
+  await a.goto(S.base + "/#/reports"); await a.waitForSelector("#rauto table"); check("Reports lists the automatic report by date", (await a.textContent("#rauto")).includes("AIVS-"));
+  const t = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); await a.fill("#rfrom", "2020-01-01"); await a.fill("#rto", "2020-01-02"); await a.click("#rfilt button"); await a.waitForFunction(() => /No automatic reports/.test(document.querySelector("#rauto").textContent));
+  await a.fill("#rfrom", t); await a.fill("#rto", t); await a.click("#rfilt button"); await a.waitForSelector("#rauto table"); check("the date filter narrows the automatic reports", true);
+  await a.goto(S.base + "/#/home"); await a.waitForSelector(".svcs"); check("the dashboard shows recent automatic reports", (await a.textContent("#page")).includes("Recent automatic reports") && (await a.textContent("#page")).includes("AIVS-"));
+  const ph = await (await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true })).newPage();
+  ph.on("pageerror", e => errors.push(`phone: ${e.message}`));
+  await ph.goto(S.base); await ph.fill("#lu", "ana"); await ph.fill("#lp", PW); await ph.click("#lb"); await ph.waitForSelector(".shell");
+  await ph.goto(S.base + "/#/investigate"); await ph.waitForSelector("#igo"); await ph.fill("#iv", "PRACTICE: A new steel bridge in Marsabit town was opened last night.");
+  await ph.click("#igo"); await ph.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
+  check("on a phone the page fits the screen and shows the report", (await ph.evaluate(() => document.documentElement.scrollWidth)) <= 380 && /Background/i.test(await ph.frameLocator("#irep").locator("body").innerText()));
+  await shot(ph, "41-automatic-report-phone"); await ph.context().close();
+}
 let dead = [], seen = 0;
-for (const [p, routes] of [[a, ["#/home", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
+for (const [p, routes] of [[a, ["#/home", "#/investigate", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
   [ad, ["#/admin/users", "#/admin/permissions", "#/admin/integrations", "#/admin/usage", "#/admin/backups", "#/admin/audit", "#/admin/training", "#/archive", "#/reports"]]]) {
   if (p === ad) await ad.setViewportSize({ width: 1440, height: 950 });
   for (const h of routes) { await p.goto(S.base + "/" + h); await p.waitForSelector("#page > :not(.empty)"); await p.waitForTimeout(400); dead = dead.concat(await audit(p, h)); seen += await p.$$eval("button, a.btn", x => x.filter(b => b.offsetParent !== null).length); }

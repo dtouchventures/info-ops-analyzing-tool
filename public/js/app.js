@@ -20,6 +20,7 @@ const ROUTES = [
   [/^#\/start$/, () => import("./pages/start.js"), "start"],
   [/^#\/dashboard$/, () => import("./pages/dashboard.js"), "dashboard"],
   [/^#\/verify(?:\/(post))?$/, () => import("./pages/verify.js"), "verify"],
+  [/^#\/investigate(?:\/(INV-\d+))?$/, () => import("./pages/investigate.js"), "investigate"],
   [/^#\/search(?:\?(.*))?$/, () => import("./pages/search.js"), "search"],
   [/^#\/privacy$/, () => import("./pages/privacy.js"), "privacy"],
   [/^#\/cases(?:\?(.*))?$/, () => import("./pages/cases.js"), "cases"],
@@ -39,13 +40,13 @@ const ROUTES = [
 
 // The six services in the main menu. Every other module keeps working and stays reachable from Settings
 // (and from "Other tools" in Advanced mode); nothing is removed.
-export const GROUPS = { verify: ["start", "cases", "review", "verify", "new", "search"], social: ["monitor"], watch: ["watch"], reports: ["reports"], settings: ["settings", "admin"], home: ["home"] };
+export const GROUPS = { verify: ["investigate", "start", "cases", "review", "verify", "new", "search"], social: ["monitor"], watch: ["watch"], reports: ["reports"], settings: ["settings", "admin"], home: ["home"] };
 export const OTHER_TOOLS = [["dashboard", "#/dashboard", "Statistics", "dash"], ["verify", "#/verify", "Verify (single page)", "verify"], ["new", "#/new", "New case with files", "new"], ["search", "#/search", "Search and check", "search"],
   ["archive", "#/archive", "Reference archive", "archive"], ["datasets", "#/datasets", "Fact-check datasets", "data"]];
 function shell() {
   const nav = [
     ["home", "#/home", "Dashboard", "dash"],
-    ["verify", App.can("case.create") ? "#/start" : "#/cases", "Verify Information", "verify"],
+    ["verify", App.can("case.create") ? "#/investigate" : "#/cases", "Verify Information", "verify"],
     ["social", "#/monitor", "Social Media Analysis", "monitor"],
     ["watch", "#/watch", "AI Watchlist", "watch"],
     ["reports", "#/reports", "Reports", "reports"],
@@ -85,7 +86,7 @@ async function route() {
   if (!r) { location.hash = "#/home"; return; }
   const group = Object.keys(GROUPS).find(g => GROUPS[g].includes(r[2]));
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", a.dataset.nav === group || a.dataset.nav === `x-${r[2]}`));
-  const sn = $("#subnav"); if (sn) sn.innerHTML = group === "verify" ? `<nav class="subnav" aria-label="Verify Information">${[App.can("case.create") && ["start", "#/start", "New investigation"], ["cases", "#/cases", "Cases"], ["review", "#/review", "Review queue"]].filter(Boolean).map(([k, hr, l]) => `<a href="${hr}" class="${k === r[2] ? "on" : ""}"${k === r[2] ? ' aria-current="page"' : ""}>${l}</a>`).join("")}</nav>` : "";
+  const sn = $("#subnav"); if (sn) sn.innerHTML = group === "verify" ? `<nav class="subnav" aria-label="Verify Information">${[App.can("case.create") && ["investigate", "#/investigate", "Analyze information"], ["cases", "#/cases", "Cases"], ["review", "#/review", "Review queue"]].filter(Boolean).map(([k, hr, l]) => `<a href="${hr}" class="${k === r[2] || (k === "investigate" && r[2] === "start") ? "on" : ""}"${k === r[2] ? ' aria-current="page"' : ""}>${l}</a>`).join("")}</nav>` : "";
   const nm = $("#navMore"); if (nm && nm.querySelector(".on")) nm.open = true;
   const page = $("#page"); page.innerHTML = `<div class="empty"><span class="spin"></span> Loading…</div>`;
   try {

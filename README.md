@@ -7,6 +7,8 @@ AIVS is a working tool for authorised Information Operations analysts. They use 
 - record evidence and the uncertainty that remains;
 - produce verification reports that a second person reviews.
 
+**Verify Information works in one click (1.23).** Give AIVS a link, text, image, screenshot, PDF or Word document and press **Analyze Information**. It extracts the content (with OCR for images), searches for evidence, compares the sources, assesses each claim and writes a single-page report (Background, Analysis, Assessment, Recommendations, References), with no comments needed. These automatic reports are labelled **"AI-generated · not reviewed by an analyst"**. They follow fixed, explainable rules, give no percentages, and say what could not be read or checked. The analyst's own verdicts and the approval by a different, authorised reviewer work as before, and remain the only way to an approved report.
+
 Automated checks and optional AI produce **preliminary findings with stated limits**. The existing reviewed-report workflow still requires a different authorised reviewer for approval.
 
 ## Automatic public-content fact-checking reports (1.22)

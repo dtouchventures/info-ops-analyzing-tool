@@ -101,5 +101,9 @@ export function extractHtml(html, url) {
   body = pick(/<article\b[^>]*>([\s\S]*?)<\/article>/i) || pick(/<main\b[^>]*>([\s\S]*?)<\/main>/i) || (/<body\b[^>]*>([\s\S]*)<\/body>/i.exec(body) || [, body])[1];
   const text = decode(body.replace(/<\/(p|div|h[1-6]|li|blockquote|tr|section)>|<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " "))
     .split("\n").map(l => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter(l => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  return { title, text, published, publishedBasis: basis, modified: modified && !isNaN(new Date(modified)) ? new Date(modified).toISOString() : null, site: meta("og:site_name") || url.hostname, description: meta("og:description", "description") };
+  // author as the page names it (metadata or structured data); never guessed from the text
+  let author = meta("author", "article:author", "parsely-author", "dc.creator");
+  if (!author) { const m = /"author"\s*:\s*(?:\[\s*)?\{[^{}]*?"name"\s*:\s*"([^"]{2,120})"/i.exec(html); if (m) author = decode(m[1]); }
+  if (author && /^https?:\/\//i.test(author)) author = null;
+  return { title, text, published, publishedBasis: basis, author: author ? author.slice(0, 200) : null, modified: modified && !isNaN(new Date(modified)) ? new Date(modified).toISOString() : null, site: meta("og:site_name") || url.hostname, description: meta("og:description", "description") };
 }

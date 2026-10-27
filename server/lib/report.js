@@ -11,7 +11,7 @@ const fmt = iso => iso ? new Date(iso).toISOString().replace("T", " ").slice(0, 
 const refUrl = r => { const m = String(r || "").match(/https?:\/\/[^\s<>"]+/); return m ? m[0].replace(/[).,;]+$/, "") : null; };
 const KIND = { observation: "Observed detail", source_claim: "Source statement", inference: "Analyst inference", lead: "Investigative lead" };
 const ASSESS = { ...VERDICTS, unassessed: "Not assessed" };
-const CONNECTOR = { factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations" };
+const CONNECTOR = { factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "News coverage index (GDELT)", reference: "Wikipedia" };
 
 export function makeReports(db, { cases, storage }) {
   function data(caseId) {

@@ -470,3 +470,10 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .wterms .bar { height: 8px; background: var(--teal-100); border-radius: 4px; } .wterms .bar i { display: block; height: 100%; background: var(--teal-600); border-radius: 4px; }
 .wmon { font-size: 12.5px; color: var(--muted); border-left: 3px solid var(--line-strong); padding: 4px 8px; background: var(--surface-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 .wmon.ok { border-left-color: var(--sup); } .wmon.warn { border-left-color: var(--warn); } .wmon.bad { border-left-color: var(--con); }
+/* 1.22 automatic investigation: six-stage progress */
+.istages { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.istages li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; font-size: 14px; }
+.istages .dot { flex: 0 0 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line, #d0d5dd); display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
+.istages .running { background: var(--teal-50, #e8f5f4); } .istages .running .dot { border-color: var(--teal-500, #13948f); border-top-color: transparent; animation: ispin 1s linear infinite; }
+.istages .done .dot { background: var(--teal-500, #13948f); border-color: var(--teal-500, #13948f); } .istages .warning .dot { background: #b54708; border-color: #b54708; }
+@keyframes ispin { to { transform: rotate(360deg); } }

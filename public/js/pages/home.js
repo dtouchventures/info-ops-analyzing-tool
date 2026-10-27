@@ -25,7 +25,7 @@ function monitoringLine(W) {
 async function draw(el) {
   crumbs(`<b>Dashboard</b>${App.training ? " · training records" : ""}`);
   const [D, W, IO] = await Promise.all([api.get(`/api/dashboard?${App.q()}`).catch(() => null), api.get("/api/watch/overview").catch(() => null), api.get("/api/io/datasets").catch(() => null)]);
-  const al = await api.get("/api/watch/alerts?limit=6").catch(() => null);
+  const [al, INV] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null)]);
   const c = D?.counts || {}, open = (c.draft || 0) + (c.analysing || 0) + (c.analysis_failed || 0) + (c.analyst_review || 0) + (c.needs_evidence || 0);
   const ds = (IO?.datasets || []).filter(d => App.training ? d.is_sample : !d.is_sample), posts = ds.reduce((a, d) => a + (d.posts || 0), 0);
   const wls = W?.watchlists || [], activeW = wls.filter(w => w.status === "active").length, openAlerts = (W?.alert_counts?.new || 0) + (W?.alert_counts?.acknowledged || 0);
@@ -33,15 +33,18 @@ async function draw(el) {
     <p class="small muted">${text}</p><div class="svc-figs">${figs.map(([n, l, h]) => `<a href="${h}" data-fig="${esc(l)}"><b>${n}</b><span>${l}</span></a>`).join("")}</div>${extra}<a class="btn primary" href="${href}">${cta}</a></div>`;
   el.innerHTML = `<div class="pagehead"><div><h1>Dashboard</h1><p>Check claims against evidence, analyse public post datasets, and watch topics for unusual activity. Automatic results are leads for an analyst, never findings.</p></div></div>
     <div class="svcs">
-      ${card("verify", "verify", "Verify Information", "Split text, articles or links into claims, gather evidence, record a verdict, and export a reviewed report.",
+      ${card("verify", "verify", "Verify Information", "Give a link, text, image, PDF or Word file. AIVS extracts the claims, searches for evidence and writes an assessed report automatically.",
         [[open, "open", "#/cases?status=draft,analysing,analysis_failed,analyst_review,needs_evidence"], [c.awaiting_approval || 0, "awaiting review", "#/review"], [(c.approved || 0) + (c.archived || 0), "approved", "#/reports"]],
-        App.can("case.create") ? "#/start" : "#/cases", App.can("case.create") ? "New investigation" : "Open cases")}
+        App.can("case.create") ? "#/investigate" : "#/reports", App.can("case.create") ? "Analyze information" : "Open reports")}
       ${card("social", "monitor", "Social Media Analysis", "Upload a CSV, JSON or Excel set of public posts: tone, topics, hashtags, trends, repeated messages and a map.",
         [[ds.length, "datasets", "#/monitor"], [posts.toLocaleString(), "posts", "#/monitor"]], "#/monitor", "Analyse a dataset")}
       ${card("watch", "watch", "AI Watchlist", "Watch topics and hashtags in imported or collected posts, and get alerts for unusual increases and repeated messages.",
         [[activeW, "active watchlists", "#/watch/lists"], [openAlerts, "open alerts", "#/watch/alerts"]], "#/watch", "Open watchlists", monitoringLine(W))}
     </div>
-    <div class="grid g2" style="margin-top:16px">
+    <div class="grid g3" style="margin-top:16px">
+      <div class="card"><div class="hd"><h3>Recent automatic reports</h3><a class="small right" href="#/reports">All reports</a></div><div class="bd">
+        ${(INV?.investigations || []).length ? `<table class="t"><tbody>${INV.investigations.map(x => `<tr><td><a href="#/investigate/${esc(x.id)}" class="mono small">${esc(x.report_id)}</a></td><td class="small">${esc((x.subject || x.status).slice(0, 70))}</td><td>${x.overall ? `<span class="chip ${({ supported: "sup", contradicted: "con", mixed: "mix" })[x.overall] || "grey"}">${esc(x.overall_label)}</span>` : `<span class="chip grey">${esc(x.status)}</span>`}</td><td class="tiny sub">${fmtDT(x.created_at)}</td></tr>`).join("")}</tbody></table>`
+          : `<p class="small sub" style="margin:0">No automatic reports yet.${App.can("case.create") ? ` <a href="#/investigate">Analyze information</a>.` : ""}</p>`}</div></div>
       <div class="card"><div class="hd"><h3>Recent investigations</h3><a class="small right" href="#/cases">All cases</a></div><div class="bd">
         ${(D?.recent || []).length ? `<table class="t"><tbody>${D.recent.slice(0, 6).map(r => `<tr><td><a href="#/case/${esc(r.id)}" class="mono small">${esc(r.id)}</a></td><td class="small">${esc((r.title || "").slice(0, 70))}</td><td>${status(r.status)}</td><td class="tiny sub" style="white-space:nowrap">${fmtDT(r.updated_at)}</td></tr>`).join("")}</tbody></table>`
           : `<p class="small sub" style="margin:0">No investigations yet.${App.can("case.create") ? ` <a href="#/start">Start one</a>.` : ""}</p>`}</div></div>

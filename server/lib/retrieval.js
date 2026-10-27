@@ -39,7 +39,8 @@ const host = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } ca
 const isHttp = u => { try { return /^https?:$/.test(new URL(u).protocol); } catch { return false; } };
 
 export function makeRetrieval(db, { config, audit, usage }) {
-  const S = { timeoutMs: 10000, factcheckKey: "", factcheckBase: "https://factchecktools.googleapis.com", braveKey: "", braveBase: "https://api.search.brave.com", braveUsdPerRequest: null, ...(config.search || {}) };
+  const S = { timeoutMs: 10000, factcheckKey: "", factcheckBase: "https://factchecktools.googleapis.com", braveKey: "", braveBase: "https://api.search.brave.com", braveUsdPerRequest: null,
+    gdelt: false, gdeltBase: "https://api.gdeltproject.org", wikipedia: false, wikipediaBase: "https://{lang}.wikipedia.org", ...(config.search || {}) };
   const connectors = {
     factcheck: { label: "Google Fact Check Tools (published fact-checks)", configured: !!S.factcheckKey, needs: "GOOGLE_FACTCHECK_API_KEY (free; create it in a Google Cloud project with the Fact Check Tools API enabled)", external: "Google",
       async run(q, { lang }) {
@@ -62,7 +63,25 @@ export function makeRetrieval(db, { config, audit, usage }) {
           .map(r => ({ title: r.claim, url: isHttp(r.source_url) ? r.source_url : null, publisher: r.publisher || r.dataset, published_at: r.published_at, rating: r.label_raw || r.label, kb_label: r.label, claim_reviewed: r.claim, language: r.language,
             snippet: `Dataset “${r.dataset}” (licence: ${r.license}), record KB-${r.id}`, kb_id: r.id }));
       } },
-    holdings: { label: "Earlier AIVS investigations", configured: true, needs: null, external: null, async run() { return []; } }   // handled per claim below
+    holdings: { label: "Earlier AIVS investigations", configured: true, needs: null, external: null, async run() { return []; } },   // handled per claim below
+    // free public indexes, no key (switch off with SEARCH_GDELT=false or SEARCH_WIKIPEDIA=false)
+    news: { label: "News coverage index (GDELT)", configured: !!S.gdelt, needs: "SEARCH_GDELT=true (free GDELT DOC 2.0 API; no key)", external: "GDELT Project",
+      async run(q, { lang }) {
+        const words = [...tokens(q)].filter(w => !/^\d+$/.test(w)).slice(0, 6); if (words.length < 2) return [];
+        const u = new URL("/api/v2/doc/doc", S.gdeltBase); u.searchParams.set("query", words.join(" ") + (lang === "sw" ? " sourcelang:swahili" : ""));
+        for (const [k, v] of [["mode", "artlist"], ["format", "json"], ["maxrecords", "15"], ["sort", "hybridrel"], ["timespan", "12months"]]) u.searchParams.set(k, v);
+        const j = await getJson(u, {}, S.timeoutMs); usage("news", "doc/artlist", 0);
+        const gd = s => { const m = /^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})Z?$/.exec(s || ""); return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : null; };
+        return (j.articles || []).filter(a => isHttp(a.url)).map(a => ({ title: a.title, url: a.url, publisher: a.domain || host(a.url), published_at: gd(a.seendate), snippet: a.title || "", language: a.language || null }));
+      } },
+    reference: { label: "Wikipedia (background reference)", configured: !!S.wikipedia, needs: "SEARCH_WIKIPEDIA=true (free MediaWiki search API; no key)", external: "Wikimedia",
+      async run(q, { lang }) {
+        const wl = lang === "sw" ? "sw" : "en", base = S.wikipediaBase.replace("{lang}", wl);
+        const u = new URL("/w/api.php", base); for (const [k, v] of [["action", "query"], ["list", "search"], ["srsearch", q.slice(0, 250)], ["format", "json"], ["srlimit", "5"]]) u.searchParams.set(k, v);
+        const j = await getJson(u, {}, S.timeoutMs); usage("reference", "search", 0);
+        return (j.query?.search || []).map(r => ({ title: r.title, url: `${base}/wiki/${encodeURIComponent(String(r.title).replace(/ /g, "_"))}`, publisher: `Wikipedia (${wl})`,
+          published_at: r.timestamp || null, date_kind: "last edited", snippet: String(r.snippet || "").replace(/<[^>]+>/g, "") }));
+      } }
   };
   async function brave(q, { official } = {}) {
     const u = new URL("/res/v1/web/search", S.braveBase); u.searchParams.set("q", q.slice(0, 380)); u.searchParams.set("count", "8"); u.searchParams.set("safesearch", "moderate");

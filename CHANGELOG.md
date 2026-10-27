@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.23.0 — Verify Information in one click: automatic extraction, evidence research, assessment and report (27 October 2026)
+
+- **One page, one button.** Verify Information (`#/investigate`) takes a link (news article, PDF, X, YouTube, TikTok, Telegram, Facebook, Instagram…), pasted text, images and screenshots, PDF or Word documents. **Analyze Information** runs six stages and shows their progress: extracting information, analyzing content, searching for evidence, comparing sources, preparing the assessment, generating the report. The report appears on the same page. The step-by-step investigation is still available from a link on the page.
+- **Extraction** (`server/lib/investigate.js`):
+  - web pages and PDFs through the existing SSRF-protected retrieval, now also reading the author the page names;
+  - social posts through the platforms' public embeds. When a platform does not show the post (Facebook and Instagram without a Meta token), the report says so and asks for a screenshot or the text. Nothing is guessed;
+  - **server-side OCR** of images and screenshots with Tesseract.js and the bundled English and Kiswahili data (offline), followed by AIVS's screenshot reader for the account, platform and post time;
+  - PDF and Word text with the existing document reader.
+  A normal case is created, so the archived copy, media, OCR text, evidence suggestions and history are kept as for a manual case.
+- **Evidence research** uses every configured connector, plus two new free ones: the GDELT news index and Wikipedia (`SEARCH_GDELT`, `SEARCH_WIKIPEDIA`; on by default, claim keywords are sent to them).
+- **Comparison** (`server/lib/autoeval.js`):
+  - relevance by TF-IDF over words and character trigrams;
+  - the source's category (official, fact-checker, news, knowledge base, earlier case, reference, other, social);
+  - independence: near-identical wording or the same organisation counts once;
+  - dates, including reports published well before the claim;
+  - stance: a published rating first, then the AI's reading only when its quoted words really appear in the source, then conservative wording rules.
+  A mention of the topic is never counted as support. Different figures, for example 120 cases against 12, are not support. The 3–5 best sources per claim are shown, contradicting sources are always shown, and everything else is kept in the record.
+- **Assessment** by fixed rules: Supported, Contradicted, Mixed evidence, Insufficient evidence or Unverifiable per claim and overall, with a qualitative strength (strong, moderate, weak, none) and its reason. No percentages are given. Observed information-operations indicators (red flags, repeated wording across sites, hashtags, the account or wording in imported datasets) are listed as observations, never as proof of coordination.
+- **AI (Ollama).** The model set in AIVS's AI settings (`AI_PROVIDER=ollama`, `AI_MODEL`; `set-ai-ollama.bat` sets `qwen3:4b-instruct`) is used only after the health check confirms the model is installed and answers. It sees only the submission and the numbered evidence (retrieval-augmented generation). Its drafted sentences are dropped if they cite evidence that doesn't exist, give percentages or contain links. The verdicts always come from the rules. Without AI, a rule-based writer produces the same sections, and the report says why AI was not used.
+- **Single-page report**:
+  - A Background, B Analysis, C Assessment (with indicators and limitations), D Recommendations, E References with links and dates;
+  - report ID `AIVS-YYYYMMDD-NNN`, investigation date, source publication date and completion date, all in East Africa Time;
+  - HTML, PDF and Word (.docx);
+  - labelled **"AI-generated · not reviewed by an analyst"**. A reviewer (not the submitter) can record a review with a note, and the label then names them.
+  The analyst's own verdicts and the approval workflow are untouched.
+- **Reports** has a new *Automatic reports* list with a date filter. The **dashboard** shows recent automatic reports, and the Verify card opens the one-click page.
+- Database migration 14 adds the `investigations` table. A copy of the database is saved before the upgrade, as for every migration. Investigations that were running when the server stopped are marked as interrupted.
+- Fix: the screenshot reader's count pattern could take seconds or more on long digit runs (exponential backtracking). It is now linear.
+- Tests: `npm test` 181 (24 new in `test/investigate.test.js`: the ten required scenarios, AI with checked quotes, a model that isn't installed, a broken AI answer, no reachable search service, unreadable pages and images, private links, escaping, prompt injection, reports by date, review by another person); `npm run test:e2e` adds the one-click page on desktop and phone.
+
 ## 1.22.0 — Automatic public-content fact-checking reports
 
 - Restore the working source directory structure from the existing local project; keep runtime data and secrets outside Git.

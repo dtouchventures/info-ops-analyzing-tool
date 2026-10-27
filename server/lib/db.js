@@ -150,7 +150,18 @@ function mig13(db) {
     posts_checked INTEGER NOT NULL DEFAULT 0, matched INTEGER NOT NULL DEFAULT 0, scanned_at TEXT, status TEXT, error TEXT, PRIMARY KEY (watchlist_id, dataset_id));
   CREATE INDEX IF NOT EXISTS watch_posts_ds ON watch_posts(dataset_id, io_post_id);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// 1.22: automatic investigations (one-click pipeline). The automated assessment and report are kept here, apart from
+// the analyst's own verdicts and the approved reports, so automation never stands in for a person's decision.
+function mig14(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS investigations (
+    id TEXT PRIMARY KEY, report_id TEXT NOT NULL UNIQUE, case_id TEXT REFERENCES cases(id), is_training INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL, stage TEXT, stages_json TEXT NOT NULL, input_json TEXT NOT NULL, subject TEXT, overall TEXT, source_published_at TEXT,
+    result_json TEXT, error TEXT, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, completed_at TEXT,
+    reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT);
+  CREATE INDEX IF NOT EXISTS investigations_created ON investigations(created_at);
+  CREATE INDEX IF NOT EXISTS investigations_case ON investigations(case_id);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

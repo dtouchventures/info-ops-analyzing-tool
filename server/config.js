@@ -51,7 +51,10 @@ export const config = {
   search: {
     factcheckKey: env.GOOGLE_FACTCHECK_API_KEY || "", factcheckBase: env.FACTCHECK_BASE_URL || "https://factchecktools.googleapis.com",
     braveKey: env.BRAVE_SEARCH_API_KEY || "", braveBase: env.BRAVE_BASE_URL || "https://api.search.brave.com",
-    braveUsdPerRequest: env.BRAVE_USD_PER_REQUEST ? Number(env.BRAVE_USD_PER_REQUEST) : null, timeoutMs: int(env.SEARCH_TIMEOUT_MS, 10000)
+    braveUsdPerRequest: env.BRAVE_USD_PER_REQUEST ? Number(env.BRAVE_USD_PER_REQUEST) : null, timeoutMs: int(env.SEARCH_TIMEOUT_MS, 10000),
+    // free public indexes used by automatic investigations (claim keywords are sent to them); SEARCH_GDELT=false / SEARCH_WIKIPEDIA=false to switch off
+    gdelt: env.SEARCH_GDELT !== "false", gdeltBase: env.GDELT_BASE_URL || "https://api.gdeltproject.org",
+    wikipedia: env.SEARCH_WIKIPEDIA !== "false", wikipediaBase: env.WIKIPEDIA_BASE_URL || "https://{lang}.wikipedia.org"
   },
   // social media post lookup through the platforms' public embed services (no key except Facebook/Instagram)
   social: { metaToken: env.META_OEMBED_TOKEN || "", timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },
