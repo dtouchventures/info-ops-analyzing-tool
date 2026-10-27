@@ -1,5 +1,131 @@
 # Changelog
 
+## 1.22.0 — Automatic public-content fact-checking reports
+
+- Restore the working source directory structure from the existing local project; keep runtime data and secrets outside Git.
+- Add background automatic reports with a Nairobi date, background, analysis, qualified assessment, recommendations and citations, without mandatory analyst comments.
+- Add explicit AI and external-search options, source-retrieval checks, local OCR for screenshots and scanned PDFs, and printable HTML/JSON exports.
+- Preserve the existing approval workflow and recorded decisions. Search leads remain unaccepted; inaccessible sources and missing services are disclosed.
+- Fix Windows PDF font-directory separators. Add API and browser coverage for the upload-to-report flow, with isolated HTTP test connections for CPU-heavy checks.
+
+## 1.21.1 — AI Watchlist: dashboard figures, monitoring status, stale-server warning (26 October 2026)
+
+Fix for "the dashboard shows 0 active watchlists and 0 open alerts".
+
+**Root causes found**
+
+1. **Dashboard counter bug.** `public/js/pages/home.js` counted watchlists with `w.active`, a field the server never sends (it sends `status: "active"`). The "active watchlists" figure was therefore always 0, whatever the database held.
+2. **Server not restarted after the 1.21 update.** On the owner's PC the server was started before the 1.21 files arrived. The server loads its code once at start, so it kept running the old code: no dataset monitoring, no automatic check on import, so no alerts. The new pages were talking to the old server.
+3. **Pages not robust to an older server.** The AI Watchlist pages assumed fields that only a 1.21 server sends.
+
+**Changes**
+
+- The dashboard counts active watchlists from `status`. The open-alert figure is the number of saved alerts with status new or acknowledged.
+- `/api/watch/overview` → `stats.monitoring` reports:
+  - active watchlists;
+  - datasets;
+  - posts checked and matching;
+  - the last successful analysis time;
+  - failed checks;
+  - live platforms. These are counted only if an active watchlist uses them and they are configured.
+- One status line on the dashboard and on *AI Watchlist → Overview* says what is happening: no active watchlist; active but no data source; or monitoring active, with the last analysis time, posts checked and matching, and a note when nothing matches.
+- The dashboard refreshes its figures every 30 seconds while it is open, and redraws when you come back to it after creating a watchlist, importing a dataset or receiving alerts.
+- **Restart warning:** if the server reports a different version from the pages, a banner says to close AIVS and start it again.
+- The AI Watchlist pages fill in defaults for fields an older server does not send. They no longer act on a page you have already left.
+- On the dashboard, alert titles no longer repeat their category.
+
+**Tests**
+
+- `test/watch-counters.test.js`:
+  - the dashboard figures go 0/0 → draft 0/0 → activated 1/0;
+  - 30 non-matching posts: checked, 0 matching, 0 alerts;
+  - the SYNTHETIC dataset: alerts equal to the rows saved in `watch_alerts`, including an unusual-spike alert;
+  - re-analysis adds nothing;
+  - paused → 0 active.
+- A new browser test does the same through the screens on a fresh server.
+- **Results:** `npm test` 157/157; `npm run test:e2e` 192/192.
+
+
+## 1.21.0 — three services
+
+### Notebook, testing report and demo guide (26 October 2026)
+
+- `notebooks/AIVS_Information_Operations_AI_Demo.ipynb` (33 cells) ran here end to end with no errors (5 charts and an interactive map). It covers four datasets with their source, date, size and limitations: LIAR, TweetEval, and the two AIVS synthetic sets, which it generates identically to the application (fingerprints match). Contents:
+  - cleaning and NLP preprocessing;
+  - the sentiment model: test accuracy 60.2%, macro-F1 59.8%, with its confusion matrix;
+  - an optional pretrained DistilBERT (skipped here: no Hugging Face access);
+  - claim classification from wording on LIAR: 6 labels 23.6% against 16.7% chance; 2 classes 63.1% against 56.7% for the majority class. This shows why verdicts must rest on evidence;
+  - claim extraction and evidence retrieval by TF-IDF cosine similarity (the nearest earlier fact-check points the same way 55% of the time);
+  - k-means topics, repeated messages, a county map of recorded locations only, and watchlist anomaly detection;
+  - a results table and limitations.
+- `docs/TESTING-REPORT.md` and `docs/DEMO-GUIDE.md`.
+
+### Connecting APIs (26 October 2026)
+
+- `set-api-keys.bat` (with `scripts/set-api-keys.ps1`) asks for the keys of any of 12 services and saves them in `.env`:
+  - it says where to get each key;
+  - typing is hidden, and values are never shown;
+  - empty answers keep the current value, and the old file is kept as `.env.before-keys`.
+- Tested with PowerShell 7.4 and sample values: the chosen keys were replaced or added, other lines were kept, and the backup was written.
+
+### AI Watchlist: early warning on imported datasets (26 October 2026)
+
+- **Watchlists monitor imported datasets** (`server/lib/watch-datasets.js`): choose datasets or "All imported datasets". Every import or addition in Social Media Analysis (CSV, JSON, Excel, screenshots, permitted collection) is checked automatically by the active watchlists that monitor it; activation and **Analyse datasets now** check what is already there.
+  - Each watchlist and dataset has a stored scan record, so no post is processed twice; a post imported twice is recognised by its platform post ID.
+  - A dataset-only watchlist needs no platform credentials and no collection basis (each dataset already records its own).
+- **New alert categories and detectors**, all over the posts' publication times:
+  - keyword threshold (your rule);
+  - unusual posting spike (rolling baseline: minimum posts, ratio over the mean and standard deviations);
+  - emerging narrative (term bursts over words and word pairs, with a minimum history);
+  - repeated-message activity (concentrated in time; one alert per episode);
+  - potential coordination indicator (several accounts, same text, within minutes, with shared hashtags and links).
+
+  Consecutive flagged windows form one event. Every alert is labelled "Historical dataset analysis".
+- **Severity** (low, medium, high) by documented rules, and a **recommended action**, on every alert (new column; database migration 13 widens the alert categories, adds the scan table and keeps every existing row).
+- **Verify a claim** from any alert: choose the claim from the supporting posts. The case gets the alert's reason and supporting posts as a suggested lead for the report.
+- **Delete** a watchlist: it is hidden and stops; its history, posts and alerts are kept; its open alerts are closed with the note "Watchlist deleted". Pause stops automatic checks.
+- **Interface:**
+  - an **Overview** tab (active watchlists, monitored posts, open alerts by severity, recent dataset checks, how alerts are decided);
+  - a watchlist table (name, keywords, data source, status, posts, last analysed, actions);
+  - a simple **New watchlist** form;
+  - severity filter and chips;
+  - an **Analysis** panel per watchlist (posts per day, spike windows, sentiment, top keywords, recurring narratives, alert history).
+
+  Import messages in Social Media Analysis say what the watchlists found.
+- **Matched posts get a tone label** (trained classifier for English, word list for Kiswahili).
+- **SYNTHETIC demonstration dataset** (`server/lib/watch-demo.js`, `training/watch-demo-posts.csv`, `POST /api/io/watch-demo`): 1,000 invented election posts with two planted patterns at known times.
+- **Notebook** `notebooks/AIVS_AI_Watchlist_Demo.ipynb`, run end to end here with no errors (5 charts). It covers loading and cleaning, keyword matching, sentiment (TF-IDF + logistic regression on TweetEval: test accuracy 58.8%, macro-F1 58.5%), an optional pretrained DistilBERT (skipped here because Hugging Face is unreachable; runs in Colab), k-means narratives, posting frequency, anomaly detection, alert generation and charts. It also checks the alerts against the planted answers: 7 alerts, all in planted periods, both events found.
+- **Speed:** 20,000 imported posts are checked and analysed in about 1.5 s on top of the import (6.2 s in total in the test environment).
+- **Tests:** `npm test` 155 (8 new in `test/watch-datasets.test.js`: create, edit, save and reload, preview, activate, empty and invalid files, CSV upload, automatic check, alerts traced to the planted records, no false alarms on the background, no duplicates, analytics, acknowledge, dismiss, verify a claim, pause, delete), all pass. `npm run test:e2e` 184 checks, all pass, including the whole workflow in the browser.
+
+### Phase 3–4 (part 1): a trained sentiment classifier, with measured scores (26 October 2026)
+
+- **New model** `models/sentiment-tweeteval-lr-1.json`: TF-IDF of words and word pairs (negation marked) with multinomial logistic regression, written in plain JavaScript (`server/ai/textclf.js`). Training, evaluation and prediction use the same code.
+- **Data:** TweetEval sentiment (SemEval-2017 Task 4; Barbieri et al., 2020), official splits: 45,615 train, 2,000 validation, 12,284 test English tweets, downloaded from github.com/cardiffnlp/tweeteval with each file's SHA-256 recorded. Settings were chosen on the validation split.
+- **Measured once on the 12,284 test tweets:** accuracy 59.5%, macro-F1 59.4%, macro-recall 60.7%. The word list AIVS used before scores 55.9% accuracy and 49.2% macro-F1; always guessing the commonest label scores 48.3% accuracy. Per-class scores and the confusion matrix are in `models/sentiment-tweeteval-lr-1.eval.json`. An honest note is recorded there: the test score of a first run was seen before the learning-rate grid was widened.
+- **Reproducible:** `npm run train:sentiment` downloads the data, trains (about 1 minute), evaluates, and checks that the stored model reproduces the scores.
+- **Used for** English posts in Social Media Analysis (per-post tone, when a dataset is analysed) and in the case Content analysis card, with the probability and the words that weighed most. Kiswahili text still uses the word list, because the model was not trained on it; every result names its method.
+- **Settings → AI models** (`#/models`): data source and citation, sizes, settings, test scores against both baselines, per-class precision/recall/F1, the confusion matrix, limitations, and a box to try the model on any sentence. API: `GET /api/ai/models`, `POST /api/ai/models/sentiment/try`.
+- Still pending: a pretrained transformer (DistilBERT, MiniLM). Hugging Face cannot be reached from the development workspace yet.
+- Tests: `npm test` 147 (4 new in `test/models.test.js`), all pass; `npm run test:e2e` 176 checks, all pass.
+
+### Four verdicts (26 October 2026)
+
+- Analysts now choose from four verdicts: **Supported**, **Contradicted**, **Insufficient evidence**, **Not verifiable**. The overall conclusion is one of them or **Mixed findings** (supported claims beside contradicted ones, or beside claims without enough evidence; before, that gave "Partially supported").
+- "Partially supported" and "Misleading context" are no longer offered: the server refuses them for new verdicts and conclusions. Claims and cases that already have them keep them, and they are still shown, counted and reported.
+- Suggested verdicts from published ratings: "misleading" or "missing context" ratings suggest **Contradicted** (false as presented); "half true" ratings give no suggestion, so the analyst decides.
+- The coverage demo case now marks its "road closed for a month" claim as contradicted as stated.
+- Tests: `npm test` 143, all pass (updated for four verdicts, plus a check that the older verdicts are refused); `npm run test:e2e` 174 checks, all pass.
+
+### Phase 2: simpler navigation and dashboard (26 October 2026)
+
+- **Main menu has six items:** Dashboard, Verify Information, Social Media Analysis, AI Watchlist, Reports, Settings. Verify Information has sub-tabs: New investigation, Cases, Review queue (its badge counts cases awaiting approval).
+- **Dashboard** (`#/home`): three service cards with live figures from the server (open, awaiting review and approved cases; datasets and posts; active watchlists and open alerts), recent investigations and recent alerts. No sample figures.
+- **Settings** (`#/settings`): password, interface mode, Service status (the former start page, now `#/status`), Administration, and **Other tools**: Statistics, the one-page Verify form, New case with files, Search and check, Reference archive and Fact-check datasets. They are hidden from the menu in Guided mode, listed under "Other tools" in Advanced mode, and keep working with their data.
+- The research assistant and AI assistance tabs are no longer offered in a case's guided "More tools"; they remain in Advanced mode.
+- "KDF Mention Watch" is now titled **AI Watchlist**; "Social media analysis" is **Social Media Analysis**.
+- Tests: `npm test` 143, all pass; `npm run test:e2e` 174 checks, all pass.
+
 ## 1.20.0 — 26 October 2026: content from links, and content analysis
 
 - **Content from links** (`POST /api/extract`, New investigation page): pasting a link detects the platform, cleans the link, and after half a second shows "Fetching post content…". A preview follows, with author, posting time (and how it is known), title, source link, metrics, text status (full, possibly shortened, title only, none), every method tried, and the settings that would help. The words fill in automatically and can be edited before analysis. Retry and screenshot reading are offered when nothing is found. Text is never invented.

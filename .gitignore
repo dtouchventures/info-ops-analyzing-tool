@@ -1,4 +1,17 @@
 node_modules/
 data/
 .env
+.env.*
+!.env.example
+backups/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+baseline-tests.txt
+verification-tests.txt
+browser-tests.txt
+legacy-browser-tests.txt
+io-check.txt
+automatic-api-tests.txt
 *.log
