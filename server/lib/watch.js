@@ -91,6 +91,28 @@ export function kenyaSecurityTemplate() {
   };
 }
 
+// The default watchlist (1.28), created once on start-up and then edited from the dashboard like any other. Contextual keywords
+// (CDF, and Navy or Air Force Commander, which also name other countries' officers) count only with their context words and
+// never when a word shows another meaning; otherwise the item is held for an analyst. Context words are a starting point to edit.
+const MIL_CONTEXT = ["KDF", "Kenya Defence Forces", "Kenya Army", "Kenya Navy", "Kenya Air Force", "military", "soldiers", "troops", "army", "defence", "Ministry of Defence", "General", "Gen", "Lieutenant General", "Major General", "Chief of Defence Forces", "Vice Chief of Defence Forces", "Defence Council", "barracks", "deployment", "peacekeeping", "al-Shabaab", "ATMIS", "AUSSOM", "AMISOM", "Jeshi", "wanajeshi", "Majeshi"];
+export const KDF_DEFAULT = {
+  name: "KDF and Kenya Defence Forces Monitoring",
+  description: "Default watchlist: public information that mentions the Kenya Defence Forces, its services and commanders, across the connected news, search and social media sources. Keywords are edited from the dashboard; ambiguous abbreviations need their context.",
+  authorisation: "Public content through each source's official API or public news feed, under the source's terms and the organisation's monitoring policy.",
+  definition: {
+    terms: ["KDF", "Kenya Defence Forces", "Kenya Army", "Kenya Navy", "CDF", "Kenya Air Force", "Kenya Airforce", "Navy Commander", "Air Force Commander", "Majeshi Yetu", "Chief of Defence Forces", "Jeshi la Kenya"],
+    contextual: [
+      { term: "CDF", require: MIL_CONTEXT, exclude: ["Constituency Development Fund", "NG-CDF", "NGCDF", "CDF bursary", "bursary", "bursaries", "constituency", "CDF funds", "CDF kitty", "Zambia", "Pakistan", "Nigeria", "Malawi"] },
+      { term: "Navy Commander", require: ["Kenya", "Kenyan", "KDF", "Mtongwe", "Manda Bay", "Mombasa", "Lamu", "Kenya Navy"], exclude: ["US Navy", "U.S. Navy", "Royal Navy", "Indian Navy", "Chinese Navy", "Pakistan Navy", "Nigerian Navy"] },
+      { term: "Air Force Commander", require: ["Kenya", "Kenyan", "KDF", "Laikipia Air Base", "Moi Air Base", "Eastleigh", "Kenya Air Force"], exclude: ["US Air Force", "U.S. Air Force", "Royal Air Force", "Indian Air Force", "Nigerian Air Force", "Pakistan Air Force"] }
+    ],
+    context: [], exclude: ["kdf file", "kdf format", ".kdf"], languages: [],
+    sources: ["news", "gdelt", "brave_news", "youtube", "x_search", "reddit", "bluesky", "mastodon"], feeds: KENYA_NEWS_SITES,
+    include_reposts: false, alert_mode: "every_post", lookback_minutes: 1440,
+    intervals: { news: 30, gdelt: 30, brave_news: 60, youtube: 120, x_search: 30, reddit: 30, bluesky: 30, mastodon: 30 }
+  }
+};
+
 // ---------------------------------------------------------------- definitions
 const listOf = (v, max, label) => {
   const a = (Array.isArray(v) ? v : String(v || "").split(/\r?\n|,/)).map(x => String(x).replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -100,7 +122,7 @@ const listOf = (v, max, label) => {
   return out;
 };
 export function normaliseDefinition(d = {}) {
-  const terms = listOf(d.terms, 60, "terms"), context = listOf(d.context, 40, "context words"), exclude = listOf(d.exclude, 60, "exclusions");
+  const terms = listOf(d.terms, 150, "terms"), context = listOf(d.context, 40, "context words"), exclude = listOf(d.exclude, 60, "exclusions");
   for (const t of terms) if (t.replace(/^#/, "").length < 2) throw new HttpError(400, `“${t}” is too short to search for.`);
   for (const t of [...terms, ...context, ...exclude]) if (/["()]/.test(t)) throw new HttpError(400, `“${t}”: leave out quotation marks and brackets. Each line is matched as written; a line with spaces is matched as a phrase.`);
   const languages = [...new Set((d.languages || []).filter(l => ["en", "sw"].includes(l)))];
@@ -110,16 +132,20 @@ export function normaliseDefinition(d = {}) {
   // terms switched off by an analyst stay listed but are not searched or matched; only stored when given, so older hashes stay the same
   // keyword combinations: every group must match (each group is a list of alternatives), e.g. (KDF OR "Kenya Army") AND (Lamu OR Boni)
   const groups = (Array.isArray(d.require_groups) ? d.require_groups : []).map(g => listOf(g, 30, "combined terms")).filter(g => g.length).slice(0, 5);
-  const paused = listOf(d.paused_terms, 60, "paused terms").filter(t => !terms.some(x => x.toLowerCase() === t.toLowerCase()));
+  const paused = listOf(d.paused_terms, 150, "paused terms").filter(t => !terms.some(x => x.toLowerCase() === t.toLowerCase()));
   const fbPages = listOf(d.fb_pages, 50, "Facebook Pages").map(x => x.replace(/^https?:\/\/(www\.|m\.)?facebook\.com\//i, "").replace(/[/?#].*$/, "")).filter(x => /^[\w.-]{2,100}$/.test(x));
   const intervals = { ...DEFAULT_INTERVALS };
   for (const [k, [lo, hi]] of Object.entries(INTERVAL_LIMITS)) if (d.intervals?.[k] != null) intervals[k] = Math.min(hi, Math.max(lo, Math.round(+d.intervals[k] || DEFAULT_INTERVALS[k])));
   const thresholds = { ...DEFAULT_THRESHOLDS };
   for (const [k, [lo, hi]] of Object.entries(T_LIMITS)) if (d.thresholds?.[k] != null && !isNaN(+d.thresholds[k])) thresholds[k] = Math.min(hi, Math.max(lo, +d.thresholds[k]));
   // imported datasets to monitor (Social Media Analysis); stored only when given, so older definitions keep their hash
+  // contextual (ambiguous) keywords such as CDF: a post that matches only these needs one of its context words, and none of the
+  // words that show another meaning (CDF also means Constituency Development Fund); otherwise it is held for an analyst to decide
+  const contextual = (Array.isArray(d.contextual) ? d.contextual : []).map(c => ({ term: String(c?.term || "").replace(/\s+/g, " ").trim(), require: listOf(c?.require, 60, "context words"), exclude: listOf(c?.exclude, 60, "words that show another meaning") }))
+    .filter(c => c.term && [...terms, ...paused].some(t => t.toLowerCase() === c.term.toLowerCase())).filter((c, i, a) => a.findIndex(x => x.term.toLowerCase() === c.term.toLowerCase()) === i);
   const datasets = [...new Set((Array.isArray(d.datasets) ? d.datasets : String(d.datasets || "").split(/[\s,]+/)).map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 100);
   const allDs = d.all_datasets === true || d.all_datasets === "true";
-  return { terms, ...(groups.length ? { require_groups: groups } : {}), ...(paused.length ? { paused_terms: paused } : {}), context, exclude, languages, sources, feeds, ...(fbPages.length ? { fb_pages: fbPages } : {}), ...(datasets.length && !allDs ? { datasets } : {}), ...(allDs ? { all_datasets: true } : {}), ...(d.fb_comments === false || d.fb_comments === "false" ? { fb_comments: false } : {}), include_reposts: !!d.include_reposts, alert_mode: d.alert_mode === "signals_only" ? "signals_only" : "every_post",
+  return { terms, ...(groups.length ? { require_groups: groups } : {}), ...(paused.length ? { paused_terms: paused } : {}), ...(contextual.length ? { contextual } : {}), context, exclude, languages, sources, feeds, ...(fbPages.length ? { fb_pages: fbPages } : {}), ...(datasets.length && !allDs ? { datasets } : {}), ...(allDs ? { all_datasets: true } : {}), ...(d.fb_comments === false || d.fb_comments === "false" ? { fb_comments: false } : {}), include_reposts: !!d.include_reposts, alert_mode: d.alert_mode === "signals_only" ? "signals_only" : "every_post",
     intervals, lookback_minutes: Math.min(7 * 1440, Math.max(10, Math.round(+d.lookback_minutes || 60))), thresholds };
 }
 export const definitionHash = def => crypto.createHash("sha256").update(JSON.stringify(def)).digest("hex");
@@ -127,8 +153,12 @@ export const definitionHash = def => crypto.createHash("sha256").update(JSON.str
 // ---------------------------------------------------------------- matching
 const fold = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[’‘`´]/g, "'").toLowerCase();
 const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// spelling variants handled for every term: words may be joined, spaced or hyphenated (Air Force, Airforce, Air-Force, #KenyaAirForce),
+// and British or American spelling of defence; anything else (Kiswahili forms, other spellings) is added as its own keyword
+const VARIANT = { defence: "defen[cs]e", defense: "defen[cs]e", defences: "defen[cs]es", defenses: "defen[cs]es", airforce: "air[\\s\\-_]*force" };
+const wordRe = w => VARIANT[w] || escRe(w);
 function termRe(term) {
-  const f = fold(term).trim(), tag = f.startsWith("#"), body = (tag ? f.slice(1) : f).split(/\s+/).map(escRe).join("[\\s\\-_]+");
+  const f = fold(term).trim(), tag = f.startsWith("#"), body = (tag ? f.slice(1) : f).split(/[\s\-_]+/).filter(Boolean).map(wordRe).join("[\\s\\-_]*");
   // a plain term also matches the same word written as a hashtag (KDF matches #KDF); a hashtag term matches only the hashtag
   return new RegExp(`(^|[^\\p{L}\\p{N}_${tag ? "#" : ""}])${tag ? "#" : ""}${body}(?![\\p{L}\\p{N}_])`, "u");
 }
@@ -136,8 +166,18 @@ const reCache = new Map();
 const re = t => { let r = reCache.get(t); if (!r) { r = termRe(t); if (reCache.size > 5000) reCache.clear(); reCache.set(t, r); } return r; };
 // returns which terms matched and why the post was (or was not) kept
 export function matchPost(def, post) {
-  const text = fold(post.text), terms = def.terms.filter(t => re(t).test(text));
-  if (!terms.length) return { matched: false, why: "none of the watch terms appear in the text" };
+  const text = fold(post.text), found = def.terms.filter(t => re(t).test(text));
+  if (!found.length) return { matched: false, why: "none of the watch terms appear in the text" };
+  // contextual keywords: confirmed only together with a non-contextual keyword, or with one of their context words
+  const ctxOf = t => (def.contextual || []).find(c => c.term.toLowerCase() === t.toLowerCase());
+  const firm = found.filter(t => !ctxOf(t)), ctxHits = [], other = [];
+  if (!firm.length) {
+    for (const t of found) { const c = ctxOf(t), ex = c.exclude.filter(w => re(w).test(text)), rq = c.require.filter(w => re(w).test(text));
+      if (ex.length) other.push(`“${t}” used with ${ex.map(w => `“${w}”`).join(", ")} (another meaning)`); else if (rq.length) ctxHits.push(...rq); }
+    if (other.length === found.length) return { matched: false, terms: found, why: other.join("; ") };
+    if (!ctxHits.length) return { matched: false, ambiguous: true, terms: found, quality: "ambiguous", why: `only the ambiguous keyword${found.length > 1 ? "s" : ""} ${found.map(t => `“${t}”`).join(", ")}, without any of ${found.length > 1 ? "their" : "its"} context words: an analyst must decide whether it concerns this subject` };
+  }
+  const terms = found, quality = firm.length ? "confirmed" : "contextual";
   for (const g of def.require_groups || []) if (!g.some(t => re(t).test(text))) return { matched: false, terms, why: `none of ${g.map(t => `“${t}”`).join(", ")} appears (all keyword groups must match)` };
   const excl = def.exclude.filter(t => re(t).test(text));
   if (excl.length) return { matched: false, terms, why: `excluded by “${excl.join("”, “")}”` };
@@ -146,7 +186,7 @@ export function matchPost(def, post) {
   if (def.languages.length && post.language && !def.languages.includes(String(post.language).slice(0, 2).toLowerCase()))
     return { matched: false, terms, why: `language “${post.language}” is not one of the selected languages` };
   if (!def.include_reposts && post.repost_of) return { matched: false, terms, why: "a repost (reposts are not included in this watchlist)" };
-  return { matched: true, terms, context: ctx, language_unknown: !!def.languages.length && !post.language };
+  return { matched: true, terms, quality, ...(ctxHits.length ? { disambiguated_by: [...new Set(ctxHits)] } : {}), context: ctx, language_unknown: !!def.languages.length && !post.language };
 }
 // highlight ranges for the alert view (start,end in the original text) — computed on the folded text, same length for Latin scripts
 export function highlights(def, text) {
@@ -157,9 +197,12 @@ export function highlights(def, text) {
 }
 
 // ---------------------------------------------------------------- platform queries compiled from a definition
+// terms sent to a platform's own search: contextual keywords are left out when the watchlist has others (searching "CDF" alone returns
+// mostly unrelated items); news feeds are read in full, so contextual keywords are still found there and checked with their context
+export const queryTerms = def => { const c = new Set((def.contextual || []).map(x => x.term.toLowerCase())), firm = def.terms.filter(t => !c.has(t.toLowerCase())); return firm.length ? firm : def.terms; };
 const xTok = t => { const f = t.trim(); if (f.startsWith("#")) return f; return /[\s\-]/.test(f) ? `"${f}"` : f; };
 export function xQuery(def, { stream = false } = {}) {
-  const terms = def.terms.map(xTok), parts = [terms.length > 1 ? `(${terms.join(" OR ")})` : terms[0]];
+  const terms = queryTerms(def).map(xTok), parts = [terms.length > 1 ? `(${terms.join(" OR ")})` : terms[0]];
   if (def.context.length) parts.push(def.context.length > 1 ? `(${def.context.map(xTok).join(" OR ")})` : xTok(def.context[0]));
   for (const e of def.exclude) { const tok = e.startsWith(".") ? `"${e}"` : xTok(e); parts.push(`-${tok}`); }
   if (!def.include_reposts) parts.push("-is:retweet");
@@ -168,7 +211,7 @@ export function xQuery(def, { stream = false } = {}) {
   return { query: q, length: q.length, max, ok: q.length <= max, problem: q.length > max ? `The X ${stream ? "stream rule" : "search query"} built from this watchlist is ${q.length} characters; X allows ${max}${stream ? " on pay-per-use access" : ""}. Remove some terms or exclusions.` : null };
 }
 export function youtubeQuery(def) {
-  const q = [def.terms.filter(t => !t.startsWith("#")).map(t => (/\s/.test(t) ? `"${t}"` : t)).join("|"), ...def.exclude.filter(e => !e.startsWith(".")).map(e => `-${/\s/.test(e) ? `"${e}"` : e}`)].join(" ");
+  const q = [queryTerms(def).filter(t => !t.startsWith("#")).map(t => (/\s/.test(t) ? `"${t}"` : t)).join("|"), ...def.exclude.filter(e => !e.startsWith(".")).map(e => `-${/\s/.test(e) ? `"${e}"` : e}`)].join(" ");
   return { query: q, note: "YouTube search is broad; AIVS re-checks every result against the watch terms, context words and exclusions before keeping it." };
 }
 
@@ -253,8 +296,8 @@ export function makeWatch(db, { audit, cases, config = {} }) {
     audit(user, `Watchlist ${status === "active" ? "activated" : status === "paused" ? "paused" : "set to draft"}`, "watchlist", String(wl.id), { definition_sha256: wl.definition_sha256, sources: wl.definition.sources });
     return getWl(wl.id);
   }
-  const list = () => db.prepare(`SELECT w.*, (SELECT COUNT(*) FROM watch_matches m WHERE m.watchlist_id = w.id) matches,
-      (SELECT COUNT(*) FROM watch_alerts a WHERE a.watchlist_id = w.id AND a.status = 'new') new_alerts, (SELECT MAX(detected_at) FROM watch_matches m WHERE m.watchlist_id = w.id) last_match_at, (SELECT MAX(scanned_at) FROM watch_dataset_scans s WHERE s.watchlist_id = w.id) last_scan_at
+  const list = () => db.prepare(`SELECT w.*, (SELECT COUNT(*) FROM watch_matches m WHERE m.watchlist_id = w.id AND coalesce(m.quality,'confirmed') NOT IN ('ambiguous','rejected')) matches, (SELECT COUNT(*) FROM watch_matches m WHERE m.watchlist_id = w.id AND m.quality = 'ambiguous') ambiguous,
+      (SELECT COUNT(*) FROM watch_alerts a WHERE a.watchlist_id = w.id AND a.status = 'new') new_alerts, (SELECT MAX(detected_at) FROM watch_matches m WHERE m.watchlist_id = w.id AND coalesce(m.quality,'confirmed') NOT IN ('ambiguous','rejected')) last_match_at, (SELECT MAX(scanned_at) FROM watch_dataset_scans s WHERE s.watchlist_id = w.id) last_scan_at
       FROM watchlists w WHERE w.deleted_at IS NULL ORDER BY (w.status = 'active') DESC, w.id`).all().map(w => ({ ...w, definition: JSON.parse(w.definition_json), definition_json: undefined, preview_json: undefined, previewed_current: w.previewed_sha256 === w.definition_sha256 }));
 
   // ------------------------------------------------------------ ingesting collected posts
@@ -276,8 +319,10 @@ export function makeWatch(db, { audit, cases, config = {} }) {
       for (const r of rows) {
         if (!r?.post_id || !String(r.text || "").trim()) continue;
         const m = matchPost(def, r);
-        if (!m.matched) { out.not_confirmed++; out.reasons[m.why] = (out.reasons[m.why] || 0) + 1; continue; }
-        out.matched++;
+        // an ambiguous keyword alone (CDF without military context) is kept for an analyst to decide, hidden from results, never alerted
+        const hold = m.ambiguous && !def.exclude.some(t => re(t).test(fold(r.text))) && (!def.languages.length || !r.language || def.languages.includes(String(r.language).slice(0, 2).toLowerCase()));
+        if (!m.matched && !hold) { out.not_confirmed++; out.reasons[m.why] = (out.reasons[m.why] || 0) + 1; continue; }
+        if (hold) { out.ambiguous = (out.ambiguous || 0) + 1; out.reasons[m.why] = (out.reasons[m.why] || 0) + 1; } else out.matched++;
         const row = { platform: r.platform, post_id: String(r.post_id), url: r.url || null, account: r.account || null, author_name: r.author_name || null, text: String(r.text).slice(0, 10000), language: r.language || null,
           posted_at: r.posted_at || null, now, source, collected_via: r.collected_via || WATCH_SOURCES[source]?.label || MANUAL_SOURCES[source] || source, repost_of: r.repost_of || null, quote_of: r.quote_of || null,
           text_hash: sha(normForRepeat(r.text)), likes: r.likes ?? null, comments: r.comments ?? null, shares: r.shares ?? null, views: r.views ?? null, metrics_at: null, metrics_source: null,
@@ -288,11 +333,13 @@ export function makeWatch(db, { audit, cases, config = {} }) {
         const metrics = observeMetrics(post, r, source, now);
         // already matched by this watchlist (another source, a retry, or a stream backfill): keep one record
         const existing = db.prepare("SELECT id FROM watch_matches WHERE watchlist_id = ? AND post_id = ?").get(wl.id, post.id);
-        if (existing) { if (metrics) out.alerts += checkEngagement(wl, post.id); continue; }
+        if (existing) { if (metrics && !hold) out.alerts += checkEngagement(wl, post.id); continue; }
+        if (hold) { db.prepare("INSERT INTO watch_matches(watchlist_id,post_id,detected_at,source,terms_json,context_json,definition_sha256,cluster,is_repost,quality) VALUES (?,?,?,?,?,?,?,?,?,'ambiguous')")
+          .run(wl.id, post.id, now, source, JSON.stringify(m.terms), "[]", wl.definition_sha256, null, r.repost_of ? 1 : 0); continue; }
         const cluster = r.repost_of ? null : clusterFor(wl, post, cache);
         if (cluster && cache.byHash && !cache.byHash.has(post.text_hash)) cache.byHash.set(post.text_hash, cluster);
-        db.prepare("INSERT INTO watch_matches(watchlist_id,post_id,detected_at,source,terms_json,context_json,definition_sha256,cluster,is_repost) VALUES (?,?,?,?,?,?,?,?,?)")
-          .run(wl.id, post.id, now, source, JSON.stringify(m.terms), JSON.stringify(m.context || []), wl.definition_sha256, cluster, r.repost_of ? 1 : 0);
+        db.prepare("INSERT INTO watch_matches(watchlist_id,post_id,detected_at,source,terms_json,context_json,definition_sha256,cluster,is_repost,quality) VALUES (?,?,?,?,?,?,?,?,?,?)")
+          .run(wl.id, post.id, now, source, JSON.stringify(m.terms), JSON.stringify([...(m.context || []), ...(m.disambiguated_by || [])]), wl.definition_sha256, cluster, r.repost_of ? 1 : 0, m.quality || "confirmed");
         out.new_matches++;
         if (!r.repost_of && !signalsOnly) {
           const rep = checkRepeated(wl, cluster);
@@ -317,8 +364,8 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   function matchAlert(wl, post, m, source, now) {
     const lag = post.posted_at ? Math.round((Date.parse(now) - Date.parse(post.posted_at)) / 60000) : null;
     return raise(wl, "match", `m:${wl.id}:${post.id}`, { post_id: post.id, title: `${post.platform}: ${post.text.replace(/\s+/g, " ").slice(0, 120)}`,
-      reason: `Matched watchlist “${wl.name}”: ${m.terms.map(t => `“${t}”`).join(", ")}${m.context?.length ? `, with context ${m.context.map(t => `“${t}”`).join(", ")}` : ""}. Found by ${WATCH_SOURCES[source]?.label || MANUAL_SOURCES[source] || source}.`,
-      detail: { terms: m.terms, context: m.context || [], source, detection_lag_minutes: lag, language_unknown: !!m.language_unknown } });
+      reason: `Matched watchlist “${wl.name}”: ${m.terms.map(t => `“${t}”`).join(", ")}${m.context?.length ? `, with context ${m.context.map(t => `“${t}”`).join(", ")}` : ""}${m.disambiguated_by?.length ? `. Contextual match: the ambiguous keyword appears with ${m.disambiguated_by.map(t => `“${t}”`).join(", ")}; confirm that it concerns this subject` : ""}${m.analyst ? `. Ambiguous keyword confirmed as relevant by ${m.analyst}` : ""}. Found by ${WATCH_SOURCES[source]?.label || MANUAL_SOURCES[source] || source}.`,
+      detail: { terms: m.terms, context: m.context || [], quality: m.analyst ? "analyst" : m.quality || "confirmed", disambiguated_by: m.disambiguated_by || [], source, detection_lag_minutes: lag, language_unknown: !!m.language_unknown } });
   }
   // the earliest similar post among this watchlist's recent matches decides the cluster (same normalised wording, or nearly the same)
   // cache: within one ingest call, the cluster representatives and their word sequences are read once
@@ -340,7 +387,7 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   function checkRepeated(wl, cluster) {
     const T = wl.definition.thresholds, since = new Date(Date.now() - T.repeat_window_h * 3600e3).toISOString();
     const ps = db.prepare(`SELECT p.id, p.account, p.platform, p.posted_at, p.url, p.text, m.detected_at FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id
-      WHERE m.watchlist_id = ? AND m.cluster = ? AND m.is_repost = 0 AND coalesce(p.posted_at, m.detected_at) >= ? ORDER BY coalesce(p.posted_at, m.detected_at)`).all(wl.id, cluster, since);
+      WHERE m.watchlist_id = ? AND m.cluster = ? AND m.is_repost = 0 AND coalesce(m.quality,'confirmed') NOT IN ('ambiguous','rejected') AND coalesce(p.posted_at, m.detected_at) >= ? ORDER BY coalesce(p.posted_at, m.detected_at)`).all(wl.id, cluster, since);
     const accounts = new Set(ps.map(p => String(p.account || "").toLowerCase()).filter(Boolean));
     if (ps.length < T.repeat_min_posts || accounts.size < T.repeat_min_accounts) return { size: ps.length, alert: 0 };
     const first = ps[0], key = `rep:${wl.id}:${cluster}`;
@@ -373,7 +420,7 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   // volume: matched posts (by publication time) in the latest window against the windows before it
   function volume(wlOrId, { at = Date.now() } = {}) {
     const wl = typeof wlOrId === "object" ? wlOrId : getWl(wlOrId), T = wl.definition.thresholds, W = T.volume_window_min * 60e3, N = T.volume_baseline_windows;
-    const end = at, start = end - (N + 1) * W, rows = db.prepare(`SELECT coalesce(p.posted_at, m.detected_at) t FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id WHERE m.watchlist_id = ? AND coalesce(p.posted_at, m.detected_at) >= ? AND coalesce(p.posted_at, m.detected_at) < ?`)
+    const end = at, start = end - (N + 1) * W, rows = db.prepare(`SELECT coalesce(p.posted_at, m.detected_at) t FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id WHERE m.watchlist_id = ? AND coalesce(m.quality,'confirmed') NOT IN ('ambiguous','rejected') AND coalesce(p.posted_at, m.detected_at) >= ? AND coalesce(p.posted_at, m.detected_at) < ?`)
       .all(wl.id, new Date(start).toISOString(), new Date(end).toISOString());
     const counts = Array(N + 1).fill(0); for (const r of rows) { const i = Math.floor((Date.parse(r.t) - start) / W); if (i >= 0 && i <= N) counts[i]++; }
     const current = counts[N], base = counts.slice(0, N), mean = base.reduce((a, b) => a + b, 0) / N, sd = Math.sqrt(base.reduce((a, b) => a + (b - mean) ** 2, 0) / N);
@@ -469,10 +516,26 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   // posts matched by a watchlist (also shown when alerts are only raised for signals)
   function matches(id, q = {}) {
     const wl = getWl(id), limit = Math.min(200, Math.max(1, +q.limit || 50)), offset = Math.max(0, +q.offset || 0);
-    const total = db.prepare("SELECT COUNT(*) n FROM watch_matches WHERE watchlist_id = ?").get(wl.id).n;
-    const rows = db.prepare(`SELECT p.*, m.detected_at, m.source, m.terms_json, m.is_repost FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id WHERE m.watchlist_id = ? ORDER BY m.detected_at DESC, m.id DESC LIMIT ? OFFSET ?`).all(wl.id, limit, offset)
+    const qf = q.quality === "ambiguous" ? "m.quality = 'ambiguous'" : q.quality === "all" ? "1" : "coalesce(m.quality,'confirmed') NOT IN ('ambiguous','rejected')";
+    const total = db.prepare(`SELECT COUNT(*) n FROM watch_matches m WHERE m.watchlist_id = ? AND ${qf}`).get(wl.id).n;
+    const rows = db.prepare(`SELECT p.*, m.detected_at, m.source, m.terms_json, m.is_repost, coalesce(m.quality,'confirmed') quality FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id WHERE m.watchlist_id = ? AND ${qf} ORDER BY m.detected_at DESC, m.id DESC LIMIT ? OFFSET ?`).all(wl.id, limit, offset)
       .map(r => ({ ...r, terms: JSON.parse(r.terms_json), terms_json: undefined, highlights: highlights(wl.definition, r.text) }));
     return { total, offset, limit, posts: rows };
+  }
+  // an analyst decides an ambiguous match: relevant (kept, and alerted like any match) or not relevant (hidden for good)
+  function reviewMatch(user, id, postId, relevant, note = "") {
+    const wl = getWl(id), m = db.prepare("SELECT * FROM watch_matches WHERE watchlist_id = ? AND post_id = ?").get(wl.id, Number(postId));
+    if (!m) throw new HttpError(404, "This item is not held by the watchlist.");
+    if (!["ambiguous", "analyst", "rejected"].includes(m.quality)) throw new HttpError(409, "Only matches of an ambiguous keyword are decided by an analyst; this one was confirmed by its keywords.");
+    const q = relevant ? "analyst" : "rejected", now = nowISO();
+    db.prepare("UPDATE watch_matches SET quality = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?").run(q, user.id, now, m.id);
+    let alerts = 0;
+    if (relevant && m.quality !== "analyst" && wl.definition.alert_mode === "every_post") {
+      const post = db.prepare("SELECT * FROM watch_posts WHERE id = ?").get(m.post_id);
+      alerts = matchAlert(wl, post, { terms: JSON.parse(m.terms_json), context: [], analyst: user.display_name || user.username }, m.source, now);
+    }
+    audit(user, relevant ? "Ambiguous match confirmed as relevant" : "Ambiguous match marked not relevant", "watchlist", String(wl.id), { post_id: m.post_id, terms: JSON.parse(m.terms_json), note: String(note || "").slice(0, 300) || undefined });
+    return { quality: q, alerts };
   }
   // delete: the watchlist is hidden and stops; its history, matched posts and alerts are kept; open alerts are closed with a note
   function remove(user, id) {
@@ -485,5 +548,5 @@ export function makeWatch(db, { audit, cases, config = {} }) {
     })();
     audit(user, "Watchlist deleted", "watchlist", String(wl.id), { name: wl.name, open_alerts_closed: open.length });
   }
-  return { create, update, recordPreview, setStatus, list, get: getWl, ingest, remove, raise, addEvent, checkVolume, checkEngagement, volume, alerts, alert, act, matches, observeMetrics };
+  return { create, update, recordPreview, setStatus, reviewMatch, list, get: getWl, ingest, remove, raise, addEvent, checkVolume, checkEngagement, volume, alerts, alert, act, matches, observeMetrics };
 }

@@ -9,24 +9,45 @@ const CAT = { Connected: "sup", "Configured, not yet tested": "info", Restricted
 const RUN = { ok: ["Results", "sup"], not_configured: ["Not configured", "grey"], restricted: ["Restricted", "warn"], rate_limited: ["Rate limited", "warn"], failed: ["Failed", "con"] };
 const VER = { not_verified: "grey", pending: "info", supported: "sup", contradicted: "con", insufficient: "grey", misleading: "mix", not_verifiable: "grey", failed: "con" };
 const GROUPS = ["News", "YouTube", "X", "Facebook", "Instagram", "Reddit", "Bluesky", "Mastodon", "Threads", "TikTok", "Telegram"];
+const QCHIP = { confirmed: null, contextual: "warn", analyst: "sup", ambiguous: "con", article: "grey", engine: "grey", rejected: "grey" };
+const AIC = { yes: ["AI: about the subject", "sup"], no: ["AI: probably not about the subject", "con"], unclear: ["AI: unclear", "grey"] };
 const chip = (l, c) => `<span class="chip ${c}">${esc(l)}</span>`;
 const dt = iso => (iso ? fmtDT(iso) : "date not given");
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || ""));
 
+export function aiQueueLine(q) {
+  if (!q) return "";
+  const st = q.state === "waiting" ? "warn" : q.state === "running" ? "ok" : "";
+  return `<div class="wmon ${st}" style="margin-bottom:10px"><b>AI analysis of discovered items:</b> ${q.done} analysed · ${q.pending} queued${q.failed ? ` · ${q.failed} failed` : ""}${q.state === "waiting" ? ` · <b>waiting for the AI server</b>: ${esc(String(q.reason || "").slice(0, 200))}. Items keep being collected and stored; the queue resumes by itself when the server answers.` : q.state === "running" ? " · AI server reachable" : ""}</div>`;
+}
 export function itemCard(it) {
   return `<div class="lpost" data-item="${it.id}">
     ${it.has_image ? `<img src="/api/monitor/items/${it.id}/image" alt="Image published with the item" loading="lazy">` : ""}
     <div class="lpb"><div class="row" style="gap:6px;flex-wrap:wrap">${chip(it.platform, "navy")}${chip(it.verification.label, VER[it.verification.status] || "grey")}
+      ${QCHIP[it.quality] ? chip(it.quality_label, QCHIP[it.quality]) : ""}${it.ai?.status === "done" && it.ai.result?.about_subject ? chip(...AIC[it.ai.result.about_subject]) : ""}
       ${it.duplicate_of ? chip("Same item found by another source", "grey") : ""}${it.origin === "own_page" ? chip("Own Page", "teal") : it.origin === "test" ? chip("Test data", "train") : ""}
       ${(it.analysis?.indicators || []).length ? chip("Misinformation indicators", "warn") : ""}</div>
       <p class="lmsg">${esc(it.text.slice(0, 420))}${it.text.length > 420 ? "…" : ""}</p>
       <div class="tiny sub">${esc(it.account || "source not named")} · published ${esc(dt(it.posted_at))} · found ${ago(it.collected_at)}
-        · ${it.matched_terms?.length ? `matched ${it.matched_terms.map(t => `“${esc(t)}”`).join(", ")}` : "matched by the source's own search (the keyword is in the full article or video)"}${(it.analysis?.themes || []).length ? ` · ${esc(it.analysis.themes.slice(0, 2).join(", "))}` : ""}</div>
+        · ${it.matched_terms?.length ? `matched ${it.matched_terms.map(t => `“${esc(t)}”`).join(", ")}` : "matched by the source's own search (the keyword is in the full article or video)"}${it.disambiguated_by?.length && it.quality === "contextual" ? ` with context ${it.disambiguated_by.slice(0, 4).map(t => `“${esc(t)}”`).join(", ")}` : ""}${(it.analysis?.themes || []).length ? ` · ${esc(it.analysis.themes.slice(0, 2).join(", "))}` : ""}</div>
+      ${aiLine(it)}
       <div class="row" style="gap:8px;flex-wrap:wrap">${it.url ? `<a class="btn sm ghost" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open original</a>` : ""}
-        ${it.verification.report_id ? `<a class="btn sm ghost" href="#/investigate/${esc(it.verification.investigation_id)}">Report ${esc(it.verification.report_id)}</a>` : App.can("case.create") ? `<button class="btn sm" data-verify="${it.id}">Verify</button>` : ""}</div></div></div>`;
+        ${it.verification.report_id ? `<a class="btn sm ghost" href="#/investigate/${esc(it.verification.investigation_id)}">Report ${esc(it.verification.report_id)}</a>` : App.can("case.create") ? `<button class="btn sm" data-verify="${it.id}">Verify</button>` : ""}
+        ${App.can("watch.triage") ? (it.watchlists || []).filter(w => w.quality === "ambiguous").map(w => `<button class="btn sm" data-rel="${w.id}:${it.id}:1" title="${esc(w.name)}">Relevant</button><button class="btn sm ghost" data-rel="${w.id}:${it.id}:0" title="${esc(w.name)}">Not relevant</button>`).join("") : ""}
+        ${it.ai?.status === "failed" && App.can("watch.triage") ? `<button class="btn sm ghost" data-airetry="${it.id}">Retry AI analysis</button>` : ""}</div></div></div>`;
+}
+// the AI reading of an item, or where it is in the queue (it waits while the organisation's AI server cannot be reached)
+function aiLine(it) {
+  const a = it.ai; if (!a) return "";
+  if (a.status === "done" && a.result) return `<div class="tiny airead"><b>AI reading (${esc(a.model || "")}):</b> ${esc(a.result.summary || "")}${a.result.about_reason ? ` <span class="sub">— ${esc(a.result.about_reason)}</span>` : ""}${a.result.tone ? ` · tone ${esc(a.result.tone)}` : ""}${a.result.claims?.length ? ` · ${a.result.claims.length} claim(s) quoted from the text` : ""}. <span class="sub">AI-supported, not a verification.</span></div>`;
+  if (a.status === "pending") return `<div class="tiny sub">AI analysis queued${a.error ? ` — ${esc(a.error.slice(0, 160))}` : ""}. The item is stored; it is analysed when the organisation's AI server answers.</div>`;
+  if (a.status === "failed") return `<div class="tiny sub">AI analysis failed after ${a.attempts} attempts: ${esc((a.error || "").slice(0, 160))}</div>`;
+  return "";
 }
 function wireVerify(root, again) {
   for (const im of $$(".lpost img", root)) im.addEventListener("error", () => im.remove(), { once: true });   // an image the source no longer serves is left out
+  for (const b of $$("[data-rel]", root)) b.onclick = async () => { const [w, p, rel] = b.dataset.rel.split(":"); b.disabled = true; try { await api.post(`/api/watch/lists/${w}/matches/${p}/review`, { relevant: rel === "1" }); toast(rel === "1" ? "Kept as relevant." : "Marked not relevant; hidden from results."); again(); } catch (e) { fail(e); b.disabled = false; } };
+  for (const b of $$("[data-airetry]", root)) b.onclick = async () => { b.disabled = true; try { await api.post(`/api/monitor/items/${b.dataset.airetry}/ai-retry`, {}); toast("Queued for AI analysis again."); again(); } catch (e) { fail(e); b.disabled = false; } };
   for (const b of $$("[data-verify]", root)) b.onclick = async () => { b.disabled = true; b.textContent = "Verifying…"; try { const r = await api.post(`/api/monitor/items/${b.dataset.verify}/verify`, {}); toast(`Verification started (${r.report_id || r.investigation_id}).`); setTimeout(again, 1500); } catch (e) { fail(e); b.disabled = false; b.textContent = "Verify"; } };
 }
 function filterBar(f, sourcesSeen) {
@@ -35,14 +56,16 @@ function filterBar(f, sourcesSeen) {
     <div><label class="f" for="kfs">Source</label><select id="kfs">${opt("", "All sources")}${GROUPS.filter(g => !sourcesSeen || sourcesSeen.includes(g)).map(g => opt(g, g, f.source)).join("")}</select></div>
     <div><label class="f" for="kff">From</label><input type="date" id="kff" value="${esc(f.from || "")}"></div><div><label class="f" for="kft">To</label><input type="date" id="kft" value="${esc(f.to || "")}"></div>
     <div><label class="f" for="kfq">Words</label><input id="kfq" value="${esc(f.q || "")}" placeholder="within the results"></div>
+    <div><label class="f" for="kfm">Show</label><select id="kfm">${opt("", "Genuine matches", f.quality)}${opt("engine", "Also found only by a platform's search", f.quality)}${opt("ambiguous", "Ambiguous keywords (analyst decides)", f.quality)}${opt("all", "Everything kept", f.quality)}</select></div>
     <div><label class="f" for="kfv">Verification</label><select id="kfv">${opt("", "Any")}${opt("not_verified", "Not verified yet", f.verification)}${opt("verified", "Sent for verification", f.verification)}</select></div>
     <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="kfd" ${f.hide_duplicates === "1" ? "checked" : ""}> Hide duplicates</label>
     <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="kfi" ${f.images === "1" ? "checked" : ""}> With images</label>
+    <label class="small" style="display:flex;gap:6px;align-items:center" title="The organisation's own Facebook Page is a separate source and is left out of monitoring results unless chosen here"><input type="checkbox" id="kfo" ${f.own === "1" ? "checked" : ""}> Include own Facebook Page</label>
     <button class="btn primary sm">Apply</button></div></form>`;
 }
 function readFilters(root, base, keep = {}) {
-  const p = new URLSearchParams(keep); for (const [k, s] of [["source", "#kfs"], ["from", "#kff"], ["to", "#kft"], ["q", "#kfq"], ["verification", "#kfv"]]) { const v = $(s, root).value; if (v) p.set(k, v); }
-  if ($("#kfd", root).checked) p.set("hide_duplicates", "1"); if ($("#kfi", root).checked) p.set("images", "1"); location.hash = `${base}${p.toString() ? `?${p}` : ""}`;
+  const p = new URLSearchParams(keep); for (const [k, s] of [["source", "#kfs"], ["from", "#kff"], ["to", "#kft"], ["q", "#kfq"], ["verification", "#kfv"], ["quality", "#kfm"]]) { const v = $(s, root).value; if (v) p.set(k, v); }
+  if ($("#kfd", root).checked) p.set("hide_duplicates", "1"); if ($("#kfi", root).checked) p.set("images", "1"); if ($("#kfo", root).checked) p.set("own", "1"); location.hash = `${base}${p.toString() ? `?${p}` : ""}`;
 }
 const groupsIn = rows => [...new Set(rows.map(r => /^News/.test(r.platform) ? "News" : r.platform === "X (Twitter)" ? "X" : r.platform))];
 
@@ -52,6 +75,7 @@ export async function overviewView(body, ownPage) {
   const fig = (v, l, h, cls = "") => `<a class="kpi ${cls}" href="${h}"><div class="l">${l}</div><div class="v">${Number(v).toLocaleString()}</div></a>`;
   body.innerHTML = `<div class="kpis">${fig(c.items, "items discovered", "#/live/discovered")}${fig(c.items_today, "found today", "#/live/discovered")}${fig(c.active_watchlists, "active watchlists", "#/live/watchlists")}
       ${fig(c.searches, "searches run", "#/live/search")}${fig(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${fig(c.verified, "items sent for verification", "#/live/discovered?verification=verified")}${fig(c.reports, "monitoring reports", "#/live/reports")}</div>
+    ${aiQueueLine(c.ai)}${c.ambiguous ? `<div class="wmon warn" style="margin-bottom:10px">${c.ambiguous} item(s) matched only an ambiguous keyword (such as CDF without military context) and wait for an analyst. <a href="#/live/discovered?quality=ambiguous">Decide</a></div>` : ""}
     <div class="grid g2"><div class="card"><div class="hd"><h3>Sources</h3><a class="small right" href="#/live/sources">Details</a></div><div class="bd small">
       ${Object.entries(o.by_category).map(([k, v]) => `<div class="row" style="justify-content:space-between">${chip(k, CAT[k] || "grey")}<b>${v}</b></div>`).join("")}
       <p class="tiny sub" style="margin-top:8px">Connected: ${esc(o.connected.join(", ") || "none yet")}. Collected items by platform: ${esc(o.by_platform.map(p => `${p.platform} ${p.n}`).join(", ") || "none yet")}.</p></div></div>
@@ -87,7 +111,7 @@ export async function searchView(body, id) {
 }
 async function runView(body, id) {
   const s = await api.get(`/api/monitor/searches/${id}`), f = qs();
-  const per = s.per_source.map(p => `<tr><td><b>${esc(p.label)}</b>${p.note ? `<div class="tiny sub">${esc(p.note.slice(0, 220))}</div>` : ""}</td><td>${chip(...(RUN[p.state] || [p.state, "grey"]))}</td><td>${p.fetched}</td><td>${p.matched}</td><td>${p.new}</td><td>${p.duplicates}</td><td class="tiny">${esc(p.error || "")}</td></tr>`).join("");
+  const per = s.per_source.map(p => `<tr><td><b>${esc(p.label)}</b>${p.note ? `<div class="tiny sub">${esc(p.note.slice(0, 220))}</div>` : ""}</td><td>${chip(...(RUN[p.state] || [p.state, "grey"]))}</td><td>${p.fetched}</td><td>${p.matched}${p.ambiguous ? `<div class="tiny sub">+${p.ambiguous} ambiguous</div>` : ""}${p.engine_only ? `<div class="tiny sub">+${p.engine_only} by the source's search only</div>` : ""}</td><td>${p.new}</td><td>${p.duplicates}</td><td class="tiny">${esc(p.error || "")}</td></tr>`).join("");
   body.innerHTML = `<div class="card"><div class="hd"><h3>${esc(s.query)}</h3>${chip(s.status === "running" ? "Searching…" : s.status === "done" ? "Finished" : "Failed", s.status === "done" ? "sup" : s.status === "running" ? "info" : "con")}</div><div class="bd small">
       <p>Searched for ${esc(s.description)}, from ${fmtDT(s.period_from)}${s.period_to ? ` to ${fmtDT(s.period_to)}` : " to now"}, by ${esc(s.created_by_name || "")}. ${s.results} item(s) found.${s.error ? ` <span class="sub">${esc(s.error)}</span>` : ""}</p>
       <table class="t"><thead><tr><th>Source</th><th>Result</th><th>Returned</th><th>Matching</th><th>New</th><th>Duplicates</th><th>Error</th></tr></thead><tbody>${per || `<tr><td colspan="7" class="sub">Searching the first source…</td></tr>`}</tbody></table>
@@ -96,7 +120,7 @@ async function runView(body, id) {
     <div id="kres" style="margin-top:12px"></div>`;
   if (s.status === "running") { const h = location.hash; setTimeout(() => { if (location.hash === h) runView(body, id); }, 1500); }
   const r = await api.get(`/api/monitor/searches/${id}/results?${new URLSearchParams({ ...f, limit: 200 })}`);
-  $("#kres", body).innerHTML = `${filterBar(f, groupsIn(r.by_source))}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.</p>${r.items.length ? `<div class="lposts">${r.items.map(itemCard).join("")}</div>` : s.status === "done" ? empty("No results", "None of the searched sources returned an item that matches. Nothing is shown that a source did not return.") : ""}`;
+  $("#kres", body).innerHTML = `${filterBar(f, groupsIn(r.by_source))}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.${!f.quality && (r.held?.ambiguous || r.held?.engine) ? ` Not shown: ${[r.held.ambiguous ? `<a href="#/live/search/${id}?quality=ambiguous">${r.held.ambiguous} matching only an ambiguous keyword</a>` : "", r.held.engine ? `<a href="#/live/search/${id}?quality=engine">${r.held.engine} found only by a platform's own search</a>` : ""].filter(Boolean).join(", ")}.` : ""}</p>${r.items.length ? `<div class="lposts">${r.items.map(itemCard).join("")}</div>` : s.status === "done" ? empty("No results", "None of the searched sources returned an item that matches. Nothing is shown that a source did not return.") : ""}`;
   $("#kf", body).onsubmit = e => { e.preventDefault(); readFilters(body, `#/live/search/${id}`); };
   wireVerify(body, () => runView(body, id));
   $("#krep", body)?.addEventListener("click", async e => { e.target.disabled = true; e.target.textContent = "Analysing…"; try { const rep = await api.post(`/api/monitor/searches/${id}/report`, {}); toast(`Report ${rep.report_id} drafted${rep.written_by === "ai" ? " with the AI model" : ""}.`); window.open(`/api/monitor/reports/${rep.id}/file.html`, "_blank", "noopener"); runView(body, id); } catch (x) { fail(x); e.target.disabled = false; } });
@@ -108,9 +132,10 @@ export async function discoveredView(body) {
   const f = qs(), [r, ov] = await Promise.all([api.get(`/api/monitor/feed?${new URLSearchParams({ ...f, limit: 150 })}`), api.get("/api/watch/overview").catch(() => ({ watchlists: [] }))]);
   const wls = ov.watchlists.filter(w => w.status === "active");
   body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><a class="btn sm ${!f.watchlist ? "primary" : "ghost"}" href="#/live/discovered">All watchlists and searches</a>${wls.map(w => `<a class="btn sm ${String(f.watchlist) === String(w.id) ? "primary" : "ghost"}" href="#/live/discovered?watchlist=${w.id}">${esc(w.name)}</a>`).join("")}</div>
-    ${filterBar(f, null)}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.</p>
+    <div id="kemerg"></div>${filterBar(f, null)}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.</p>
     ${r.items.length ? `<div class="lposts">${r.items.map(itemCard).join("")}</div>` : empty("Nothing discovered", "No item matches these filters. Run a search, or activate a watchlist so the sources are searched automatically.")}`;
   $("#kf", body).onsubmit = e => { e.preventDefault(); readFilters(body, "#/live/discovered", f.watchlist ? { watchlist: f.watchlist } : {}); };
+  if (f.watchlist) api.get(`/api/watch/lists/${f.watchlist}/emerging`).then(e => { const el = $("#kemerg", body); if (el && e.topics.length) el.innerHTML = `<div class="wmon warn" style="margin-bottom:10px"><b>Emerging in the last 6 hours:</b> ${e.topics.map(t => `${esc(t.topic)} (${t.items} items, ${t.sources} sources; usually ${t.usual})`).join(" · ")}</div>`; }).catch(() => {});
   wireVerify(body, () => discoveredView(body));
 }
 
@@ -143,6 +168,35 @@ async function editor(w, srcs) {
     onOpen: el => { const q = $("#we_q", el), p = $("#we_p", el), base = p.textContent; let t; q.oninput = () => { clearTimeout(t); t = setTimeout(async () => { const r = await api.post("/api/monitor/parse", { query: q.value }).catch(() => null); p.textContent = !q.value.trim() ? base : r?.ok ? `Looks for ${[r.parsed.terms.map(x => `“${x}”`).join(" or "), ...r.parsed.require_groups.map(g => `and ${g.map(x => `“${x}”`).join(" or ")}`), r.parsed.exclude.length ? `without ${r.parsed.exclude.map(x => `“${x}”`).join(", ")}` : ""].filter(Boolean).join(" ")}.` : r?.error || base; }, 300); }; } });
   async function check(el) { if (!$("#we_n", el).value.trim()) return "Give the watchlist a name."; if (!$$(".we_s:checked", el).length) return "Choose at least one source."; const r = await api.post("/api/monitor/parse", { query: $("#we_q", el).value }).catch(e => ({ ok: false, error: e.message })); return r.ok ? null : r.error; }
 }
+// ---------------------------------------------------------------- keyword manager: add, edit, delete, enable or disable each keyword
+async function keywordManager(w) {
+  const { modal } = await import("../ui.js"), d = w.definition, ctx = Object.fromEntries((d.contextual || []).map(c => [c.term.toLowerCase(), c]));
+  const rows = [...d.terms.map(t => ({ term: t, on: true })), ...(d.paused_terms || []).map(t => ({ term: t, on: false }))].map(r => ({ ...r, ctx: ctx[r.term.toLowerCase()] || null }));
+  const row = (r, i) => `<tr data-i="${i}"><td><input class="kw_t" value="${esc(r.term)}" style="width:100%" aria-label="Keyword"></td><td style="text-align:center"><input type="checkbox" class="kw_on" ${r.on ? "checked" : ""} aria-label="Enabled"></td>
+    <td style="text-align:center"><input type="checkbox" class="kw_c" ${r.ctx ? "checked" : ""} aria-label="Ambiguous: needs context"></td>
+    <td><input class="kw_r" value="${esc((r.ctx?.require || []).join(", "))}" style="width:100%" placeholder="context words, comma-separated" ${r.ctx ? "" : "disabled"}></td>
+    <td><input class="kw_x" value="${esc((r.ctx?.exclude || []).join(", "))}" style="width:100%" placeholder="words that show another meaning" ${r.ctx ? "" : "disabled"}></td><td><button type="button" class="btn sm ghost kw_del" aria-label="Delete keyword">✕</button></td></tr>`;
+  const body = `<p class="small sub" style="margin-top:0">Each line is matched without regard to capitals. Words may be written together, spaced or hyphenated (Air Force, Airforce, #KenyaAirForce), and Defence/Defense are treated alike; add other spellings or Kiswahili forms as their own keywords. A <b>#tag</b> line matches only the hashtag. Switch a keyword off to stop searching for it without losing it. Tick <b>Ambiguous</b> for abbreviations such as CDF: an item that matches only such keywords counts when one of its context words appears, never when a word shows another meaning, and otherwise waits for an analyst.</p>
+    <div style="overflow:auto"><table class="t kwt"><thead><tr><th style="min-width:180px">Keyword or phrase</th><th>On</th><th>Ambiguous</th><th style="min-width:200px">Counts only with</th><th style="min-width:200px">Not when it appears with</th><th></th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div>
+    <div class="row" style="gap:8px;margin-top:8px"><input id="kw_new" placeholder="Add a keyword, phrase or #hashtag (several: separate with commas)" style="flex:1"><button type="button" class="btn sm" id="kw_add">Add</button></div>
+    <label class="f" for="kw_ex">Exclude items containing (comma-separated)</label><input id="kw_ex" style="width:100%" value="${esc(d.exclude.join(", "))}">`;
+  const wire = el => {
+    const tb = $(".kwt tbody", el);
+    const hook = tr => { $(".kw_del", tr).onclick = () => tr.remove(); $(".kw_c", tr).onchange = e => { for (const x of $$(".kw_r, .kw_x", tr)) x.disabled = !e.target.checked; }; };
+    $$("tr", tb).forEach(hook);
+    $("#kw_add", el).onclick = () => { for (const t of $("#kw_new", el).value.split(",").map(x => x.trim()).filter(Boolean)) { tb.insertAdjacentHTML("beforeend", row({ term: t, on: true, ctx: null }, tb.rows.length)); hook(tb.lastElementChild); } $("#kw_new", el).value = ""; };
+    $("#kw_new", el).onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#kw_add", el).click(); } };
+  };
+  const read = el => {
+    const list = s => s.split(",").map(x => x.trim()).filter(Boolean), out = { terms: [], paused_terms: [], contextual: [], exclude: list($("#kw_ex", el).value) };
+    for (const tr of $$(".kwt tbody tr", el)) { const t = $(".kw_t", tr).value.trim(); if (!t) continue; (($(".kw_on", tr).checked) ? out.terms : out.paused_terms).push(t); if ($(".kw_c", tr).checked) out.contextual.push({ term: t, require: list($(".kw_r", tr).value), exclude: list($(".kw_x", tr).value) }); }
+    return out;
+  };
+  const check = el => { const v = read(el); if (!v.terms.length) return "Keep at least one keyword switched on (or pause the watchlist instead)."; const c = v.contextual.find(x => !x.require.length); return c ? `Give “${c.term}” at least one context word, or untick Ambiguous.` : null; };
+  const r = await modal(`Keywords: ${w.name}`, body, [{ label: "Cancel", value: null }, { label: "Save keywords", kind: "primary", validate: check, value: el => read(el) }], { wide: true, onOpen: wire });
+  if (!r.value) return null;
+  return api.patch(`/api/watch/lists/${w.id}/keywords`, r.value);
+}
 async function saveWatchlist(w, out) {
   const el = out.el, parsed = (await api.post("/api/monitor/parse", { query: $("#we_q", el).value })).parsed, sources = $$(".we_s:checked", el).map(i => i.value), iv = +$("#we_i", el).value;
   const definition = { ...(w?.definition || {}), terms: parsed.terms, require_groups: parsed.require_groups, exclude: parsed.exclude, sources, feeds: $("#we_f", el).value.split(/\s+/).filter(x => /^https?:\/\//.test(x)),
@@ -159,15 +213,17 @@ export async function watchlistsView(body) {
   const st = { active: "sup", draft: "grey", paused: "warn" }, manage = App.can("watch.manage");
   body.innerHTML = `<div class="row" style="gap:8px;margin-bottom:10px;align-items:center">${manage ? `<button class="btn primary sm" id="wNew">New watchlist</button>` : ""}<span class="small sub">A watchlist is a saved search that AIVS repeats automatically on its schedule and alerts on. ${manage ? "" : "Reviewers and administrators create, edit and activate watchlists."}</span></div>
     ${wls.length ? `<table class="t"><thead><tr><th>Watchlist</th><th>Status</th><th>Keywords</th><th>Sources</th><th>Items</th><th>Last match</th><th></th></tr></thead><tbody>${wls.map(w => `<tr data-w="${w.id}"><td><b>${esc(w.name)}</b></td><td>${chip(w.status, st[w.status] || "grey")}<div class="tiny sub" style="max-width:220px">${esc(whyNot(w, ready))}</div></td>
-      <td class="small">${esc(queryOf(w.definition)).slice(0, 220)}</td>
-      <td class="tiny">${w.definition.sources.map(k => `<span class="${ready.has(k) ? "" : "sub"}">${esc(k)}${ready.has(k) ? "" : " (not connected)"}</span>`).join(", ")}</td><td>${w.matches}</td><td class="small">${w.last_match_at ? ago(w.last_match_at) : "—"}</td>
-      <td><div class="row" style="gap:6px;flex-wrap:wrap">${manage ? `<button class="btn sm" data-act="edit">Edit</button>${w.status === "active" ? `<button class="btn sm ghost" data-act="pause">Pause</button>` : `<button class="btn sm primary" data-act="activate">Activate</button>`}` : ""}
+      <td class="small">${esc(queryOf(w.definition)).slice(0, 220)}${w.definition.paused_terms?.length ? `<div class="tiny sub">${w.definition.paused_terms.length} keyword(s) switched off</div>` : ""}${w.definition.contextual?.length ? `<div class="tiny sub">Ambiguous, need context: ${esc(w.definition.contextual.map(c => c.term).join(", "))}</div>` : ""}</td>
+      <td class="tiny">${w.definition.sources.map(k => `<span class="${ready.has(k) ? "" : "sub"}">${esc(k)}${ready.has(k) ? "" : " (not connected)"}</span>`).join(", ")}</td><td>${w.matches}${w.ambiguous ? `<div class="tiny"><a href="#/live/discovered?watchlist=${w.id}&quality=ambiguous">${w.ambiguous} ambiguous</a></div>` : ""}</td><td class="small">${w.last_match_at ? ago(w.last_match_at) : "—"}</td>
+      <td><div class="row" style="gap:6px;flex-wrap:wrap">${App.can("watch.keywords") ? `<button class="btn sm primary" data-act="keywords">Keywords</button>` : ""}${w.status === "active" && App.can("watch.triage") ? `<button class="btn sm" data-act="runnow">Search now</button>` : ""}${manage ? `<button class="btn sm" data-act="edit">Edit</button>${w.status === "active" ? `<button class="btn sm ghost" data-act="pause">Pause</button>` : `<button class="btn sm primary" data-act="activate">Activate</button>`}` : ""}
         <a class="btn sm ghost" href="#/live/discovered?watchlist=${w.id}">Items</a>${App.can("watch.triage") ? `<button class="btn sm ghost" data-act="report">Report (24 h)</button>` : ""}${manage ? `<button class="btn sm ghost" data-act="delete">Delete</button>` : ""}</div></td></tr>`).join("")}</tbody></table>`
       : empty("No watchlists", "Create one with New watchlist, or run a search and save it as a recurring watchlist.")}`;
   $("#wNew", body)?.addEventListener("click", async () => { const r = await editor(null, sx.sources); if (!r.value) return; try { await saveWatchlist(null, r.value); toast(r.value.activate ? "Watchlist saved and activated." : "Watchlist saved as a draft."); } catch (e) { fail(e); } watchlistsView(body); });
   for (const b of $$("[data-act]", body)) b.onclick = async () => {
     const id = +b.closest("[data-w]").dataset.w, w = wls.find(x => x.id === id), act = b.dataset.act;
     try {
+      if (act === "keywords") { const saved = await keywordManager(w); if (!saved) return; toast(w.status === "active" ? "Keywords saved. The watchlist keeps running and searches with them from its next run." : "Keywords saved."); }
+      if (act === "runnow") { const r = await api.post(`/api/watch/lists/${id}/run-all`, {}); toast(r.already ? "Already searching." : `Searching now: ${r.started.join(", ")}. New items appear in Discovered items.`); }
       if (act === "edit") { const r = await editor(w, sx.sources); if (!r.value) return; await saveWatchlist(w, r.value); toast(r.value.activate ? "Saved and activated." : "Saved. It stays a draft until activated."); }
       if (act === "activate") { await activate(id); toast("Activated: it now runs on its schedule."); }
       if (act === "pause") { await api.post(`/api/watch/lists/${id}/status`, { status: "paused" }); toast("Paused."); }

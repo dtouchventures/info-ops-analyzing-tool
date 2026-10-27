@@ -221,7 +221,19 @@ function mig17(db) {
     created_at TEXT NOT NULL, created_by INTEGER REFERENCES users(id), origin TEXT NOT NULL, search_id INTEGER REFERENCES monitor_searches(id), watchlist_id INTEGER REFERENCES watchlists(id), situation_json TEXT NOT NULL, report_json TEXT NOT NULL, written_by TEXT NOT NULL,
     reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT, approved_by INTEGER REFERENCES users(id), approved_at TEXT, approval_note TEXT);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// Migration 18 (1.28): how strongly each match is established (confirmed by a keyword, by a contextual keyword with its context,
+// ambiguous and held for an analyst, or found only by a source's own search engine), the analyst's decision on ambiguous matches,
+// and a queue for AI analysis of discovered items that waits while the organisation's Ollama server cannot be reached. Additive only.
+function mig18(db) {
+  const add = (t, c, def) => { if (!db.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
+  add("watch_matches", "quality", "TEXT");
+  add("watch_matches", "reviewed_by", "INTEGER REFERENCES users(id)");
+  add("watch_matches", "reviewed_at", "TEXT");
+  add("monitor_search_results", "quality", "TEXT");
+  for (const [c, d] of [["ai_status", "TEXT"], ["ai_attempts", "INTEGER NOT NULL DEFAULT 0"], ["ai_next_at", "TEXT"], ["ai_error", "TEXT"], ["ai_model", "TEXT"], ["ai_at", "TEXT"], ["ai_queued_at", "TEXT"]]) add("watch_post_analysis", c, d);
+  db.exec("CREATE INDEX IF NOT EXISTS watch_post_analysis_ai ON watch_post_analysis(ai_status, ai_next_at); CREATE INDEX IF NOT EXISTS watch_matches_quality ON watch_matches(watchlist_id, quality)");
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -36,7 +36,7 @@ export async function render(el, [tab = "overview", id = null] = []) {
   if (tab === "reports") return K.reportsView(body);
   if (App.training) { await overviewView(body); return; }
   const own = await api.get(`/api/live/overview?${q()}`).catch(() => null);
-  await K.overviewView(body, own ? `<div class="card" style="margin-top:12px"><div class="hd"><h3>Own Facebook Page (authorised source)</h3><a class="small right" href="#/live/posts">Open</a></div><div class="bd">${statusLine(own)}<p class="tiny sub" style="margin:6px 0 0">${own.counts.total_posts} post(s) collected from the organisation's own Page. This is one source among others, not a search of Facebook.</p></div></div>` : "");
+  await K.overviewView(body, own ? `<div class="card" style="margin-top:12px"><div class="hd"><h3>Own Facebook Page (authorised source)</h3><a class="small right" href="#/live/posts">Open</a></div><div class="bd">${statusLine(own)}<p class="tiny sub" style="margin:6px 0 0">${own.counts.total_posts} post(s) collected from the organisation's own Page. This is a separate source: its posts and alerts are kept out of the keyword monitoring results above. <a href="#/live/alerts?scope=own_page">Own Page alerts</a>.</p></div></div>` : "");
 }
 
 export function statusLine(o) {
@@ -114,10 +114,16 @@ async function postView(body, id) {
         ${d.metrics.length ? `<p class="tiny sub">${d.metrics.length} later reading(s); latest ${dt(d.metrics[0].at)}.</p>` : ""}</div></div></div></div>`;
 }
 
+// watchlist alerts (keyword monitoring) first; the organisation's own Facebook Page has its alerts apart
 async function alertsView(body) {
-  const f = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")), st = f.status ?? "new,acknowledged,escalated";
-  const r = await api.get(`/api/live/alerts?${q(new URLSearchParams({ group: "1", status: st, ...(f.priority ? { priority: f.priority } : {}), limit: 300 }).toString())}`);
-  body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${[["new,acknowledged,escalated", "Open"], ["new", "New"], ["escalated", "Escalated"], ["dismissed", "Dismissed"], ["", "All"]].map(([v, l]) => `<a class="btn sm ${st === v ? "primary" : "ghost"}" href="#/live/alerts?status=${v}">${l}</a>`).join("")}</div>
+  const f = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")), st = f.status ?? "new,acknowledged,escalated", scope = f.scope === "own_page" ? "own_page" : "watchlists";
+  const [r, wa] = await Promise.all([api.get(`/api/live/alerts?${q(new URLSearchParams({ group: "1", status: st, scope, ...(f.priority ? { priority: f.priority } : {}), limit: 300 }).toString())}`),
+    scope === "watchlists" && !App.training ? api.get(`/api/watch/alerts?status=${st.includes("dismissed") && !st.includes("new") ? "dismissed" : st === "" ? "" : "open"}&limit=60`).catch(() => null) : null]);
+  const KL = { match: "Keyword match", volume: "Unusual volume", narrative: "Emerging topic", repeated: "Repeated wording", coordination: "Coordination indicator", engagement: "Unusual engagement", threshold: "Threshold" };
+  const watchList = wa ? `<div class="card" style="margin-bottom:12px"><div class="hd"><h3>Watchlist alerts</h3><a class="small right" href="#/watch/alerts">Work all watchlist alerts</a></div><div class="bd">${wa.alerts.length ? `<ul class="mini">${wa.alerts.map(a => `<li>${chip(a.status, a.status === "new" ? "con" : "grey")}${chip(a.severity || "low", a.severity === "high" ? "con" : a.severity === "medium" ? "warn" : "grey")}<a class="small" style="flex:1" href="#/watch/alerts/${a.id}">${esc(KL[a.kind] || a.kind)}: ${esc((a.title || "").slice(0, 140))}</a><span class="tiny sub">${esc(a.watchlist_name || "")} · ${dt(a.created_at)}</span></li>`).join("")}</ul>` : `<p class="sub" style="margin:0">No open watchlist alert.</p>`}</div></div>` : "";
+  body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:6px"><a class="btn sm ${scope === "watchlists" ? "primary" : "ghost"}" href="#/live/alerts">Watchlist alerts</a><a class="btn sm ${scope === "own_page" ? "primary" : "ghost"}" href="#/live/alerts?scope=own_page">Own Facebook Page alerts</a></div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${[["new,acknowledged,escalated", "Open"], ["new", "New"], ["escalated", "Escalated"], ["dismissed", "Dismissed"], ["", "All"]].map(([v, l]) => `<a class="btn sm ${st === v ? "primary" : "ghost"}" href="#/live/alerts?status=${v}${scope === "own_page" ? "&scope=own_page" : ""}">${l}</a>`).join("")}</div>
+    ${watchList}${scope === "watchlists" ? `<h3 style="margin:6px 0">Findings across watchlist items</h3>` : `<p class="tiny sub">Alerts about the organisation's own Page. They are kept out of the keyword monitoring results.</p>`}
     ${r.groups.length ? r.groups.map(g => `<div class="card lgroup"><div class="hd">${chip(PRI[g.top_priority][0], PRI[g.top_priority][1])}<h3>${esc(g.kind_label)}${g.alerts.length > 1 ? ` · ${g.alerts.length} related alerts` : ""}</h3></div><div class="bd">
       ${g.alerts.map(a => `<div class="lalert ${String(a.id) === f.id ? "focus" : ""}" data-id="${a.id}"><div class="row" style="gap:6px;flex-wrap:wrap">${chip(AST[a.status][0], AST[a.status][1])}${chip(PRI[a.priority][0], PRI[a.priority][1])}<b style="flex:1">${esc(a.title)}</b><span class="tiny sub">${dt(a.created_at)}</span></div>
         <p class="small">${esc(a.reason)}</p><p class="tiny sub"><b>Why this priority:</b> ${esc(a.priority_reasons.join("; "))}. <i>${esc(a.detail.priority_rule || "")}</i></p>

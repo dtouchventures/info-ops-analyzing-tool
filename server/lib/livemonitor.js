@@ -395,8 +395,10 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
     return 0;
   }
   const alertRow = a => a && ({ ...a, kind_label: KIND_LABEL[a.kind] || a.kind, priority_reasons: J(a.priority_reasons_json) || [], detail: J(a.detail_json) || {}, priority_reasons_json: undefined, detail_json: undefined });
-  function alerts({ status = "", priority = "", kind = "", training = 0, limit = 100, group = false } = {}) {
+  function alerts({ status = "", priority = "", kind = "", training = 0, limit = 100, group = false, scope = "" } = {}) {
     let q = "SELECT a.*, s.name source_name, s.external_id FROM live_alerts a LEFT JOIN social_sources s ON s.id = a.source_id WHERE a.is_training = ?"; const args = [training ? 1 : 0];
+    // watchlist findings (keyword monitoring) and the organisation's own Page are kept apart
+    if (scope === "watchlists") q += " AND a.group_key LIKE 'watchlist:%'"; else if (scope === "own_page") q += " AND coalesce(a.group_key,'') NOT LIKE 'watchlist:%'";
     for (const [k, v, allowed] of [["a.status", status, ["new", "acknowledged", "dismissed", "escalated"]], ["a.priority", priority, ["low", "medium", "high"]], ["a.kind", kind, Object.keys(KIND_LABEL)]]) {
       const vals = String(v || "").split(",").filter(x => allowed.includes(x)); if (vals.length) { q += ` AND ${k} IN (${vals.map(() => "?").join(",")})`; args.push(...vals); } }
     q += " ORDER BY CASE a.status WHEN 'new' THEN 0 WHEN 'escalated' THEN 1 WHEN 'acknowledged' THEN 2 ELSE 3 END, CASE a.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, a.created_at DESC LIMIT ?"; args.push(Math.min(500, +limit || 100));

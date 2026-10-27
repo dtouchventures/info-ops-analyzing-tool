@@ -39,6 +39,11 @@ const server = app.listen(config.port, config.host, () => {
   ctx.transcriber.resume();
   ctx.watchCollector.start();
   ctx.live.start();
+  // the default KDF watchlist is created once (then edited from the dashboard); AI analysis of discovered items runs from a queue
+  // that waits while the Ollama server cannot be reached; emerging topics are checked every 10 minutes
+  try { const d = ctx.keywords.ensureDefault(ctx.live.systemUser()); if (d) console.log(`  Default watchlist “KDF and Kenya Defence Forces Monitoring”: ${d.status}`); } catch (e) { console.warn("[monitor] default watchlist:", e.message); }
+  setInterval(() => ctx.keywords.aiTick().catch(e => console.warn("[monitor] AI queue:", e.message)), 60e3).unref();
+  setInterval(() => { try { ctx.keywords.emergingTick(); } catch (e) { console.warn("[monitor] emerging topics:", e.message); } }, 10 * 60e3).unref();
   // a daily draft monitoring report for each active watchlist with new items (07:00 EAT by default)
   setInterval(() => ctx.keywords.daily(ctx.live.systemUser(), Number(process.env.MONITOR_DAILY_REPORT_HOUR || 7)).catch(e => console.warn("[monitor] daily report:", e.message)), 10 * 60e3).unref();
   { const o = ctx.live.overview(); console.log(`  Live Facebook monitoring: ${o.facebook.configured ? `${o.sources.filter(x => x.platform === "facebook" && x.enabled).length} Page(s), every ${o.scheduler.interval_minutes} min` : "off (META_PAGE_ACCESS_TOKEN not set)"} · Instagram: ${o.instagram.status}`); }

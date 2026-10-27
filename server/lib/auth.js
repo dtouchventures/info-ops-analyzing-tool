@@ -17,6 +17,7 @@ export const PERMISSIONS = {
   "ai.request":      { roles: ["admin", "reviewer", "analyst"], label: "Send case content to the configured AI service" },
   "io.import":       { roles: ["admin", "reviewer", "analyst"], label: "Import and analyse post datasets in the information operations monitor" },
   "watch.manage":    { roles: ["admin", "reviewer"], label: "Create, preview, activate and pause mention watchlists (activating starts paid or quota-limited collection)" },
+  "watch.keywords":  { roles: ["admin", "reviewer", "analyst"], label: "Add, edit, delete, enable and disable the keywords of watchlists (an active watchlist keeps running with the new keywords)" },
   "watch.triage":    { roles: ["admin", "reviewer", "analyst"], label: "Work the mention alert queue: acknowledge, dismiss, assign to self, convert to a case" },
   "archive.manage":  { roles: ["admin", "reviewer"], label: "Add and edit reference archive records" },
   "audit.read":      { roles: ["admin", "reviewer"], label: "Read the full audit log" },

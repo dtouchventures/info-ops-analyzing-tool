@@ -577,6 +577,37 @@ export function createApp(config) {
     const notReady = st === "active" ? wl.definition.sources.filter(s => !watchCollector.sourcesReady(s)) : [];
     res.json({ status: wl.status, not_connected: notReady.map(s => WATCH_SOURCES[s].label), datasets });
   }));
+  // keywords only: administrators and analysts change them at any time; an active watchlist keeps running with the new keywords
+  api.patch("/watch/lists/:id/keywords", requirePerm("watch.keywords"), h((req, res) => {
+    const wl = watch.get(req.params.id), b = req.body || {};
+    if (wl.deleted_at) throw new HttpError(404, "Watchlist not found.");
+    const def = { ...wl.definition, terms: b.terms ?? wl.definition.terms, paused_terms: b.paused_terms ?? wl.definition.paused_terms ?? [], contextual: b.contextual ?? wl.definition.contextual ?? [], exclude: b.exclude ?? wl.definition.exclude };
+    const wasActive = wl.status === "active", r = watch.update(req.user, wl.id, { definition: def });
+    if (wasActive && r.returned_to_draft) {
+      const cur = watch.get(wl.id), m = db.prepare("SELECT text FROM watch_posts ORDER BY id DESC LIMIT 3000").all().filter(p => matchPost(cur.definition, p).matched).length;
+      watch.recordPreview(req.user, wl.id, { local: { checked: 3000, matched: m }, live: null, note: "keywords changed from the keyword manager" });
+      watch.setStatus(req.user, wl.id, "active", s => s === "fb_live" ? !!config.live?.pageToken : watchCollector.sourcesReady(s)); watchCollector.ensureStream();
+    }
+    // the next scheduled run of every source uses the new keywords straight away and looks back over the whole look-back period
+    // (X keeps its position: its search is paid per post); items already stored are not stored twice
+    if (wasActive) db.prepare("UPDATE watch_source_state SET next_run_at = NULL, cursor = CASE WHEN source = 'x_search' THEN cursor ELSE NULL END, cursor_time = CASE WHEN source = 'x_search' THEN cursor_time ELSE NULL END WHERE watchlist_id = ?").run(wl.id);
+    res.json({ ...watch.get(wl.id), definition_json: undefined, preview_json: undefined });
+  }));
+  // run every connected source of a watchlist now (in the background); results arrive in Discovered items
+  const runningAll = new Set();
+  api.post("/watch/lists/:id/run-all", requirePerm("watch.triage"), h(async (req, res) => {
+    const wl = watch.get(req.params.id); if (wl.status !== "active") throw new HttpError(409, "Activate the watchlist first.");
+    if (runningAll.has(wl.id)) return res.status(202).json({ already: true });
+    const srcs = wl.definition.sources.filter(s => WATCH_SOURCES[s]?.mode === "poll" && watchCollector.sourcesReady(s));
+    if (!srcs.length) throw new HttpError(409, "None of this watchlist's sources is connected.");
+    audit(req.user, "Watchlist searched now", "watchlist", String(wl.id), { sources: srcs }); runningAll.add(wl.id);
+    (async () => { try { for (const s of srcs) await watchCollector.runSource(watch.get(wl.id), s, { kind: "manual" }); watch.checkVolume(watch.get(wl.id)); keywords.emergingTick(); } catch (e) { console.warn("[watch] run now:", e.message); } finally { runningAll.delete(wl.id); } })();
+    res.status(202).json({ started: srcs });
+  }));
+  api.get("/watch/lists/:id/run-all", (req, res) => res.json({ running: runningAll.has(+req.params.id) }));
+  // an analyst decides a match held because of an ambiguous keyword
+  api.post("/watch/lists/:id/matches/:post/review", requirePerm("watch.triage"), h((req, res) => res.json(watch.reviewMatch(req.user, req.params.id, req.params.post, req.body?.relevant === true, req.body?.note))));
+  api.get("/watch/lists/:id/emerging", (req, res) => res.json({ topics: keywords.emerging(+req.params.id) }));
   api.post("/watch/lists/:id/run", requirePerm("watch.manage"), h(async (req, res) => {
     const wl = watch.get(req.params.id), src = req.body?.source;
     if (wl.status !== "active") throw new HttpError(409, "Activate the watchlist first.");
@@ -1182,6 +1213,9 @@ export function createApp(config) {
   api.post("/monitor/searches/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { searchId: +req.params.id }))));
   api.post("/monitor/watchlists/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { watchlistId: +req.params.id, hours: Math.min(720, Math.max(1, +req.body?.hours || 24)) }))));
   api.get("/monitor/feed", (req, res) => res.json(keywords.feed(req.query)));
+  api.get("/monitor/ai", (req, res) => res.json(keywords.aiQueueCounts()));
+  api.post("/monitor/items/:id/ai-retry", requirePerm("watch.triage"), h((req, res) => res.json(keywords.retryAi(req.user, +req.params.id))));
+  api.get("/monitor/contextual", (req, res) => res.json({ contextual: [...keywords.contextualLibrary().values()] }));
   api.get("/monitor/items/:id", (req, res) => res.json(keywords.item(req.params.id)));
   api.get("/monitor/items/:id/image", h(async (req, res) => { const im = await keywords.image(req.params.id); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, max-age=3600"); res.type(im.mime).send(im.buf); }));
   api.post("/monitor/items/:id/verify", requirePerm("case.create"), h((req, res) => res.status(202).json(keywords.verify(req.user, req.params.id))));

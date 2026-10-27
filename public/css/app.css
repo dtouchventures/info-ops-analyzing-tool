@@ -498,3 +498,7 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .ksource { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; background: var(--surface); }
 .ksource .tiny { flex-basis: 100%; } .ksource.off { opacity: .65; }
 .chip.navy { white-space: nowrap; }
+/* 1.28: AI reading of a discovered item; keyword manager */
+.airead { margin: 4px 0; padding: 6px 8px; border-left: 3px solid var(--teal, #0a7c86); background: rgba(10, 124, 134, .06); border-radius: 4px; }
+.kwt td { vertical-align: middle; }
+.kwt input[type="text"], .kwt input:not([type]) { min-width: 0; }

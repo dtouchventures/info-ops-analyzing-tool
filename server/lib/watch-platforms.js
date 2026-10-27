@@ -24,16 +24,17 @@ import { nowISO } from "./db.js";
 
 const strip = h => String(h || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, m => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&apos;": "'", "&nbsp;": " " }[m])).replace(/\n{3,}/g, "\n\n").trim();
 const n = v => (v == null || v === "" ? null : Number(v));
+const queryTerms = def => { const c = new Set((def.contextual || []).map(x => x.term.toLowerCase())), firm = def.terms.filter(t => !c.has(t.toLowerCase())); return firm.length ? firm : def.terms; };   // as in watch.js
 // one search string per term (hashtags without #), duplicates removed; phrases quoted
 export function termQueries(def) {
   const seen = new Map();
-  for (const t of def.terms) { const bare = t.replace(/^#/, "").trim(), k = bare.toLowerCase(); if (!seen.has(k)) seen.set(k, { q: /\s/.test(bare) ? `"${bare}"` : bare, bare, tag: t.startsWith("#") }); else if (t.startsWith("#")) seen.get(k).tag = true; }
+  for (const t of queryTerms(def)) { const bare = t.replace(/^#/, "").trim(), k = bare.toLowerCase(); if (!seen.has(k)) seen.set(k, { q: /\s/.test(bare) ? `"${bare}"` : bare, bare, tag: t.startsWith("#") }); else if (t.startsWith("#")) seen.get(k).tag = true; }
   return [...seen.values()];
 }
 // hashtags a platform can follow: written hashtags, single words, and phrases joined up (Kenya Defence Forces -> KenyaDefenceForces)
 export function termTags(def) {
   const out = new Map();
-  for (const t of def.terms) { const tag = t.replace(/^#/, "").split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}_]/gu, "")).filter(Boolean).map((w, i, a) => (a.length > 1 ? w[0].toUpperCase() + w.slice(1) : w)).join(""); if (tag.length >= 2 && tag.length <= 100) out.set(tag.toLowerCase(), tag); }
+  for (const t of queryTerms(def)) { const tag = t.replace(/^#/, "").split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}_]/gu, "")).filter(Boolean).map((w, i, a) => (a.length > 1 ? w[0].toUpperCase() + w.slice(1) : w)).join(""); if (tag.length >= 2 && tag.length <= 100) out.set(tag.toLowerCase(), tag); }
   return [...out.values()];
 }
 export function redditQueries(def, max = 480) {

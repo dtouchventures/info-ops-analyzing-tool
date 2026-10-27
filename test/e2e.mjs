@@ -781,7 +781,7 @@ let watchDead = [], watchSeen = 0;
   await p.goto(SL.base); await p.fill("#lu", "rev"); await p.fill("#lp", PW); await p.click("#lb"); await p.waitForSelector(".shell");
   await p.goto(SL.base + "/#/home"); await p.waitForSelector("#liveDash .kpi");
   const dash = await p.textContent("#liveDash");
-  check("the dashboard shows the Facebook connection, last synchronisation and real database figures", /Facebook: Connected/.test(dash) && /last successful synchronisation/.test(dash) && (await p.textContent('#liveDash [data-fig="own Page posts"] .v')) === "2" && (await p.textContent('#liveDash [data-fig="awaiting AI analysis"] .v')) === "0" && /Instagram: Not connected/.test(dash) && /Public information monitoring/.test(dash), dash.slice(0, 300));
+  check("the dashboard shows the Facebook connection, last synchronisation and real database figures", /Facebook: Connected/.test(dash) && /last successful synchronisation/.test(dash) && /Own Facebook Page \(a separate source, not part of these results\): 2 post\(s\) · 0 awaiting AI analysis/.test(dash.replace(/\s+/g, " ")) && /Instagram: Not connected/.test(dash) && /Public information monitoring/.test(dash), dash.slice(0, 300));
   await shot(p, "46a-live-dashboard");
   await p.goto(SL.base + "/#/live/posts"); await p.waitForSelector(".lpost img");
   await p.waitForFunction(() => [...document.querySelectorAll(".lpost img")].every(i => i.complete && i.naturalWidth > 0));
