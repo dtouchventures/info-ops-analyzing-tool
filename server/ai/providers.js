@@ -93,8 +93,15 @@ function ollamaNative() {
     async health(cfg, { timeoutMs }) {
       // listing models needs no model to load, so no answer here means the server cannot be reached (network, VPN or firewall)
       let tags; const t0 = Date.now();
-      try { tags = await ollamaCall(cfg, "/api/tags", null, Math.min(10000, timeoutMs)); }
-      catch (e) { if (/did not answer within/.test(e.message)) throw new Error(`The Ollama server ${ollamaBase(cfg)} did not answer a simple request within 10 s, so this computer cannot reach it at the moment. Check the VPN or network connection, then press Check connection (AIVS also checks again by itself).`); throw e; }
+      // a busy network or a computer still starting up can delay the first answer, so allow AI_CONNECT_TIMEOUT_MS (30 s) and try twice
+      const wait = Math.min(cfg.connectTimeoutMs || 30000, timeoutMs);
+      for (let i = 0; ; i++) {
+        try { tags = await ollamaCall(cfg, "/api/tags", null, wait); break; }
+        catch (e) {
+          if (!/did not answer within/.test(e.message)) throw e;
+          if (i >= 1) throw new Error(`The Ollama server ${ollamaBase(cfg)} did not answer a simple request (list of models) within ${Math.round(wait / 1000)} s, twice, so this computer cannot reach it at the moment. Check the VPN or network connection, then press Check connection (AIVS also checks again by itself). To test from this computer: npm run check:ai`);
+        }
+      }
       const names = (tags.models || []).map(m => m.name), found = names.find(n => n === cfg.model || n === `${cfg.model}:latest` || n.replace(/:latest$/, "") === cfg.model);
       if (!found) throw Object.assign(new Error(`The model “${cfg.model}” is not installed on the Ollama server. Installed: ${names.slice(0, 8).join(", ") || "none"}. On the server run: ollama pull ${cfg.model}`), { models: names });
       const g = await ollamaCall(cfg, "/api/chat", { model: cfg.model, stream: false, keep_alive: cfg.keepAlive || "30m", options: { temperature: 0, num_predict: 8, num_ctx: cfg.numCtx || 8192 }, messages: [{ role: "user", content: "Reply with the single word OK." }] }, timeoutMs);

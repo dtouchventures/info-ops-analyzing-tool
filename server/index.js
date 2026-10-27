@@ -44,7 +44,13 @@ const server = app.listen(config.port, config.host, () => {
   { const o = ctx.live.overview(); console.log(`  Live Facebook monitoring: ${o.facebook.configured ? `${o.sources.filter(x => x.platform === "facebook" && x.enabled).length} Page(s), every ${o.scheduler.interval_minutes} min` : "off (META_PAGE_ACCESS_TOKEN not set)"} · Instagram: ${o.instagram.status}`); }
   { const w = ctx.watchCollector.status(), act = ctx.watch.list().filter(x => x.status === "active").length; console.log(`  Mention watch: ${act} active watchlist(s); X search ${w.sources.find(s => s.key === "x_search").state}, X stream ${w.sources.find(s => s.key === "x_stream").state}, YouTube ${w.sources.find(s => s.key === "youtube").state}`); }
   if (config.transcribe?.url) ctx.transcriber.checkHealth({ force: true }).then(h => console.log(`  Speech-to-text: ${h.state === "ok" ? `available (${h.engine} ${h.model}, ${h.cpu_threads} threads)` : h.state}${h.error ? ` — ${h.error}` : ""}`)).catch(() => {});
-  if (config.ai.provider) ctx.ai.health({ force: true }).then(h => console.log(`  AI (${config.ai.provider}, ${config.ai.model}): ${h.state === "ok" ? `available, answered in ${h.latency_ms} ms` : h.state}${h.error ? ` — ${h.error}` : ""}`)).catch(() => {});
+  if (config.ai.provider) {
+    const say = h => console.log(`  AI (${config.ai.provider}, ${config.ai.model}): ${h.state === "ok" ? `available, answered in ${h.latency_ms} ms` : h.state}${h.error ? ` — ${h.error}` : ""}`);
+    ctx.ai.health({ force: true }).then(say).catch(() => {});
+    // while the AI is unreachable, check again every 2 minutes and say so when it answers
+    let last = null;
+    setInterval(() => { const st = ctx.ai.status().health?.state; if (st === "ok" && last === "ok") return; ctx.ai.health({ force: st !== "ok" }).then(h => { if (h.state !== last && (h.state === "ok" || last === "ok")) say(h); last = h.state; }).catch(() => {}); }, 120e3).unref();
+  }
   if (!config.backupDisabled) console.log(`Backups: daily, kept in ${admin.backupDir()}`);
   const ai = ctx.ai.status();
   console.log(ai.configured ? `AI assistance: ${ai.provider} / ${ai.model}` : `AI assistance: ${ai.reason}`);

@@ -1,6 +1,6 @@
 {
   "name": "aivs",
-  "version": "1.27.1",
+  "version": "1.27.2",
   "private": true,
   "description": "AIVS \u2014 Information Verification and Evidence Assistant (KDF Information Operations pilot)",
   "type": "module",
@@ -25,7 +25,8 @@
     "check:facebook": "node scripts/check-facebook.js",
     "meta:token": "node scripts/meta-token.js",
     "check:search": "node scripts/check-search.js",
-    "check:verify-facebook": "node scripts/check-verify-facebook.js"
+    "check:verify-facebook": "node scripts/check-verify-facebook.js",
+    "check:ai": "node scripts/check-ai.js"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",

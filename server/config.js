@@ -44,6 +44,7 @@ export const config = {
     numCtx: int(env.AI_NUM_CTX, 8192),                  // Ollama context window in tokens (more = longer case material, more memory on the server)
     keepAlive: env.AI_KEEP_ALIVE || "30m",               // how long Ollama keeps the model loaded between questions
     healthTimeoutMs: int(env.AI_HEALTH_TIMEOUT_MS, 120000),
+    connectTimeoutMs: int(env.AI_CONNECT_TIMEOUT_MS, 30000),   // waiting for the Ollama server to answer the model list in the health check
     allowRemote: env.AI_ALLOW_REMOTE === "true"          // Ollama on a public address is refused unless this is set
   },
   // Verify Information may retrieve public web pages; private and local addresses are always refused
