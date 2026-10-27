@@ -302,5 +302,60 @@ export function makePlatforms({ request, withRetry, usage, config, W, svc, versi
       return { rows, requests: 1, pages: 1, stopped: null, cursor: String(maxId) };
     }
   };
-  return { reddit, bluesky: bsky, mastodon, threads, instagram, facebook, tiktok, telegram };
+  // ---------------------------------------------------------------- news search APIs (keyword discovery across news sites)
+  const S = { gdelt: true, gdeltBase: "https://api.gdeltproject.org", braveKey: "", braveBase: "https://api.search.brave.com", ...(config.search || {}) };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // the other keyword groups (all must match) and the exclusions, in the search engines' own syntax
+  const qt = t => { const b = t.replace(/^#/, "").trim(); return /\s/.test(b) ? `"${b}"` : b; };
+  const extra = def => [...(def.require_groups || []).map(g => g.length > 1 ? `(${g.map(qt).join(" OR ")})` : qt(g[0])), ...def.exclude.filter(x => !/^\./.test(x)).slice(0, 10).map(x => `-${qt(x)}`)].join(" ");
+  const gdeltTime = iso => new Date(iso).toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const fromGdelt = s => { const m = /^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})/.exec(String(s || "")); return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : null; };
+  // GDELT DOC 2.0: a free, keyless index of worldwide online news (headline, link, date, site, image). One request per 5 s.
+  const gdelt = {
+    label: "GDELT news search (worldwide online news index, scheduled)", platform: "News (GDELT)", interval: [30, 15, 1440],
+    ready: () => S.gdelt ? { state: "ready" } : { state: "disabled", needs: "SEARCH_GDELT=true (on by default; no key)" },
+    limits: "Free, no key. Indexes online news worldwide within about 15–60 minutes of publication. Returns the headline, link, date, site and main image, not the article text. At most one request every 5 seconds; up to 250 results per request.",
+    async search(def, { from }) {
+      const rows = [], out = { requests: 0, pages: 0, stopped: null };
+      const qs = (() => { const parts = termQueries(def).filter(t => t.bare.length >= 3).map(t => t.q), o = []; let cur = []; for (const p of parts) { if ([...cur, p].join(" OR ").length > 220 && cur.length) { o.push(cur); cur = []; } cur.push(p); } if (cur.length) o.push(cur); return o.map(c => [c.length > 1 ? `(${c.join(" OR ")})` : c[0], extra(def)].filter(Boolean).join(" ")); })();
+      if (!qs.length) { out.stopped = "no term of 3 or more characters to search for"; return { rows, ...out }; }
+      for (const [i, q] of qs.slice(0, 4).entries()) {
+        if (i) await sleep(W.gdeltPauseMs ?? 5500);
+        const u = new URL(`${S.gdeltBase.replace(/\/$/, "")}/api/v2/doc/doc`);
+        for (const [k, v] of Object.entries({ query: q, mode: "artlist", format: "json", maxrecords: "100", sort: "datedesc", startdatetime: gdeltTime(from || new Date(Date.now() - 864e5).toISOString()) })) u.searchParams.set(k, v);
+        const r = await withRetry(() => request(u)); out.requests++; out.pages++; usage.add("gdelt", "doc artlist", 1, "request", "ok");
+        for (const a of r.json.articles || []) {
+          if (!/^https?:\/\//.test(a.url || "")) continue;
+          rows.push({ platform: "News (GDELT)", post_id: a.url, account: a.domain || null, text: String(a.title || "").trim(), url: a.url, posted_at: fromGdelt(a.seendate), language: a.language ? String(a.language).slice(0, 2).toLowerCase() : null,
+            image_url: /^https?:\/\//.test(a.socialimage || "") ? a.socialimage : null, likes: null, comments: null, shares: null, views: null, collected_via: `GDELT DOC 2.0 news search ${q}` });
+        }
+      }
+      if (qs.length > 4) out.stopped = `only the first 4 of ${qs.length} term groups are searched each run`;
+      return { rows: rows.filter(r => r.text), ...out };
+    }
+  };
+  // Brave Search API, news endpoint (the same key as the evidence search)
+  const braveNews = {
+    label: "Brave News Search API (scheduled)", platform: "News (Brave)", interval: [60, 30, 1440],
+    ready: () => S.braveKey ? { state: "ready" } : { state: "not_configured", needs: "BRAVE_SEARCH_API_KEY (the same key as the evidence search)" },
+    limits: "Paid per request on Brave's plans. Returns headline, summary, link, site, age and thumbnail of recent news articles. One request per term group each run.",
+    async search(def) {
+      const rows = [], out = { requests: 0, pages: 0, stopped: null };
+      const parts = termQueries(def).map(t => t.q), groups = []; let cur = [];
+      for (const p of parts) { if ([...cur, p].join(" OR ").length > 300 && cur.length) { groups.push(cur); cur = []; } cur.push(p); } if (cur.length) groups.push(cur);
+      for (const g of groups.slice(0, 3)) {
+        const u = new URL(`${S.braveBase.replace(/\/$/, "")}/res/v1/news/search`); u.searchParams.set("q", [g.length > 1 ? `(${g.join(" OR ")})` : g[0], extra(def)].filter(Boolean).join(" ")); u.searchParams.set("count", "50"); u.searchParams.set("freshness", "pd");
+        const r = await withRetry(() => request(u, { headers: { "X-Subscription-Token": S.braveKey } })); out.requests++; out.pages++; usage.add("brave_api", "news search", 1, "request", "ok");
+        for (const a of r.json.results || []) {
+          if (!/^https?:\/\//.test(a.url || "")) continue;
+          const when = a.page_age ? new Date(a.page_age) : null;
+          rows.push({ platform: "News (Brave)", post_id: a.url, account: a.meta_url?.hostname || a.profile?.name || null, text: [strip(a.title), strip(a.description)].filter(Boolean).join(" — ").slice(0, 5000), url: a.url,
+            posted_at: when && !isNaN(when) ? when.toISOString() : null, language: null, image_url: /^https?:\/\//.test(a.thumbnail?.src || "") ? a.thumbnail.src : null, likes: null, comments: null, shares: null, views: null, collected_via: `Brave News Search “${g.join(" OR ").slice(0, 120)}”` });
+        }
+      }
+      if (groups.length > 3) out.stopped = `only the first 3 of ${groups.length} term groups are searched each run`;
+      return { rows, ...out };
+    }
+  };
+  return { reddit, bluesky: bsky, mastodon, threads, instagram, facebook, tiktok, telegram, gdelt, brave_news: braveNews };
 }

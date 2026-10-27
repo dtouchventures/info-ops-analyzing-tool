@@ -203,7 +203,25 @@ function mig16(db) {
   const cols = db.prepare("PRAGMA table_info(investigations)").all().map(c => c.name);
   if (!cols.includes("approved_by")) db.exec("ALTER TABLE investigations ADD COLUMN approved_by INTEGER REFERENCES users(id); ALTER TABLE investigations ADD COLUMN approved_at TEXT; ALTER TABLE investigations ADD COLUMN approval_note TEXT; ALTER TABLE investigations ADD COLUMN origin TEXT");
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// Migration 17 (1.27): keyword-based public information monitoring. Images of discovered items, the analysis of each
+// discovered item, and the monitoring reports (Background, Analysis, Assessment, Recommendations). Additive only.
+function mig17(db) {
+  const cols = db.prepare("PRAGMA table_info(watch_posts)").all().map(c => c.name);
+  if (!cols.includes("image_url")) db.exec("ALTER TABLE watch_posts ADD COLUMN image_url TEXT; ALTER TABLE watch_posts ADD COLUMN image_sha256 TEXT; ALTER TABLE watch_posts ADD COLUMN image_mime TEXT; ALTER TABLE watch_posts ADD COLUMN investigation_id TEXT REFERENCES investigations(id); ALTER TABLE watch_posts ADD COLUMN url_key TEXT");
+  db.exec(`
+  CREATE TABLE IF NOT EXISTS watch_post_analysis (post_id INTEGER PRIMARY KEY REFERENCES watch_posts(id), analysed_at TEXT NOT NULL, method TEXT NOT NULL, themes_json TEXT, sentiment TEXT, sentiment_json TEXT,
+    claims_json TEXT, entities_json TEXT, indicators_json TEXT, figures_json TEXT, ai_json TEXT);
+  CREATE INDEX IF NOT EXISTS watch_posts_urlkey ON watch_posts(url_key);
+  CREATE TABLE IF NOT EXISTS monitor_searches (id INTEGER PRIMARY KEY, query TEXT NOT NULL, definition_json TEXT NOT NULL, sources_json TEXT NOT NULL, period_from TEXT, period_to TEXT, max_per_source INTEGER NOT NULL,
+    is_training INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','done','failed')), created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, finished_at TEXT,
+    per_source_json TEXT, error TEXT, watchlist_id INTEGER REFERENCES watchlists(id), report_id INTEGER);
+  CREATE TABLE IF NOT EXISTS monitor_search_results (search_id INTEGER NOT NULL REFERENCES monitor_searches(id), post_id INTEGER NOT NULL REFERENCES watch_posts(id), source TEXT NOT NULL, terms_json TEXT,
+    is_new INTEGER NOT NULL, duplicate_of INTEGER REFERENCES watch_posts(id), PRIMARY KEY (search_id, post_id));
+  CREATE TABLE IF NOT EXISTS monitor_reports (id INTEGER PRIMARY KEY, report_id TEXT NOT NULL UNIQUE, is_training INTEGER NOT NULL DEFAULT 0, period_from TEXT NOT NULL, period_to TEXT NOT NULL,
+    created_at TEXT NOT NULL, created_by INTEGER REFERENCES users(id), origin TEXT NOT NULL, search_id INTEGER REFERENCES monitor_searches(id), watchlist_id INTEGER REFERENCES watchlists(id), situation_json TEXT NOT NULL, report_json TEXT NOT NULL, written_by TEXT NOT NULL,
+    reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT, approved_by INTEGER REFERENCES users(id), approved_at TEXT, approval_note TEXT);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

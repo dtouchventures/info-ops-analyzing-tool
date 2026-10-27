@@ -163,7 +163,7 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
   }
   const ytRow = (v, via) => { const s = v.snippet || {}, x = v.statistics || {}, n = k => (x[k] == null ? null : Number(x[k]));
     return { platform: "YouTube", post_id: v.id, account: s.channelTitle || s.channelId || null, text: [s.title, s.description].filter(Boolean).join(" — ").slice(0, 5000), url: `https://www.youtube.com/watch?v=${v.id}`,
-      posted_at: s.publishedAt || null, language: s.defaultAudioLanguage || s.defaultLanguage || null, likes: n("likeCount"), comments: n("commentCount"), shares: null, views: n("viewCount"), collected_via: via }; };
+      posted_at: s.publishedAt || null, image_url: s.thumbnails?.high?.url || s.thumbnails?.medium?.url || s.thumbnails?.default?.url || null, language: s.defaultAudioLanguage || s.defaultLanguage || null, likes: n("likeCount"), comments: n("commentCount"), shares: null, views: n("viewCount"), collected_via: via }; };
 
   // one scheduled run of one source for one watchlist
   async function runSource(wl, source, { kind = "scheduled" } = {}) {
@@ -405,6 +405,23 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
     }
     return out;
   }
+  // ------------------------------------------------------------ an immediate keyword search of one source (analyst-initiated; nothing stored here)
+  // Returns the platform's rows for the period, the requests made and any note; the caller matches, deduplicates and stores them.
+  async function fetchSource(def, source, { from, to = null, max = 50 } = {}) {
+    if (!sourcesReady(source)) { const st = sourceState(source); throw new ApiFailure("config", st.needs || `not available (${st.state})`, { state: st.state }); }
+    const fake = { id: 0, name: "search", definition: def }; let rows = [], note = null, requests = 0;
+    if (source === "x_search") {
+      if (xPostsToday() + max > W.xDailyPosts) throw new ApiFailure("config", "the daily X post limit would be exceeded");
+      const r = await xSearch(fake, { start_time: from && Date.now() - Date.parse(from) < 6.9 * 864e5 ? from : new Date(Date.now() - 6.9 * 864e5).toISOString(), end_time: to && Date.parse(to) < Date.now() - 15e3 ? to : null, maxPosts: Math.min(100, Math.max(10, max)), maxPages: 1 });
+      rows = r.rows; requests = r.requests; note = `X recent search covers only the last 7 days; about $${(r.rows.length * W.usdPerXPost).toFixed(3)} charged by X.`;
+    } else if (source === "youtube") { const r = await youtubeSearch(fake, { publishedAfter: from || new Date(Date.now() - 7 * 864e5).toISOString() }); rows = r.rows; requests = r.requests; note = r.stopped || "One YouTube search call (of the 100 a day)."; }
+    else if (source === "news") { const feeds = def.feeds.length ? def.feeds : String(C.rssFeeds || "").split(/[\s,]+/).filter(Boolean); if (!feeds.length) throw new ApiFailure("config", "no news feeds are named (add feed or site addresses, or set RSS_FEEDS)");
+      const n = await collectors.run.news({ feeds: feeds.join(" "), from, to, max: 500 }); rows = n.rows; requests = feeds.length; if (n.errors.length) note = `Some feeds failed: ${n.errors.join("; ").slice(0, 400)}`; if (n.errors.length === feeds.length && !rows.length) throw new ApiFailure("http", n.errors.join("; ").slice(0, 400)); }
+    else if (platforms[source]) { const r = await platforms[source].search(def, { from: from || new Date(Date.now() - 864e5).toISOString() }); rows = r.rows; requests = r.requests; note = r.stopped || null; }
+    else throw new ApiFailure("config", "this source cannot be searched on demand");
+    rows = rows.filter(r => r?.post_id && String(r.text || "").trim() && (!from || !r.posted_at || r.posted_at >= from) && (!to || !r.posted_at || r.posted_at <= to));
+    return { rows: rows.slice(0, Math.max(max, 1) * 4), requests, note };
+  }
   // ------------------------------------------------------------ the capability table with each connector's real state
   function lastSuccess(key) {
     if (key === "x_stream") { const x = svc.get("x_stream"); return x?.status === "connected" ? x.last_data_at || x.connected_at : x?.last_data_at || null; }
@@ -456,5 +473,5 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
     usage("whatsapp_webhook", "messages", out.messages, "messages", "ok");
     return out;
   }
-  return { status, start, stop, tick, resume, runSource, refreshMetrics, syncRules, validateRule, ensureStream, reconnect, sourcesReady, previewLive, liveCheck, whatsappWebhook, sourceLabel: k => WATCH_SOURCES[k]?.label || k, _stream: S };
+  return { status, start, stop, tick, resume, runSource, refreshMetrics, syncRules, validateRule, ensureStream, reconnect, sourcesReady, sourceState, fetchSource, previewLive, liveCheck, whatsappWebhook, sourceLabel: k => WATCH_SOURCES[k]?.label || k, _stream: S };
 }

@@ -463,5 +463,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     return inv;
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
-  return { start, rerun, get, list, review, approve, file, assessmentOf, idle, close, services, STAGES };
+  return { start, rerun, get, list, review, approve, aiReady, askJson, file, assessmentOf, idle, close, services, STAGES };
 }

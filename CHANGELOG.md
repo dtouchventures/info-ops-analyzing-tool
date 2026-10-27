@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.27.0 — Keyword search and monitoring of public information (27 October 2026)
+
+- **Search any keyword now** (Live Monitoring → Search):
+  - **What you can type:** any keyword, phrase, hashtag or topic, with `OR` (or a comma), `AND`, `-word` / `NOT word`, and `"exact phrases"`. The form shows how the search will be read before it runs.
+  - **Where it searches:** every connected, authorised source, in the background:
+    - news sites (RSS/Atom; main Kenyan sites by default, or your own list)
+    - **GDELT** (new: a free, keyless worldwide news index)
+    - **Brave News** (new; uses the existing Brave key)
+    - YouTube, X, Reddit, Bluesky, Mastodon hashtags, Threads, Instagram hashtags and named Facebook Pages
+    - the organisation's own Facebook Page
+  - **Period and limits:** choose the date range and the number of results per source.
+  - **Per-source report:** for each source, the search reports what it returned, what matched, what was new, duplicates and errors.
+  - **Each result keeps:** its original link, publication date, source, image (stored when first opened), matched keywords and verification status.
+- **Source status:** each source is marked **Connected**, **Configured, not yet tested**, **Restricted**, **Unavailable** or **Not configured**, with its needs and the platform's access limits. The page states plainly that AIVS cannot search all public Facebook posts, personal profiles, private groups or WhatsApp.
+- **Duplicates:** an item is stored once (platform and post ID). The same article found by several sources (same address, ignoring tracking parameters) is marked as a duplicate. The same words from different outlets are kept separately and reported as repeated wording.
+- **Recurring searches:** a search can be saved as a watchlist, which the scheduler repeats automatically. Multiple watchlists are supported, and they are edited in AI Watchlist. Watchlists now also support keyword combinations ("all of these groups") and paused terms.
+- **Discovered items:** one feed of everything found by watchlists and searches, filtered by watchlist, source (News, YouTube, X, Facebook, …), dates, words, verification and images.
+- **Verification:** any item can be sent to the automatic investigation. News articles are read from their own page; posts are read from the text the platform returned. Its status and report are shown with the item.
+- **Analysis and reports:**
+  - **Each item:** claims, places, organisations, themes, tone and misinformation cues.
+  - **The set:** narratives (and whether they are emerging), repeated wording, contradictory figures or denials, and information gaps (no official source, social-only narratives, undated items, sources not searched).
+  - **Draft report:** Background, Analysis, Assessment and Recommendations, one page, as PDF, Word or HTML. The organisation's Ollama model rewrites the text when configured, and the rewrite is checked: no new references, links, percentages or attribution.
+  - **Daily draft:** each active watchlist with new items gets one at 07:00 EAT (`MONITOR_DAILY_REPORT_HOUR`).
+  - **Alerts:** conflicting reports and emerging narratives on watchlists become live alerts.
+  - **Review:** reports can be reviewed by another person.
+- **Dashboard:** a **Public information monitoring** section shows the source status, items discovered, items found today, watchlists, searches, alerts, verifications, reports and the latest items. The own Facebook Page appears as one authorised source.
+- **New `npm run check:search -- "<keyword>"`:** searches the keyword against the REAL configured sources on a temporary database and lists which platforms are operational, with the items they returned.
+- **Database (migration 17, additive):**
+  - `watch_posts` gains `image_url`, `image_sha256`, `image_mime`, `investigation_id` and `url_key`.
+  - New tables: `watch_post_analysis`, `monitor_searches`, `monitor_search_results`, `monitor_reports`.
+
 ## 1.26.1 — Facebook token set-up made reliable (27 October 2026)
 
 - **A person's token works:** when `META_PAGE_ACCESS_TOKEN` belongs to a person who manages the Page (Meta then refuses the Page's posts with code 190, subcode 2069032), AIVS asks Meta for the Page's own token and uses it for that Page. The Page's token is kept in memory only and hidden from every message.

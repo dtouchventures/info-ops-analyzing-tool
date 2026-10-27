@@ -39,6 +39,8 @@ const server = app.listen(config.port, config.host, () => {
   ctx.transcriber.resume();
   ctx.watchCollector.start();
   ctx.live.start();
+  // a daily draft monitoring report for each active watchlist with new items (07:00 EAT by default)
+  setInterval(() => ctx.keywords.daily(ctx.live.systemUser(), Number(process.env.MONITOR_DAILY_REPORT_HOUR || 7)).catch(e => console.warn("[monitor] daily report:", e.message)), 10 * 60e3).unref();
   { const o = ctx.live.overview(); console.log(`  Live Facebook monitoring: ${o.facebook.configured ? `${o.sources.filter(x => x.platform === "facebook" && x.enabled).length} Page(s), every ${o.scheduler.interval_minutes} min` : "off (META_PAGE_ACCESS_TOKEN not set)"} · Instagram: ${o.instagram.status}`); }
   { const w = ctx.watchCollector.status(), act = ctx.watch.list().filter(x => x.status === "active").length; console.log(`  Mention watch: ${act} active watchlist(s); X search ${w.sources.find(s => s.key === "x_search").state}, X stream ${w.sources.find(s => s.key === "x_stream").state}, YouTube ${w.sources.find(s => s.key === "youtube").state}`); }
   if (config.transcribe?.url) ctx.transcriber.checkHealth({ force: true }).then(h => console.log(`  Speech-to-text: ${h.state === "ok" ? `available (${h.engine} ${h.model}, ${h.cpu_threads} threads)` : h.state}${h.error ? ` — ${h.error}` : ""}`)).catch(() => {});

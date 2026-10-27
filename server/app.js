@@ -43,6 +43,7 @@ import { TOPICS } from "../shared/text.js";
 import { suggestSource, parseSourceLink } from "../shared/text.js";
 import { makeLimiter } from "./lib/ratelimit.js";
 import { makeLiveMonitor } from "./lib/livemonitor.js";
+import { makeKeywordSearch } from "./lib/keywordsearch.js";
 import { submissionHashes, ham, levelOf } from "./lib/hashing.js";
 import { sniff } from "./lib/sniff.js";
 import { THRESH } from "./lib/hashing.js";
@@ -94,7 +95,8 @@ export function createApp(config) {
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
   const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
-  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live };
+  const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live });
+  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -191,7 +193,7 @@ export function createApp(config) {
   // rate limits: everything, plus a tighter budget for work that fetches, stores or computes a lot
   const RL = { windowMs: 300000, general: 1500, heavy: 60, ...(config.rateLimit || {}) };
   const general = makeLimiter({ windowMs: RL.windowMs, limit: RL.general, name: "General" }), heavy = makeLimiter({ windowMs: RL.windowMs, limit: RL.heavy, name: "Heavy" });
-  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample|live\/sources(\/\d+\/sync)?|live\/check|live\/instagram\/test|live\/training\/sample)$/;
+  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample|live\/sources(\/\d+\/sync)?|live\/check|live\/instagram\/test|live\/training\/sample|monitor\/searches(\/\d+\/(report|watchlist))?|monitor\/watchlists\/\d+\/report|monitor\/items\/\d+\/(verify|image))$/;
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
@@ -1171,6 +1173,27 @@ export function createApp(config) {
   api.post("/investigations/:id/approve", requirePerm("case.approve"), h((req, res) => { investigations.approve(req.user, req.params.id, req.body?.note); res.json(investigations.get(req.params.id)); }));
 
   // ---------------------------------------------------------------- live monitoring (authorised Facebook Pages; Instagram prepared)
+  // ---------------------------------------------------------------- keyword search and monitoring of public information (1.27)
+  api.get("/monitor/sources", (req, res) => res.json(keywords.sources()));
+  api.get("/monitor/overview", (req, res) => res.json(keywords.overview()));
+  api.post("/monitor/searches", requirePerm("watch.triage"), h((req, res) => res.status(202).json(keywords.start(req.user, { ...(req.body || {}), training: scopeOf(req) === 1 }))));
+  api.get("/monitor/searches", (req, res) => res.json({ searches: keywords.list(req.query.limit) }));
+  api.post("/monitor/parse", (req, res) => { try { const p = keywords.parseQuery(req.body?.query); res.json({ ok: true, parsed: p }); } catch (e) { res.json({ ok: false, error: e.message }); } });
+  api.get("/monitor/searches/:id", (req, res) => res.json(keywords.get(req.params.id)));
+  api.get("/monitor/searches/:id/results", (req, res) => res.json(keywords.results(req.params.id, req.query)));
+  api.post("/monitor/searches/:id/watchlist", requirePerm("watch.manage"), h((req, res) => res.status(201).json(keywords.saveAsWatchlist(req.user, req.params.id, req.body || {}))));
+  api.post("/monitor/searches/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { searchId: +req.params.id }))));
+  api.post("/monitor/watchlists/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { watchlistId: +req.params.id, hours: Math.min(720, Math.max(1, +req.body?.hours || 24)) }))));
+  api.get("/monitor/feed", (req, res) => res.json(keywords.feed(req.query)));
+  api.get("/monitor/items/:id", (req, res) => res.json(keywords.item(req.params.id)));
+  api.get("/monitor/items/:id/image", h(async (req, res) => { const im = await keywords.image(req.params.id); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, max-age=3600"); res.type(im.mime).send(im.buf); }));
+  api.post("/monitor/items/:id/verify", requirePerm("case.create"), h((req, res) => res.status(202).json(keywords.verify(req.user, req.params.id))));
+  api.get("/monitor/reports", (req, res) => res.json({ reports: keywords.reports(req.query.limit) }));
+  api.get("/monitor/reports/:id", (req, res) => res.json(keywords.reportGet(req.params.id)));
+  api.get("/monitor/reports/:id/file.:fmt(html|pdf|docx|json)", h(async (req, res) => { const f = await keywords.reportFile(req.params.id, req.params.fmt);
+    if (req.params.fmt === "html") res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
+    if (req.params.fmt !== "html" || req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${f.name}"`); res.type(f.type).send(f.body); }));
+  api.post("/monitor/reports/:id/review", requirePerm("case.approve"), h((req, res) => res.json(keywords.reviewReport(req.user, req.params.id, req.body?.note))));
   api.get("/live/overview", (req, res) => res.json(live.overview({ training: scopeOf(req) })));
   api.get("/live/posts", (req, res) => res.json(live.posts({ ...req.query, training: scopeOf(req) })));
   api.get("/live/posts/:id", (req, res) => res.json(live.post(req.params.id)));

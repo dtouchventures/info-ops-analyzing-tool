@@ -20,6 +20,8 @@ export const WATCH_SOURCES = {
   threads: { label: "Threads keyword search (scheduled)", platform: "Threads", mode: "poll" },
   instagram: { label: "Instagram hashtag search (scheduled)", platform: "Instagram", mode: "poll" },
   facebook: { label: "Facebook public Pages and their comments (scheduled)", platform: "Facebook", mode: "poll" },
+  gdelt: { label: "GDELT news search (worldwide online news index, scheduled)", platform: "News (GDELT)", mode: "poll" },
+  brave_news: { label: "Brave News Search API (scheduled)", platform: "News (Brave)", mode: "poll" },
   fb_live: { label: "Live Facebook monitoring (every post of the authorised Pages, collected by AIVS)", platform: "Facebook", mode: "push" },
   tiktok: { label: "TikTok Research API (scheduled)", platform: "TikTok", mode: "poll" },
   telegram: { label: "Telegram channels where our bot is a member (scheduled)", platform: "Telegram", mode: "poll" },
@@ -55,8 +57,8 @@ export const DEFAULT_THRESHOLDS = {
 const T_LIMITS = { volume_window_min: [15, 1440], volume_baseline_windows: [6, 168], volume_min_posts: [2, 100000], volume_ratio: [1.2, 100], volume_sd: [0, 10], volume_min_coverage: [0.5, 1],
   repeat_min_posts: [2, 1000], repeat_min_accounts: [1, 1000], repeat_window_h: [1, 168], repeat_similarity: [0.5, 1], engagement_min_increase: [1, 1e9], engagement_ratio: [1.1, 1000], engagement_window_h: [1, 72],
   count_min_posts: [1, 100000], count_window_min: [5, 10080], narrative_min_posts: [2, 10000], narrative_window_h: [1, 720], narrative_ratio: [1.1, 100], narrative_sd: [0, 10], narrative_baseline_windows: [1, 500], repeat_burst_ratio: [1, 1000], coord_min_accounts: [2, 1000], coord_window_min: [1, 1440] };
-const INTERVAL_LIMITS = { x_search: [5, 1440], youtube: [30, 1440], news: [5, 1440], reddit: [5, 1440], bluesky: [5, 1440], mastodon: [5, 1440], threads: [15, 1440], instagram: [30, 1440], facebook: [15, 1440], tiktok: [60, 1440], telegram: [5, 1440] };
-const DEFAULT_INTERVALS = { x_search: 15, youtube: 60, news: 15, reddit: 15, bluesky: 15, mastodon: 15, threads: 30, instagram: 60, facebook: 30, tiktok: 180, telegram: 10 };
+const INTERVAL_LIMITS = { gdelt: [15, 1440], brave_news: [30, 1440], x_search: [5, 1440], youtube: [30, 1440], news: [5, 1440], reddit: [5, 1440], bluesky: [5, 1440], mastodon: [5, 1440], threads: [15, 1440], instagram: [30, 1440], facebook: [15, 1440], tiktok: [60, 1440], telegram: [5, 1440] };
+const DEFAULT_INTERVALS = { gdelt: 30, brave_news: 60, x_search: 15, youtube: 60, news: 15, reddit: 15, bluesky: 15, mastodon: 15, threads: 30, instagram: 60, facebook: 30, tiktok: 180, telegram: 10 };
 
 // a starting point for analysts to review and edit (spelling variants, hashtags, English and Kiswahili); not an official list
 export function kdfTemplate() {
@@ -69,6 +71,22 @@ export function kdfTemplate() {
       exclude: ["kdf file", "kdf format", ".kdf"],
       languages: [], sources: ["x_search"], feeds: [], include_reposts: false, alert_mode: "every_post",
       intervals: { ...DEFAULT_INTERVALS }, lookback_minutes: 60, thresholds: { ...DEFAULT_THRESHOLDS }
+    })
+  };
+}
+
+// Kenya security monitoring (1.27): the keywords asked for by the unit, across every keyword source AIVS supports. Sources that are
+// not configured are skipped and shown as such; nothing is searched without a stated basis and an activation by a reviewer.
+export const KENYA_NEWS_SITES = ["https://nation.africa", "https://www.standardmedia.co.ke", "https://www.the-star.co.ke", "https://www.capitalfm.co.ke/news", "https://www.kbc.co.ke", "https://www.citizen.digital", "https://www.kenyans.co.ke", "https://www.pd.co.ke"];
+export function kenyaSecurityTemplate() {
+  return {
+    name: "KDF and Kenya security (public information)",
+    description: "Public information that mentions the Kenya Defence Forces or Kenya's security environment, discovered across news sites, news search APIs and the social media APIs that are connected.",
+    definition: normaliseDefinition({
+      terms: ["KDF", "Kenya Defence Forces", "Kenya Defense Forces", "Kenya Army", "Kenya military", "Kenya security", "Kenya Defence Forces operations", "#KDF", "Jeshi la Kenya", "Wanajeshi wa Kenya"],
+      context: [], exclude: ["kdf file", "kdf format", ".kdf"], languages: [],
+      sources: ["news", "gdelt", "brave_news", "youtube", "x_search", "reddit", "bluesky", "mastodon", "threads", "instagram", "fb_live"], feeds: KENYA_NEWS_SITES,
+      include_reposts: false, alert_mode: "every_post", lookback_minutes: 1440, thresholds: { ...DEFAULT_THRESHOLDS }
     })
   };
 }
@@ -89,6 +107,10 @@ export function normaliseDefinition(d = {}) {
   const sources = [...new Set((d.sources || []).filter(s => WATCH_SOURCES[s]))];
   const feeds = listOf(d.feeds, 20, "feeds").filter(f => /^https?:\/\//i.test(f));
   // Facebook Pages to read (Page IDs, usernames or facebook.com links); only stored when given, so older definitions keep their hash
+  // terms switched off by an analyst stay listed but are not searched or matched; only stored when given, so older hashes stay the same
+  // keyword combinations: every group must match (each group is a list of alternatives), e.g. (KDF OR "Kenya Army") AND (Lamu OR Boni)
+  const groups = (Array.isArray(d.require_groups) ? d.require_groups : []).map(g => listOf(g, 30, "combined terms")).filter(g => g.length).slice(0, 5);
+  const paused = listOf(d.paused_terms, 60, "paused terms").filter(t => !terms.some(x => x.toLowerCase() === t.toLowerCase()));
   const fbPages = listOf(d.fb_pages, 50, "Facebook Pages").map(x => x.replace(/^https?:\/\/(www\.|m\.)?facebook\.com\//i, "").replace(/[/?#].*$/, "")).filter(x => /^[\w.-]{2,100}$/.test(x));
   const intervals = { ...DEFAULT_INTERVALS };
   for (const [k, [lo, hi]] of Object.entries(INTERVAL_LIMITS)) if (d.intervals?.[k] != null) intervals[k] = Math.min(hi, Math.max(lo, Math.round(+d.intervals[k] || DEFAULT_INTERVALS[k])));
@@ -97,7 +119,7 @@ export function normaliseDefinition(d = {}) {
   // imported datasets to monitor (Social Media Analysis); stored only when given, so older definitions keep their hash
   const datasets = [...new Set((Array.isArray(d.datasets) ? d.datasets : String(d.datasets || "").split(/[\s,]+/)).map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 100);
   const allDs = d.all_datasets === true || d.all_datasets === "true";
-  return { terms, context, exclude, languages, sources, feeds, ...(fbPages.length ? { fb_pages: fbPages } : {}), ...(datasets.length && !allDs ? { datasets } : {}), ...(allDs ? { all_datasets: true } : {}), ...(d.fb_comments === false || d.fb_comments === "false" ? { fb_comments: false } : {}), include_reposts: !!d.include_reposts, alert_mode: d.alert_mode === "signals_only" ? "signals_only" : "every_post",
+  return { terms, ...(groups.length ? { require_groups: groups } : {}), ...(paused.length ? { paused_terms: paused } : {}), context, exclude, languages, sources, feeds, ...(fbPages.length ? { fb_pages: fbPages } : {}), ...(datasets.length && !allDs ? { datasets } : {}), ...(allDs ? { all_datasets: true } : {}), ...(d.fb_comments === false || d.fb_comments === "false" ? { fb_comments: false } : {}), include_reposts: !!d.include_reposts, alert_mode: d.alert_mode === "signals_only" ? "signals_only" : "every_post",
     intervals, lookback_minutes: Math.min(7 * 1440, Math.max(10, Math.round(+d.lookback_minutes || 60))), thresholds };
 }
 export const definitionHash = def => crypto.createHash("sha256").update(JSON.stringify(def)).digest("hex");
@@ -116,6 +138,7 @@ const re = t => { let r = reCache.get(t); if (!r) { r = termRe(t); if (reCache.s
 export function matchPost(def, post) {
   const text = fold(post.text), terms = def.terms.filter(t => re(t).test(text));
   if (!terms.length) return { matched: false, why: "none of the watch terms appear in the text" };
+  for (const g of def.require_groups || []) if (!g.some(t => re(t).test(text))) return { matched: false, terms, why: `none of ${g.map(t => `“${t}”`).join(", ")} appears (all keyword groups must match)` };
   const excl = def.exclude.filter(t => re(t).test(text));
   if (excl.length) return { matched: false, terms, why: `excluded by “${excl.join("”, “")}”` };
   const ctx = def.context.filter(t => re(t).test(text));
@@ -260,7 +283,8 @@ export function makeWatch(db, { audit, cases, config = {} }) {
           text_hash: sha(normForRepeat(r.text)), likes: r.likes ?? null, comments: r.comments ?? null, shares: r.shares ?? null, views: r.views ?? null, metrics_at: null, metrics_source: null,
           dataset_id: r.dataset_id ?? null, io_post_id: r.io_post_id ?? null };
         const isNew = insPost.run(row).changes > 0; if (isNew) out.new_posts++;
-        const post = getPost.get(row.platform, row.post_id);
+        let post = getPost.get(row.platform, row.post_id);
+        if (r.image_url && /^https?:\/\//.test(r.image_url) && !post.image_url) { db.prepare("UPDATE watch_posts SET image_url = ? WHERE id = ?").run(String(r.image_url).slice(0, 2000), post.id); post = getPost.get(row.platform, row.post_id); }
         const metrics = observeMetrics(post, r, source, now);
         // already matched by this watchlist (another source, a retry, or a stream backfill): keep one record
         const existing = db.prepare("SELECT id FROM watch_matches WHERE watchlist_id = ? AND post_id = ?").get(wl.id, post.id);

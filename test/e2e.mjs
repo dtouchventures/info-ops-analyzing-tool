@@ -761,6 +761,9 @@ let watchDead = [], watchSeen = 0;
 // ---- 1.26: Live Facebook Monitoring against a local TEST DOUBLE of the Graph API (fixture posts labelled TEST FIXTURE)
 { const TOK = "EAAE2ETESTTOKEN000000000000000001", PG = "900000000000009", H = h => new Date(Date.now() - h * 3600e3).toISOString().replace(/\.\d+Z$/, "+0000");
   const fg = http.createServer((req, res) => { const u = new URL(req.url, "http://x"), j = (c, o) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+    if (u.pathname === "/api/v2/doc/doc") return j(200, { articles: /Isiolo/i.test(u.searchParams.get("query")) ? [
+      { url: `http://127.0.0.1:${fg.address().port}/news/isiolo-1`, title: "TEST FIXTURE: Isiolo road project reaches halfway mark", seendate: H(2).replace(/[-:]/g, "").replace("+0000", "Z"), domain: "fixture-a.example", language: "English", socialimage: `http://127.0.0.1:${fg.address().port}/img/1.jpg` },
+      { url: `http://127.0.0.1:${fg.address().port}/news/isiolo-2`, title: "TEST FIXTURE: Residents in Isiolo welcome new water project", seendate: H(4).replace(/[-:]/g, "").replace("+0000", "Z"), domain: "fixture-b.example", language: "English" }] : [] });
     if (u.pathname === "/img/1.jpg") { res.writeHead(200, { "content-type": "image/jpeg" }); return res.end(fs.readFileSync("training/images/case_convoy.jpg")); }
     if (u.searchParams.get("access_token") !== TOK) return j(400, { error: { message: "Invalid OAuth access token", code: 190 } });
     if (u.pathname === "/v26.0/me") return j(200, { id: PG, name: "E2E Fixture Page" });
@@ -770,7 +773,7 @@ let watchDead = [], watchSeen = 0;
       { id: `${PG}_1`, message: "TEST FIXTURE: Our office is closed on Monday for the public holiday.", created_time: H(5), permalink_url: `https://www.facebook.com/${PG}/posts/1`, reactions: { summary: { total_count: 3 } }, comments: { summary: { total_count: 0 } } }], paging: {} });
     j(404, { error: { message: "unknown", code: 100 } }); });
   await new Promise(r => fg.listen(0, "127.0.0.1", r));
-  const SL = await startServer({ allowPrivateFetch: true, watch: { enabled: false, metricsRefreshMinutes: 0 }, live: { pageToken: TOK, pageIds: PG, graphBase: `http://127.0.0.1:${fg.address().port}`, tickSeconds: 3600 } });
+  const SL = await startServer({ allowPrivateFetch: true, search: { gdelt: true, gdeltBase: `http://127.0.0.1:${fg.address().port}`, timeoutMs: 3000 }, watch: { enabled: false, metricsRefreshMinutes: 0, gdeltPauseMs: 0 }, live: { pageToken: TOK, pageIds: PG, graphBase: `http://127.0.0.1:${fg.address().port}`, tickSeconds: 3600 } });
   SL.ctx.live.ensureSources(); await SL.ctx.live.checkToken({ force: true }); await SL.ctx.live.sync(SL.ctx.db.prepare("SELECT id FROM social_sources").get().id);
   for (let i = 0; i < 400; i++) { await SL.ctx.live.work(); if (!SL.ctx.db.prepare("SELECT COUNT(*) n FROM social_posts WHERE analysis_status IN ('pending','analysing','verifying')").get().n && SL.ctx.investigations.idle()) break; await new Promise(r => setTimeout(r, 100)); }
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 950 } }), p = await ctx.newPage();
@@ -778,7 +781,7 @@ let watchDead = [], watchSeen = 0;
   await p.goto(SL.base); await p.fill("#lu", "rev"); await p.fill("#lp", PW); await p.click("#lb"); await p.waitForSelector(".shell");
   await p.goto(SL.base + "/#/home"); await p.waitForSelector("#liveDash .kpi");
   const dash = await p.textContent("#liveDash");
-  check("the dashboard shows the Facebook connection, last synchronisation and real database figures", /Facebook: Connected/.test(dash) && /last successful synchronisation/.test(dash) && (await p.textContent('#liveDash [data-fig="real posts collected"] .v')) === "2" && (await p.textContent('#liveDash [data-fig="AI analyses completed"] .v')) === "2" && /Instagram: Not connected/.test(dash), dash.slice(0, 300));
+  check("the dashboard shows the Facebook connection, last synchronisation and real database figures", /Facebook: Connected/.test(dash) && /last successful synchronisation/.test(dash) && (await p.textContent('#liveDash [data-fig="own Page posts"] .v')) === "2" && (await p.textContent('#liveDash [data-fig="awaiting AI analysis"] .v')) === "0" && /Instagram: Not connected/.test(dash) && /Public information monitoring/.test(dash), dash.slice(0, 300));
   await shot(p, "46a-live-dashboard");
   await p.goto(SL.base + "/#/live/posts"); await p.waitForSelector(".lpost img");
   await p.waitForFunction(() => [...document.querySelectorAll(".lpost img")].every(i => i.complete && i.naturalWidth > 0));
@@ -791,7 +794,22 @@ let watchDead = [], watchSeen = 0;
   const det = await p.textContent("#lb"); await shot(p, "46c-live-post-detail");
   check("a post's details separate facts, claims, inferences and unknowns, and link its one-page report", /Facts \(from the platform record\)/.test(det) && /Claims found/.test(det) && /Verification: .*AI-generated, not reviewed/.test(det) && /Unknowns/.test(det) && !!(await p.$('a[href$="/report.pdf"]')), det.slice(0, 200));
   await p.goto(SL.base + "/#/live/sources"); await p.waitForSelector("text=Synchronisation history");
-  check("the sources tab shows the Page, its status and the synchronisation history", /E2E Fixture Page/.test(await p.textContent("#lb")) && (await p.$$("#lb table.t")).length === 2);
+  check("the sources tab shows the Page, its status and the synchronisation history", /E2E Fixture Page/.test(await p.textContent("#lb")) && (await p.$$("#lsrc table.t")).length === 2);
+  // an analyst-entered keyword, searched across the connected sources from the browser
+  await p.goto(SL.base + "/#/live/search"); await p.waitForSelector("#kq");
+  await p.fill("#kq", "Isiolo -football"); await p.waitForFunction(() => /Searches for “Isiolo” without “football”/.test(document.querySelector("#kqp").textContent));
+  const srcBoxes = await p.$$eval(".ksrc input", x => x.map(i => [i.value, i.checked, i.disabled]));
+  check("the search form lists every source with its status; sources that are not configured cannot be ticked", srcBoxes.some(([k, c]) => k === "gdelt" && c) && srcBoxes.some(([k, , d]) => k === "x_search" && d) && /Not configured/.test(await p.textContent(".ksrc")), JSON.stringify(srcBoxes));
+  await p.click("#kgo"); await p.waitForFunction(() => /Finished/.test(document.querySelector("#lb").textContent), null, { timeout: 60000 }); await p.waitForSelector("[data-item]");
+  const res1 = await p.textContent("#lb");
+  check("search results show the source, original link, publication date and verification status of each item", (await p.$$("[data-item]")).length === 2 && /Open original/.test(res1) && /published/.test(res1) && /Not verified yet/.test(res1) && /GDELT/.test(res1), res1.slice(0, 300));
+  await shot(p, "46e-keyword-search");
+  await p.click("#krep"); await p.waitForSelector('.toast:has-text("drafted")'); check("the results can be analysed into a draft monitoring report", true);
+  await p.click("#kwl"); await p.waitForSelector('.toast:has-text("Saved as a watchlist")'); check("a search can be saved as a recurring watchlist", /\(active\)/.test(await p.textContent('.toast:has-text("Saved as a watchlist")')), await p.textContent('.toast:has-text("Saved as a watchlist")'));
+  await p.goto(SL.base + "/#/live/sources"); await p.waitForSelector("#ksrc table");
+  check("the sources tab separates connected, restricted, unavailable and not-configured sources and names the access limits", /Connected/.test(await p.textContent("#ksrc")) && /Not configured/.test(await p.textContent("#ksrc")) && /cannot search all public Facebook posts/.test(await p.textContent("#ksrc")));
+  await p.goto(SL.base + "/#/live"); await p.waitForSelector(".kpi");
+  check("the overview counts the discovered items and keeps the own Page as one source", /items discovered/.test(await p.textContent("#lb")) && /Own Facebook Page \(authorised source\)/.test(await p.textContent("#lb")));
   await p.goto(SL.base + "/#/live/alerts"); await p.waitForSelector("#lb .row");
   check("the live alerts tab explains how priorities are set", /How priorities are set/.test(await p.textContent("#lb")));
   await shot(p, "46d-live-alerts");
@@ -842,7 +860,7 @@ let watchDead = [], watchSeen = 0;
   await shot(ph, "41-automatic-report-phone"); await ph.context().close();
 }
 let dead = [], seen = 0;
-for (const [p, routes] of [[a, ["#/home", "#/live", "#/live/posts", "#/live/alerts", "#/live/sources", "#/investigate", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
+for (const [p, routes] of [[a, ["#/home", "#/live", "#/live/search", "#/live/discovered", "#/live/watchlists", "#/live/reports", "#/live/posts", "#/live/alerts", "#/live/sources", "#/investigate", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
   [ad, ["#/admin/users", "#/admin/permissions", "#/admin/integrations", "#/admin/usage", "#/admin/backups", "#/admin/audit", "#/admin/training", "#/archive", "#/reports"]]]) {
   if (p === ad) await ad.setViewportSize({ width: 1440, height: 950 });
   for (const h of routes) { await p.goto(S.base + "/" + h); await p.waitForSelector("#page > :not(.empty)"); await p.waitForTimeout(400); dead = dead.concat(await audit(p, h)); seen += await p.$$eval("button, a.btn", x => x.filter(b => b.offsetParent !== null).length); }

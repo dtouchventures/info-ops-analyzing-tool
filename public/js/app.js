@@ -27,7 +27,7 @@ const ROUTES = [
   [/^#\/new$/, () => import("./pages/newcase.js"), "new"],
   [/^#\/case\/([^/]+)(?:\/(\w+))?$/, () => import("./pages/case.js"), "cases"],
   [/^#\/watch(?:\/(overview|alerts|lists|sources|list)(?:\/(\d+))?)?(?:\?.*)?$/, () => import("./pages/watch.js"), "watch"],
-  [/^#\/live(?:\/(posts|alerts|sources|post)(?:\/(\d+))?)?(?:\?.*)?$/, () => import("./pages/live.js"), "live"],
+  [/^#\/live(?:\/(overview|search|discovered|watchlists|reports|item|posts|alerts|sources|post|page)(?:\/(\d+))?)?(?:\?.*)?$/, () => import("./pages/live.js"), "live"],
   [/^#\/monitor(?:\/(\d+)(?:\/(\w+))?)?(?:\?.*)?$/, () => import("./pages/monitor.js"), "monitor"],
   [/^#\/datasets(?:\/(\d+))?(?:\?.*)?$/, () => import("./pages/datasets.js"), "datasets"],
   [/^#\/archive$/, () => import("./pages/archive.js"), "archive"],
@@ -141,7 +141,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.26.1";
+export const CLIENT_VERSION = "1.27.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

@@ -27,7 +27,7 @@ async function draw(el) {
   const h0 = location.hash;
   crumbs(`<b>Dashboard</b>${App.training ? " · training records" : ""}`);
   const [D, W, IO] = await Promise.all([api.get(`/api/dashboard?${App.q()}`).catch(() => null), api.get("/api/watch/overview").catch(() => null), api.get("/api/io/datasets").catch(() => null)]);
-  const [al, INV, LV] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null)]);
+  const [al, INV, LV, MO] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null), api.get("/api/monitor/overview").catch(() => null)]);
   if (location.hash !== h0) return;   // the user moved on while the figures were loading: do not draw over the next page
   const c = D?.counts || {}, open = (c.draft || 0) + (c.analysing || 0) + (c.analysis_failed || 0) + (c.analyst_review || 0) + (c.needs_evidence || 0);
   const ds = (IO?.datasets || []).filter(d => App.training ? d.is_sample : !d.is_sample), posts = ds.reduce((a, d) => a + (d.posts || 0), 0);
@@ -44,7 +44,7 @@ async function draw(el) {
       ${card("watch", "watch", "AI Watchlist", "Watch topics and hashtags in imported or collected posts, and get alerts for unusual increases and repeated messages.",
         [[activeW, "active watchlists", "#/watch/lists"], [openAlerts, "open alerts", "#/watch/alerts"]], "#/watch", "Open watchlists", monitoringLine(W))}
     </div>
-    ${liveSection(LV)}
+    ${liveSection(LV, MO)}
     <div class="grid g3" style="margin-top:16px">
       <div class="card"><div class="hd"><h3>Recent automatic reports</h3><a class="small right" href="#/reports">All reports</a></div><div class="bd">
         ${(INV?.investigations || []).length ? `<table class="t"><tbody>${INV.investigations.map(x => `<tr><td><a href="#/investigate/${esc(x.id)}" class="mono small">${esc(x.report_id)}</a></td><td class="small">${esc((x.subject || x.status).slice(0, 70))}</td><td>${x.overall ? `<span class="chip ${({ supported: "sup", contradicted: "con", mixed: "mix" })[x.overall] || "grey"}">${esc(x.overall_label)}</span>` : `<span class="chip grey">${esc(x.status)}</span>`}</td><td class="tiny sub">${fmtDT(x.created_at)}</td></tr>`).join("")}</tbody></table>`
@@ -58,17 +58,20 @@ async function draw(el) {
     </div>`;
 }
 
-// Live Facebook Monitoring: connection, synchronisation and analysis figures from the server, and the latest posts
-const VC = { pending: "info", supported: "sup", contradicted: "con", insufficient: "grey", misleading: "mix", not_verifiable: "grey" };
-function liveSection(o) {
-  if (!o) return `<div class="card livecard" style="margin-top:16px"><div class="hd"><h3>Live Facebook Monitoring</h3></div><div class="bd"><div class="wmon bad">The live monitoring status could not be loaded from the server.</div></div></div>`;
-  const c = o.counts, f = (v, l, h, cls = "") => `<a class="kpi ${cls}" href="${h}" data-fig="${esc(l)}"><div class="l">${l}</div><div class="v">${Number(v).toLocaleString()}</div></a>`;
-  return `<div class="card livecard" style="margin-top:16px" id="liveDash"><div class="hd"><h3>${icon("live")} Live Facebook Monitoring</h3><a class="small right" href="#/live">Open Live Monitoring</a></div><div class="bd">
-    ${statusLine(o)}
-    <div class="kpis">${f(c.total_posts, "real posts collected", "#/live/posts")}${f(c.posts_today, "posts today", "#/live/posts")}${f(c.awaiting_analysis, "awaiting AI analysis", "#/live/posts", c.awaiting_analysis ? "attn" : "")}${f(c.completed_analyses, "AI analyses completed", "#/live/posts")}
-      ${f(c.active_watchlists, "active watchlists", "#/watch/lists")}${f(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${f(c.pending_investigations, "pending investigations", "#/reports")}${f(c.completed_reports, "completed reports", "#/reports")}
-      ${f(c.needs_review, "need human review", "#/live/posts?review=1", c.needs_review ? "attn" : "")}${f(c.failed_analyses, "analyses failed", "#/live/posts?status=failed", c.failed_analyses ? "alert" : "")}</div>
-    ${o.recent_posts.length ? `<ul class="mini">${o.recent_posts.slice(0, 5).map(p => `<li>${p.image_stored ? `<img src="/api/live/posts/${p.id}/image" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ""}<span class="chip ${VC[p.verification] || "grey"}">${esc(p.verification_label || "—")}</span>
-      <a class="small" style="flex:1" href="#/live/post/${p.id}">${esc((p.message || "(no text)").slice(0, 110))}</a><span class="tiny sub">${fmtDT(p.created_time)}</span>${p.permalink_url ? `<a class="tiny" href="${esc(p.permalink_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ""}</li>`).join("")}</ul>`
-      : `<p class="small sub" style="margin:0">${o.facebook.configured || App.training ? "No posts collected yet." : "Not configured: an administrator sets META_PAGE_ACCESS_TOKEN and META_PAGE_IDS on the server."}</p>`}</div></div>`;
+// Public information monitoring: keyword discovery across the connected sources, with the organisation's own Facebook Page
+// shown as one authorised source among others. Figures come from the server's records.
+const VC = { pending: "info", supported: "sup", contradicted: "con", insufficient: "grey", misleading: "mix", not_verifiable: "grey", not_verified: "grey" };
+const CATC = { Connected: "sup", "Configured, not yet tested": "info", Restricted: "warn", Unavailable: "con", "Not configured": "grey" };
+function liveSection(o, m) {
+  if (!m) return `<div class="card livecard" style="margin-top:16px"><div class="hd"><h3>Public information monitoring</h3></div><div class="bd"><div class="wmon bad">The monitoring status could not be loaded from the server.</div></div></div>`;
+  const c = m.counts, f = (v, l, h, cls = "") => `<a class="kpi ${cls}" href="${h}" data-fig="${esc(l)}"><div class="l">${l}</div><div class="v">${Number(v).toLocaleString()}</div></a>`;
+  return `<div class="card livecard" style="margin-top:16px" id="liveDash"><div class="hd"><h3>${icon("live")} Public information monitoring</h3><a class="small right" href="#/live/search">Search a keyword</a></div><div class="bd">
+    <div class="wmon ${m.connected.length ? "ok" : "warn"}" id="monSources"><b>Sources:</b> ${Object.entries(m.by_category).map(([k, v]) => `<span class="chip ${CATC[k] || "grey"}">${esc(k)} ${v}</span>`).join(" ")} · connected: ${esc(m.connected.join(", ") || "none yet")} · <a href="#/live/sources">details</a></div>
+    <div class="kpis">${f(c.items, "items discovered", "#/live/discovered")}${f(c.items_today, "found today", "#/live/discovered")}${f(c.active_watchlists, "active watchlists", "#/live/watchlists")}${f(c.searches, "searches run", "#/live/search")}
+      ${f(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${f(c.verified, "items sent for verification", "#/live/discovered?verification=verified")}${f(c.reports, "monitoring reports", "#/live/reports")}
+      ${o ? f(o.counts.total_posts, "own Page posts", "#/live/posts") + f(o.counts.awaiting_analysis, "awaiting AI analysis", "#/live/posts", o.counts.awaiting_analysis ? "attn" : "") + f(o.counts.completed_reports, "completed reports", "#/reports") : ""}</div>
+    ${m.recent.length ? `<ul class="mini">${m.recent.slice(0, 6).map(p => `<li>${p.has_image ? `<img src="/api/monitor/items/${p.id}/image" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ""}<span class="chip navy">${esc(p.platform)}</span><span class="chip ${VC[p.verification.status] || "grey"}">${esc(p.verification.label)}</span>
+      <a class="small" style="flex:1" href="${p.url ? esc(p.url) : "#/live/discovered"}" ${p.url ? 'target="_blank" rel="noopener noreferrer"' : ""}>${esc(p.text.slice(0, 110))}</a><span class="tiny sub">${p.posted_at ? fmtDT(p.posted_at) : "date not given"}</span></li>`).join("")}</ul>`
+      : `<p class="small sub" style="margin:0">Nothing discovered yet. <a href="#/live/search">Search a keyword</a> across the connected sources, or keep a search as a recurring watchlist.</p>`}
+    ${o ? `<div style="margin-top:10px">${statusLine(o)}</div>` : ""}</div></div>`;
 }

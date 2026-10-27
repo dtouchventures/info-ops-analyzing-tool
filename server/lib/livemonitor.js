@@ -33,7 +33,7 @@ import { peopleIn } from "./content-analysis.js";
 
 export const VERIFY_LABELS = { pending: "Pending verification", supported: "Supported by evidence", contradicted: "Contradicted by evidence", insufficient: "Insufficient evidence",
   misleading: "Misleading or missing context", not_verifiable: "No checkable claim" };
-const VERDICT_TO_STATUS = { supported: "supported", contradicted: "contradicted", insufficient: "insufficient", mixed: "insufficient", misleading: "misleading", not_verifiable: "not_verifiable" };
+export const VERDICT_TO_STATUS = { supported: "supported", contradicted: "contradicted", insufficient: "insufficient", mixed: "insufficient", misleading: "misleading", not_verifiable: "not_verifiable" };
 // documented confidence criteria (points add up; the score is capped between 0 and 100)
 export const CONFIDENCE_CRITERIA = [
   ["factcheck", 35, "a published fact-check rating that addresses the claim"],

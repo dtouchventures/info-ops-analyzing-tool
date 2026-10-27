@@ -18,16 +18,25 @@ const q = (extra = "") => App.q(extra);
 
 export async function render(el, [tab = "overview", id = null] = []) {
   crumbs(`<a href="#/home">Dashboard</a> › <b>Live Monitoring</b>${App.training ? " · training records" : ""}`);
-  const tabs = [["overview", "Overview"], ["posts", "Posts"], ["alerts", "Alerts"], ["sources", "Sources and history"]];
-  el.innerHTML = `<div class="pagehead"><div><h1>Live Monitoring</h1><p>Posts from the authorised Facebook Pages are collected on the server's schedule, analysed and verified automatically, and reported for review. Results are AI-generated leads until a person reviews them.</p></div></div>
-    <nav class="tabs">${tabs.map(([k, l]) => `<a href="#/live/${k}" class="${k === tab || (tab === "post" && k === "posts") ? "on" : ""}">${l}</a>`).join("")}</nav><div id="lb"></div>`;
+  const tabs = [["overview", "Overview"], ["search", "Search"], ["discovered", "Discovered items"], ["watchlists", "Watchlists"], ["reports", "Reports"], ["alerts", "Alerts"], ["posts", "Own Facebook Page"], ["sources", "Sources"]];
+  const on = { post: "posts", item: "discovered" }[tab] || tab;
+  el.innerHTML = `<div class="pagehead"><div><h1>Live Monitoring</h1><p>Search any keyword, phrase, hashtag or topic across the connected public sources, keep searches as recurring watchlists, and get evidence-based analysis and draft reports. Results are AI-supported leads until a person reviews them.</p></div></div>
+    <nav class="tabs">${tabs.map(([k, l]) => `<a href="#/live/${k}" class="${k === on ? "on" : ""}">${l}</a>`).join("")}</nav><div id="lb"></div>`;
   const body = $("#lb", el);
+  const K = await import("./keywords.js");
+  if (!body.isConnected) return;   // the analyst moved to another page meanwhile
+  if (App.training && ["search", "discovered", "watchlists", "reports"].includes(tab)) { body.innerHTML = `<div class="callout info"><div>Keyword searches use live public sources, so they run with Operational records only. Switch Records to Operational. In Training mode, the Own Facebook Page tab offers practice posts.</div></div>`; return; }
   if (tab === "post" && id) return postView(body, id);
-  if (tab === "posts") return postsView(body);
+  if (tab === "posts") { const own = await api.get(`/api/live/overview?${q()}`); body.innerHTML = `${statusLine(own)}<p class="tiny sub">Posts of the organisation's own Facebook Page(s), collected with the Page's token. This is one authorised source, not a search of Facebook.</p><div id="lplist" style="margin-top:12px"></div>`; return postsView($("#lplist", body)); }
   if (tab === "alerts") return alertsView(body);
-  if (tab === "sources") return sourcesView(body);
-  await overviewView(body);
-  const h = location.hash, t = setInterval(() => { if (!el.isConnected || location.hash !== h) return clearInterval(t); if (!document.hidden) overviewView(body).catch(() => {}); }, 30000);
+  if (tab === "sources") { body.innerHTML = `<div id="ksrc"></div><h2 style="margin-top:18px">Own Facebook Page (authorised source)</h2><div id="lsrc"></div>`; await K.sourcesTable($("#ksrc", body)); return sourcesView($("#lsrc", body)); }
+  if (tab === "search") return K.searchView(body, id);
+  if (tab === "discovered") return K.discoveredView(body);
+  if (tab === "watchlists") return K.watchlistsView(body);
+  if (tab === "reports") return K.reportsView(body);
+  if (App.training) { await overviewView(body); return; }
+  const own = await api.get(`/api/live/overview?${q()}`).catch(() => null);
+  await K.overviewView(body, own ? `<div class="card" style="margin-top:12px"><div class="hd"><h3>Own Facebook Page (authorised source)</h3><a class="small right" href="#/live/posts">Open</a></div><div class="bd">${statusLine(own)}<p class="tiny sub" style="margin:6px 0 0">${own.counts.total_posts} post(s) collected from the organisation's own Page. This is one source among others, not a search of Facebook.</p></div></div>` : "");
 }
 
 export function statusLine(o) {

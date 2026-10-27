@@ -68,7 +68,8 @@ export function makeCollectors(db, { config }) {
           if (!title || isNaN(d)) continue; const iso = d.toISOString();
           const text = desc && !desc.startsWith(title) ? `${title} — ${desc}` : title;
           if (!inRange(iso, from, to) || !matches(text, query)) continue;
-          rows.push({ platform: "News website", account: channel.slice(0, 80), posted_at: iso, text: text.slice(0, 5000), url: link && /^https?:\/\//.test(link) ? link : null, post_id: strip(g("guid") || g("id")) || link, collected_at: at, collected_via: `RSS/Atom feed ${f}${query ? `, filtered for “${query}”` : ""}`, author: strip(g("dc:creator") || g("author")) || null });
+          const img = (/<media:(?:content|thumbnail)\b[^>]*url="(https:[^"]+)"/i.exec(it) || /<enclosure\b[^>]*url="(https:[^"]+)"[^>]*type="image/i.exec(it) || /<enclosure\b[^>]*type="image[^"]*"[^>]*url="(https:[^"]+)"/i.exec(it) || [])[1] || null;
+          rows.push({ image_url: img ? img.replace(/&amp;/g, "&") : null, platform: "News website", account: channel.slice(0, 80), posted_at: iso, text: text.slice(0, 5000), url: link && /^https?:\/\//.test(link) ? link : null, post_id: strip(g("guid") || g("id")) || link, collected_at: at, collected_via: `RSS/Atom feed ${f}${query ? `, filtered for “${query}”` : ""}`, author: strip(g("dc:creator") || g("author")) || null });
           if (rows.length >= cap(max)) break;
         }
       } catch (e) { errors.push(`${f}: ${e.message}`); }

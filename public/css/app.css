@@ -492,3 +492,8 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .livecard ul.mini li { flex-wrap: wrap; } .livecard ul.mini li a.small { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .svcs ~ .grid > .card { min-width: 0; } .svcs ~ .grid > .card .bd { overflow-x: auto; } }
 .livecard .hd h3 .ic { width: 18px; height: 18px; vertical-align: -3px; margin-right: 4px; }
+/* keyword search (1.27) */
+.ksrc { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.ksource { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; background: var(--surface); }
+.ksource .tiny { flex-basis: 100%; } .ksource.off { opacity: .65; }
+.chip.navy { white-space: nowrap; }
