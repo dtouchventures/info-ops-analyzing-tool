@@ -161,7 +161,9 @@ function mig14(db) {
   CREATE INDEX IF NOT EXISTS investigations_created ON investigations(created_at);
   CREATE INDEX IF NOT EXISTS investigations_case ON investigations(case_id);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// 1.24: what was extracted from a link (shown while the investigation runs)
+function mig15(db) { const cols = db.prepare("PRAGMA table_info(investigations)").all().map(c => c.name); if (!cols.includes("preview_json")) db.exec("ALTER TABLE investigations ADD COLUMN preview_json TEXT"); }
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

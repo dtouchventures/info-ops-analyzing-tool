@@ -1148,6 +1148,10 @@ export function createApp(config) {
     try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
+  api.get("/investigations/services", (req, res) => { const s = investigations.services(); res.json({ reverse_search: s.reverse_search, ai_vision: s.ai_vision, evidence: s.evidence, ai: { configured: s.ai.configured, model: s.ai.model || null, local: !!s.ai.local, reason: s.ai.reason || null } }); });
+  api.post("/investigations/:id/rerun", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
+    try { res.status(202).json(investigations.rerun(req.user, req.params.id, { text: req.body?.text, files: req.files || [] })); } catch (e) { cleanup(req.files || []); throw e; }
+  }));
   api.get("/investigations", (req, res) => res.json({ investigations: investigations.list({ from: req.query.from, to: req.query.to, training: scopeOf(req) === 1, limit: req.query.limit }), timezone: "EAT (UTC+3)" }));
   api.get("/investigations/:id", (req, res) => res.json(investigations.get(req.params.id)));
   api.get("/investigations/:id/report.:fmt(html|pdf|docx|json)", h(async (req, res) => {

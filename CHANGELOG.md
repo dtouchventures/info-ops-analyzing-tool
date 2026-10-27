@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.24.0 — Paste a link: automatic extraction of text and images, image verification, "Misleading or missing context" (27 October 2026)
+
+- **Verify Information starts with one box: "Paste a link to verify"**, and one button: **Analyse Automatically**. Text, screenshots and files remain available below it, for content without a link.
+  - **Live preview:** while the investigation runs, the page shows what was extracted: platform, headline, description, the post or article text, the images, author, publisher, publication date, hashtags, mentions, public engagement counts and video details (title, channel, duration, captions note), then the detected claims.
+  - **Progress:** seven stages are shown as they run.
+  - **Results:** the overall preliminary verdict with the strength of the evidence; each claim with its explanation and its supporting and contradicting sources (with links, dates and the source's category); image verification; the evidence sources searched, with source credibility; and recommended next steps.
+  - **Downloads:** Download Report (PDF), Word and HTML.
+- **Images from the link** (`fetchurl.pageImages`, `fetchurl.fetchImage`):
+  - **Found:** the page's Open Graph and Twitter-card images, structured-data images, `image_src` and images inside the article, plus the platforms' thumbnails (YouTube, TikTok, X media when the X API is configured).
+  - **Downloaded:** with the same SSRF protection as pages (public addresses only, re-checked on every redirect), at most 8 MB. Only real JPEG, PNG, WebP or GIF images are accepted, checked by their bytes; icons and tracking pixels are skipped.
+  - **Kept and read:** each image is kept with the case (fingerprinted, audited with its source link) and read by OCR (English and Kiswahili). When a post has little text of its own, its image text is used.
+  - **Limit:** at most 3 per link (`INVESTIGATE_MAX_LINK_IMAGES`).
+- **Image verification** (`server/lib/mediacheck.js`; a new stage, "Checking images and media"). It reports only observations:
+  - the text in the image and whether it repeats a claim;
+  - matches with the reference archive and earlier cases (AIVS's perceptual hashing): a match with an archive record documented more than 30 days before the claim, or already assessed as misleading, is reported as **possible reuse of an old image**;
+  - copies that are similar but not identical, which may be cropped, re-encoded or edited;
+  - editing software named in the metadata, and metadata dates well before the claim;
+  - small images.
+  - **Optional:** reverse-image search with Google Cloud Vision web detection (`GOOGLE_VISION_API_KEY`; the image is sent to Google, and each send is audited), and an AI description of the image by a vision model on your own Ollama server (`INVESTIGATE_VISION_MODEL`, for example `qwen2.5vl`; marked "AI, not verified"; it never decides).
+  - AIVS never declares an image manipulated or AI-generated.
+- **Classifications** are now the five requested:
+  - **Supported**, **Contradicted**, **Insufficient evidence** and **Unverifiable**, as before;
+  - **Misleading or missing context**, which is new. It comes from a published "misleading / missing context" rating, or overall when an image appears to be an old image reused in a new context;
+  - reliable sources that disagree now give **Insufficient evidence**, with "sources disagree" (earlier reports that say "Mixed evidence" are still read).
+- **Reports** now include: the original content (headline, text, link, and the first image embedded in the PDF and HTML), the detected claims, an **Image verification** section, and a completion status ("Completed" or "Completed with limitations", with the reasons). They also say that the strength label describes the evidence, not the probability that the claim is true.
+- **Corrections:** when a link could not be fully read (for example a Facebook post), the result page offers to add the text or a screenshot and analyse the same link again. The earlier investigation is kept, and the new one records which report it corrects.
+- `GET /api/investigations/services` reports which evidence sources, AI, reverse search and AI vision are configured.
+- **`npm run check:investigate -- <links>`** runs real investigations against the real services in `.env`, in a temporary copy of AIVS (your records are not touched). It prints what worked for each link (text, title, images, author and date, claims, outside evidence, AI, image checks, PDF/Word/HTML, saved in Reports) and keeps the PDFs in `data/investigate-check/`.
+- Database migration 15 adds the extraction preview to investigations (a backup copy is saved first).
+- **Tests:**
+  - `npm test`: 200, all pass (7 new):
+    - images from an article page, read and kept, and embedded in the PDF and HTML;
+    - an old archive image giving "Misleading or missing context";
+    - a "misleading" fact-check rating;
+    - video title, channel and thumbnail, with reverse search and AI description labelled and audited;
+    - services not configured;
+    - correcting an incomplete extraction;
+    - image downloads that refuse private addresses and non-images.
+  - `npm run test:e2e`: 205 checks, all pass. `npm run test:automatic:e2e`: 4 checks, all pass.
+
 ## 1.23.0 — Verify Information in one click: automatic extraction, evidence research, assessment and report (27 October 2026)
 
 - **One page, one button.** Verify Information (`#/investigate`) takes a link (news article, PDF, X, YouTube, TikTok, Telegram, Facebook, Instagram…), pasted text, images and screenshots, PDF or Word documents. **Analyze Information** runs six stages and shows their progress: extracting information, analyzing content, searching for evidence, comparing sources, preparing the assessment, generating the report. The report appears on the same page. The step-by-step investigation is still available from a link on the page.

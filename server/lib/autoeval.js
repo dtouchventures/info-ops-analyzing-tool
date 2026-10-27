@@ -9,7 +9,8 @@
 import { ratingToVerdict, activeVerdict } from "../../shared/verdict.js";
 import { OFFICIAL_SOURCES } from "./retrieval.js";
 
-export const AUTO_VERDICTS = { supported: "Supported", contradicted: "Contradicted", mixed: "Mixed evidence", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable" };
+export const AUTO_VERDICTS = { supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable",
+  mixed: "Insufficient evidence (sources disagree)" };   // "mixed" is kept only to read reports saved by 1.23
 export const STRENGTH = { strong: "Strong", moderate: "Moderate", weak: "Weak", none: "None found" };
 
 // ---------------------------------------------------------------- text similarity
@@ -74,7 +75,8 @@ export const figures = t => new Set((String(t || "").replace(DATES, " ").match(/
 
 export function ruleStance(claim, e) {
   if (e.rating) {
-    const v = activeVerdict(ratingToVerdict(e.rating));
+    const raw = ratingToVerdict(e.rating), v = activeVerdict(raw);
+    if (raw === "misleading_context") return ["misleading", "strong", `published rating “${e.rating}” (misleading or missing context)`];
     if (v === "contradicted") return ["contradicts", "strong", `published rating “${e.rating}”`];
     if (v === "supported") return ["supports", "strong", `published rating “${e.rating}”`];
     return ["related", "none", `the rating “${e.rating}” does not settle the claim; read the source`];
@@ -145,7 +147,7 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
 export function topFor(compared, claimId, n = 5) {
   const mine = compared.filter(e => e.claim_id === claimId && (e.stance !== "related" || e.relevance >= 0.2));
   const best = mine.slice(0, n);
-  for (const e of mine.slice(n)) if (e.stance === "contradicts" || e.ai_disagrees) best.push(e);
+  for (const e of mine.slice(n)) if (e.stance === "contradicts" || e.stance === "misleading" || e.ai_disagrees) best.push(e);
   return best;
 }
 
@@ -159,13 +161,17 @@ export function assessClaim(cl, compared, searched) {
   const type = cl.kind !== "statement" && cl.kind !== "attribution" ? cl.kind : cl.claim_type || "factual";
   if (type !== "factual") return { verdict: "not_verifiable", strength: "none", reason: `Not checked as true or false because ${TYPE_REASON[type] || "it cannot be checked against evidence"}.`, supporting: [], contradicting: [] };
   const mine = compared.filter(e => e.claim_id === cl.id), ind = st => mine.filter(e => e.stance === st && !e.repeat_of);
-  const sup = ind("supports"), con = ind("contradicts");
+  const sup = ind("supports"), con = ind("contradicts"), mis = mine.filter(e => e.stance === "misleading" && e.rating);
   const fcSup = sup.filter(e => e.rating && ["fact_checker", "knowledge_base"].includes(e.tier) || e.rating && e.connector === "factcheck"), fcCon = con.filter(e => e.rating && (["fact_checker", "knowledge_base"].includes(e.tier) || e.connector === "factcheck"));
   const relSup = sup.filter(e => RELIABLE.has(e.tier)), relCon = con.filter(e => RELIABLE.has(e.tier)), offSup = sup.filter(e => e.tier === "official" && e.stance_strength !== "weak");
   const ids = xs => xs.map(e => e.id), names = xs => [...new Set(xs.map(e => e.publisher))].join(", ");
   let verdict, strength, reason;
   if ((relSup.length || fcSup.length) && (relCon.length || fcCon.length)) {
-    verdict = "mixed"; strength = "moderate"; reason = `Reliable sources disagree: ${relSup.length || fcSup.length} independent source(s) support the claim and ${relCon.length || fcCon.length} contradict it.`;
+    verdict = "insufficient"; strength = "weak"; reason = `Reliable sources disagree: ${relSup.length || fcSup.length} independent source(s) support the claim and ${relCon.length || fcCon.length} contradict it, so the evidence does not settle it.`;
+    return { verdict, strength, reason, conflicting: true, supporting: ids(sup), contradicting: ids(con) };
+  } else if (mis.length && !relSup.length) {
+    verdict = "misleading"; strength = "strong"; reason = `A published fact-check rates it misleading or missing context (${names(mis)}): parts may be accurate, but the way it is presented is not.`;
+    return { verdict, strength, reason, supporting: ids(sup), contradicting: ids([...con, ...mis]) };
   } else if (fcCon.length || relCon.length) {
     verdict = "contradicted"; strength = fcCon.length || relCon.length >= 2 ? "strong" : "moderate";
     reason = fcCon.length ? `A published fact-check rates it false or misleading (${names(fcCon)}).` : `${relCon.length} independent reliable source(s) contradict it (${names(relCon)}) and none support it.`;
@@ -188,16 +194,20 @@ export function checkability(text) {
   const t = String(text || ""), caps = (t.match(/\b[A-Z][\p{L}]{2,}/gu) || []).length;
   return figures(t).size * 1.2 + (new RegExp(DATES.source, "i").test(t) ? 1 : 0) + Math.min(3, caps) * 0.5 + Math.min(1, words(t).length / 12);
 }
-export function overall(results, claims = []) {
+export function overall(results, claims = [], reuse = []) {
   results = results.map((r, i) => ({ ...r, _k: claims[i] ? checkability(claims[i].text) : -i }));
   const chk = results.filter(r => r.verdict !== "not_verifiable").sort((a, b) => b._k - a._k);
   const order = ["none", "weak", "moderate", "strong"];
   if (!chk.length) return { verdict: "not_verifiable", label: AUTO_VERDICTS.not_verifiable, strength: "none", strength_label: STRENGTH.none, note: null };
   const vs = chk.map(r => r.verdict);
-  const v = vs.includes("mixed") || (vs.includes("supported") && vs.includes("contradicted")) ? "mixed" : vs.includes("contradicted") ? "contradicted" : chk[0].verdict;
-  const basis = chk.filter(r => r.verdict === v); const strength = (basis.length ? basis : chk).map(r => r.strength).sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
+  const conflict = vs.includes("supported") && vs.includes("contradicted");
+  let v = conflict ? "insufficient" : vs.includes("contradicted") ? "contradicted" : vs.includes("misleading") ? "misleading" : chk[0].verdict;
+  const basis = chk.filter(r => r.verdict === v); let strength = (basis.length ? basis : chk).map(r => r.strength).sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
   const others = chk.slice(1).filter(r => r.verdict === "insufficient").length;
-  return { verdict: v, label: AUTO_VERDICTS[v], strength, strength_label: STRENGTH[strength], note: v === "supported" && others ? `The main claim is supported; ${others} other claim(s) in the submission could not be established.` : null };
+  let note = conflict || chk.some(r => r.conflicting) ? "Sources disagree about at least one claim." : v === "supported" && others ? `The main claim is supported; ${others} other claim(s) in the submission could not be established.` : null;
+  // an old image presented as new: the text may be accurate, but the presentation is misleading
+  if (reuse.length && ["supported", "insufficient"].includes(v)) { v = "misleading"; strength = "moderate"; note = `${note ? note + " " : ""}An attached image appears to be an old image reused in a new context (${reuse.length} indicator(s)); see the image findings.`; }
+  return { verdict: v, label: AUTO_VERDICTS[v], strength, strength_label: STRENGTH[strength], note };
 }
 
 // observed information-operations indicators; each one says what was seen, none proves coordination

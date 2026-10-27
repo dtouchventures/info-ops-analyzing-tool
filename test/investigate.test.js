@@ -10,7 +10,7 @@ import path from "node:path";
 import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { startServer, login } from "./helpers.js";
-import { checkSections, compare } from "../server/lib/autoeval.js";
+import { checkSections, compare, assessClaim } from "../server/lib/autoeval.js";
 import { toDocx } from "../server/lib/autoreport.js";
 import { extractDocument } from "../server/lib/docs.js";
 
@@ -73,6 +73,13 @@ before(async () => {
   fake = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x"), q = Object.fromEntries(u.searchParams), json = (c, o) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (u.pathname === "/news/cholera") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(ARTICLE); }
+    if (u.pathname === "/news/photo") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(`<!doctype html><html><head><title>Soldiers cross flooded road in Garissa</title><meta property="og:title" content="Soldiers cross flooded road in Garissa today">
+<meta property="og:description" content="Pictures show a convoy crossing floodwater."><meta property="og:image" content="/img/archive_convoy.jpg"><meta property="article:published_time" content="2026-10-26T09:00:00+03:00"><meta name="author" content="Practice Desk"></head>
+<body><article><h1>Soldiers cross flooded road in Garissa today</h1><p>PRACTICE ARTICLE: KDF soldiers crossed a flooded road near Garissa today as heavy rains continued across the county, officials said on Monday.</p><img src="/img/notice.png" width="800"></article></body></html>`); }
+    if (u.pathname.startsWith("/img/")) { const f = { "/img/archive_convoy.jpg": "training/images/archive_convoy.jpg", "/img/notice.png": "test/fixtures/notice.png", "/img/thumb.jpg": "training/images/case_patrol.jpg" }[u.pathname];
+      if (!f) { res.writeHead(404); return res.end(); } res.writeHead(200, { "content-type": "image/jpeg" }); return res.end(fs.readFileSync(f)); }
+    if (u.pathname === "/yt/oembed") return json(200, { title: "PRACTICE: Floods in Garissa today", author_name: "Practice Channel", type: "video", thumbnail_url: `${F}/img/thumb.jpg` });
+    if (u.pathname === "/v1/images:annotate") return json(200, { responses: [{ webDetection: { pagesWithMatchingImages: [{ url: "https://archive.example.org/2018/convoy", pageTitle: "Convoy crossing, 2018", fullMatchingImages: [{ url: "https://archive.example.org/c.jpg" }] }], fullMatchingImages: [{ url: "https://archive.example.org/c.jpg" }], bestGuessLabels: [{ label: "military convoy" }] } }] });
     if (u.pathname === "/news/slow") { setTimeout(() => { res.writeHead(200, { "content-type": "text/html" }); res.end(ARTICLE); }, 4000); return; }
     if (u.pathname === "/news/empty") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<html><body><div id=app></div></body></html>"); }
     if (u.pathname === "/v1alpha1/claims:search") return q.key === "fc-key" ? json(200, { claims: factchecks(q.query || "") }) : json(400, { error: { message: "API key not valid" } });
@@ -83,7 +90,8 @@ before(async () => {
     if (u.pathname === "/api/tags") return json(200, { models: ollama.models.map(name => ({ name })) });
     if (u.pathname === "/api/chat") {
       let b = ""; req.on("data", d => (b += d)); req.on("end", () => {
-        const p = JSON.parse(b).messages.at(-1).content;
+        const msg = JSON.parse(b).messages.at(-1), p = msg.content;
+        if (msg.images?.length) return json(200, { message: { content: JSON.stringify({ description: "Several trucks drive through brown floodwater on an unpaved road.", consistent: "unclear", reason: "the place and date cannot be seen" }) }, model: "qwen2.5vl" });
         if (ollama.mode === "broken") return json(200, { message: { content: "Sure! It is true." }, model: "qwen3:4b-instruct" });
         if (/"stance": "supports\|contradicts\|related"/.test(p)) {
           const items = p.split("\n").filter(l => /^\[E-\d+\]/.test(l)).map(l => { const id = l.slice(1, l.indexOf("]")); return /health\.go\.ke|Ministry of Health confirms 12/.test(l) ? { id, stance: "supports", quote: "Ministry of Health confirms 12 new cholera cases in Garissa County" } : { id, stance: "supports", quote: "words that are not in the item at all" }; });
@@ -99,9 +107,9 @@ before(async () => {
   });
   await new Promise(ok => fake.listen(0, "127.0.0.1", ok)); F = `http://127.0.0.1:${fake.address().port}`;
   const search = { factcheckKey: "fc-key", factcheckBase: F, braveKey: "brave-key", braveBase: F, gdelt: true, gdeltBase: F, wikipedia: true, wikipediaBase: F, timeoutMs: 3000 };
-  S = await startServer({ allowPrivateFetch: true, search, social: { timeoutMs: 3000, bases: { x: `${F}/x` } } });
+  S = await startServer({ allowPrivateFetch: true, search, social: { timeoutMs: 3000, bases: { x: `${F}/x`, youtube: `${F}/yt` } } });
   NS = await startServer({ search: { factcheckKey: "fc-key", factcheckBase: "http://127.0.0.1:9", braveKey: "b", braveBase: "http://127.0.0.1:9", gdelt: true, gdeltBase: "http://127.0.0.1:9", wikipedia: true, wikipediaBase: "http://127.0.0.1:9", timeoutMs: 1000 } });
-  AI = await startServer({ allowPrivateFetch: true, search, ai: { provider: "ollama", model: "qwen3:4b-instruct", baseUrl: F, apiKey: "", timeoutMs: 10000, healthTimeoutMs: 5000, maxImages: 6 } });
+  AI = await startServer({ allowPrivateFetch: true, search, social: { timeoutMs: 3000, bases: { youtube: `${F}/yt` } }, mediaCheck: { visionKey: "gv-key", visionBase: F, timeoutMs: 5000 }, investigate: { visionModel: "qwen2.5vl", visionBase: F }, ai: { provider: "ollama", model: "qwen3:4b-instruct", baseUrl: F, apiKey: "", timeoutMs: 10000, healthTimeoutMs: 5000, maxImages: 6 } });
   [ana, rev] = await Promise.all([login(S.base, "ana"), login(S.base, "rev")]); anaNS = await login(NS.base, "ana"); anaAI = await login(AI.base, "ana");
 });
 after(async () => { for (const s of [S, NS, AI]) { await s.ctx.investigations.close(); await s.close(); } fake.close(); });
@@ -160,7 +168,7 @@ test("8. supporting evidence: two or more independent reliable sources", async (
 // 9 ---- contradictory evidence
 test("9. contradicting evidence: sources disagree, the denial is always shown", async () => {
   const r = await common(ana, await investigate(ana, { text: "The governor opened the new Mandera referral hospital on Monday, county officials said." }));
-  const a = r.assessments[0]; assert.ok(a.contradicting.length); assert.ok(["mixed", "contradicted"].includes(a.verdict));
+  const a = r.assessments[0]; assert.ok(a.contradicting.length); assert.ok(["insufficient", "contradicted"].includes(a.verdict)); if (a.verdict === "insufficient") assert.ok(a.conflicting && /disagree/.test(a.reason));
   for (const id of a.contradicting) assert.ok(r.top[r.claims[0].id].includes(id));
 });
 // 10 ---- insufficient evidence
@@ -259,7 +267,7 @@ test("reports by date (EAT) and optional human review by another person", async 
 test("a denial from the same organisation is not folded into its supporting report", async () => {
   const r = (await investigate(ana, { text: "Police in Kisumu arrested 40 protesters on Tuesday, officers said." })).result, a = r.assessments[0];
   assert.ok(a.contradicting.length, JSON.stringify(r.evidence.map(e => [e.id, e.stance, e.repeat_of])));
-  assert.equal(a.verdict, "mixed"); for (const id of a.contradicting) assert.ok(r.top[r.claims[0].id].includes(id));
+  assert.equal(a.verdict, "insufficient"); assert.ok(a.conflicting); assert.match(r.overall.note || "", /disagree/); for (const id of a.contradicting) assert.ok(r.top[r.claims[0].id].includes(id));
 });
 test("a published rating is never grouped under another source, and the AI cannot overturn a contradiction", () => {
   const cl = { id: "c1", text: "The Ministry of Health confirmed 12 new cholera cases in Garissa County.", kind: "statement", claim_type: "factual", names: ["Garissa", "Ministry of Health"] };
@@ -294,4 +302,60 @@ test("the Word report opens even with characters XML cannot hold", async () => {
   const inv = await investigate(ana, { text: "Garissa County has recorded 12 new cholera cases, the Ministry of Health confirmed." }), r = inv.result;
   r.subject = "Odd \uffff characters \ud800 here"; const d = await extractDocument(toDocx(r), "report.docx");
   assert.match(d.text, /Odd/); assert.match(d.text, /Background/);
+});
+
+// ---- 1.24: link images, image verification, misleading context, preview, corrections
+test("a news link: headline, text and the page's images are extracted, read and checked without any typing", async () => {
+  const inv = await investigate(ana, { url: `${F}/news/photo` }), r = await common(ana, inv);
+  assert.equal(inv.preview.title, "Soldiers cross flooded road in Garissa today"); assert.match(inv.preview.description, /convoy/); assert.equal(inv.preview.author, "Practice Desk");
+  assert.equal(inv.preview.images.length, 2, JSON.stringify(inv.preview.images)); assert.ok(inv.preview.images.some(i => /og:image/.test(i.source)));
+  assert.ok(inv.preview.claims.length, "claims are in the preview");
+  assert.equal(r.media.images.length, 2); assert.ok(r.media.images.every(i => i.observations.length));
+  const notice = r.media.images.find(i => /Open Graph/.test(i.link?.source || "") === false); assert.ok(notice.ocr?.text.length > 10, "text read from the article image");
+  const cs = (await ana.get(`/api/cases/${inv.case_id}`)).body; assert.equal(cs.media.filter(m => m.kind === "image").length, 2, "images kept with the case");
+  const pdf = await fetch(`${S.base}/api/investigations/${inv.id}/report.pdf`, { headers: { cookie: ana.cookie, "x-aivs": "1" } }).then(x => x.arrayBuffer());
+  assert.ok(Buffer.from(pdf).includes(Buffer.from("/Subtype /Image")), "the PDF contains the image");
+  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.ok(html.includes("Image verification") && html.includes("data:image/jpeg;base64,") && html.includes("Original content"));
+});
+test("an old archive image presented as new gives 'Misleading or missing context'", async () => {
+  const fd = new FormData(); fd.append("file", new Blob([fs.readFileSync("training/images/archive_convoy.jpg")]), "convoy-2018.jpg");
+  for (const [k, v] of Object.entries({ title: "Convoy crossing a flooded track, 2018", description: "Documented convoy crossing during seasonal rains.", documented_date: "2018-10-14", source_ref: "Unit media release 2018/994", record_type: "original" })) fd.append(k, v);
+  assert.equal((await rev.post("/api/archive", undefined, { form: fd })).status, 201);
+  const r = (await investigate(ana, { url: `${F}/news/photo` })).result;
+  assert.ok(r.media.reuse.length, JSON.stringify(r.media.images.map(i => i.observations))); assert.equal(r.overall.verdict, "misleading"); assert.match(r.overall.note, /old image/);
+  assert.ok(r.sections.recommendations.some(s => /missing/.test(s)));
+});
+test("a published 'misleading' rating gives 'Misleading or missing context'", () => {
+  const cl = { id: "c1", text: "Hot lemon water cures malaria, the Ministry of Health said.", kind: "statement", claim_type: "factual", names: [] };
+  const out = compare([cl], [{ id: "E-1", claim_id: "c1", connector: "factcheck", source_url: "https://africacheck.org/x", source_title: "Lemon water and malaria", snippet: "Claim reviewed.", rating: "Misleading" }]);
+  assert.equal(out[0].stance, "misleading"); assert.equal(assessClaim(cl, out, true).verdict, "misleading");
+});
+test("a video link: title, channel and thumbnail are extracted; reverse search and AI image description are labelled", async () => {
+  ollama.mode = "good";
+  const inv = await investigate(anaAI, { url: "https://www.youtube.com/watch?v=practice123" }), r = inv.result;
+  assert.equal(inv.status, "done", inv.error); assert.equal(inv.preview.video.channel, "Practice Channel"); assert.equal(inv.preview.images.length, 1);
+  const im = r.media.images[0]; assert.ok(im.reverse.pages.length); assert.ok(im.observations.some(o => /Reverse-image search found the image on 1/.test(o.text)));
+  assert.ok(im.ai && im.observations.some(o => o.strength === "ai" && /not verified|AI description/.test(o.text)));
+  const acts = AI.ctx.db.prepare("SELECT action FROM audit_log WHERE entity_id = ?").all(inv.case_id).map(x => x.action);
+  assert.ok(acts.includes("Image sent to reverse-image search (automatic investigation)") && acts.includes("Image sent to AI service (automatic investigation)"));
+});
+test("without credentials the report says reverse search and AI vision are not configured", async () => {
+  const s = (await ana.get("/api/investigations/services")).body;
+  assert.equal(s.reverse_search.configured, false); assert.match(s.reverse_search.needs, /GOOGLE_VISION_API_KEY/); assert.equal(s.ai_vision.configured, false);
+  const r = (await investigate(ana, { url: "https://www.youtube.com/watch?v=practice123" })).result;
+  assert.ok(r.sections.recommendations.some(s => /reverse-image search/i.test(s)));
+});
+test("incomplete extraction can be corrected: the same link again with the missing text", async () => {
+  const first = await investigate(ana, { url: "https://www.facebook.com/KenyaDefenceForces/posts/99" }); assert.equal(first.result.source.access, "restricted");
+  const r2 = await ana.post(`/api/investigations/${first.id}/rerun`, undefined, { form: form({ text: "KDF recruitment requires a KSh 2,000 fee paid on WhatsApp before Friday." }) });
+  assert.equal(r2.status, 202);
+  let inv; for (let i = 0; i < 300; i++) { inv = (await ana.get(`/api/investigations/${r2.body.id}`)).body; if (inv.status === "done") break; await new Promise(ok => setTimeout(ok, 100)); }
+  assert.equal(inv.input.url, "https://www.facebook.com/KenyaDefenceForces/posts/99"); assert.equal(inv.result.overall.verdict, "contradicted");
+  assert.equal(JSON.parse(S.ctx.db.prepare("SELECT input_json FROM investigations WHERE id = ?").get(inv.id).input_json).corrects, first.report_id);
+});
+test("image downloads refuse private addresses and files that are not images", async () => {
+  const { fetchImage } = await import("../server/lib/fetchurl.js");
+  await assert.rejects(fetchImage(`${F}/img/thumb.jpg`), /private or local/);
+  await assert.rejects(fetchImage(`${F}/news/cholera`, { allowPrivate: true }), /JPEG, PNG, WebP or GIF/);
+  assert.equal((await fetchImage(`${F}/img/thumb.jpg`, { allowPrivate: true })).mime, "image/jpeg");
 });

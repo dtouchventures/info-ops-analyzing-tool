@@ -35,7 +35,7 @@ async function resolveSafe(host, allowPrivate) {
   return addrs[0];
 }
 
-function request(url, addr, accept) {
+function request(url, addr, accept, max = MAX_BYTES) {
   return new Promise((resolve, reject) => {
     const mod = url.protocol === "https:" ? https : http;
     const req = mod.request(url, {
@@ -45,9 +45,10 @@ function request(url, addr, accept) {
     }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); return resolve({ redirect: res.headers.location, status: res.statusCode }); }
       const len = +res.headers["content-length"] || 0;
-      if (len > MAX_BYTES) { res.destroy(); return reject(new HttpError(413, "That page is larger than 3 MB. Paste the relevant text instead.")); }
+      const big = () => new HttpError(413, max === MAX_BYTES ? "That page is larger than 3 MB. Paste the relevant text instead." : `The file is larger than ${Math.round(max / 1048576)} MB.`);
+      if (len > max) { res.destroy(); return reject(big()); }
       const chunks = []; let n = 0;
-      res.on("data", d => { n += d.length; if (n > MAX_BYTES) { res.destroy(); reject(new HttpError(413, "That page is larger than 3 MB. Paste the relevant text instead.")); } else chunks.push(d); });
+      res.on("data", d => { n += d.length; if (n > max) { res.destroy(); reject(big()); } else chunks.push(d); });
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
       res.on("error", reject);
     });
@@ -83,6 +84,43 @@ export async function fetchPage(input, { allowPrivate = false, allowPdf = false,
   throw new HttpError(508, "Too many redirects.");
 }
 
+// Safe download of one public image (same protections as pages: public addresses only, re-checked on every redirect,
+// timeout, size limit). Only JPEG, PNG, WebP and GIF are accepted, checked by their first bytes, not by the server's word.
+const IMAGE_MAX = 8 * 1024 * 1024;
+export async function fetchImage(input, { allowPrivate = false, maxBytes = IMAGE_MAX } = {}) {
+  let url;
+  try { url = new URL(String(input).trim()); } catch { throw new HttpError(400, "Not a valid image address."); }
+  for (let hop = 0; hop <= 5; hop++) {
+    if (!["http:", "https:"].includes(url.protocol)) throw new HttpError(400, "Only http:// and https:// images can be retrieved.");
+    if (url.username || url.password) throw new HttpError(400, "Image links containing a user name or password are not retrieved.");
+    const addr = await resolveSafe(url.hostname, allowPrivate);
+    const r = await request(url, addr, "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1", maxBytes);
+    if (r.redirect) { url = new URL(r.redirect, url); continue; }
+    if (r.status >= 400) throw new HttpError(502, `The image server answered with HTTP ${r.status}.`);
+    const b = r.body, sig = b.subarray(0, 12).toString("latin1");
+    const mime = b[0] === 0xff && b[1] === 0xd8 ? "image/jpeg" : sig.startsWith("\x89PNG") ? "image/png" : sig.startsWith("GIF8") ? "image/gif" : sig.startsWith("RIFF") && sig.slice(8, 12) === "WEBP" ? "image/webp" : null;
+    if (!mime) throw new HttpError(415, "The link did not return a JPEG, PNG, WebP or GIF image.");
+    if (b.length < 1024) throw new HttpError(422, "The image is too small to analyse (probably an icon or tracking pixel).");
+    return { finalUrl: url.href, mime, raw: b };
+  }
+  throw new HttpError(508, "Too many redirects.");
+}
+
+// Images a page declares for itself (Open Graph, Twitter card, structured data, link rel=image_src), then the first
+// images inside the article. Returned as absolute http(s) links with where each one was found; nothing is downloaded here.
+export function pageImages(html, base, limit = 4) {
+  const out = [], seen = new Set(), metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map(m => m[0]);
+  const add = (u, source) => { if (!u || out.length >= limit) return; let x; try { x = new URL(decode(String(u).trim()), base); } catch { return; }
+    if (!/^https?:$/.test(x.protocol) || /\.svg(\?|$)|sprite|logo|icon|avatar|pixel|blank\.gif|1x1/i.test(x.pathname) || seen.has(x.href)) return; seen.add(x.href); out.push({ url: x.href, source }); };
+  for (const [k, s] of [["og:image", "Open Graph image (og:image)"], ["og:image:url", "Open Graph image (og:image)"], ["og:image:secure_url", "Open Graph image (og:image)"], ["twitter:image", "Twitter card image"], ["twitter:image:src", "Twitter card image"]])
+    for (const t of metas) if ((attr(t, "property") || attr(t, "name") || "").toLowerCase() === k) add(attr(t, "content"), s);
+  for (const m of html.matchAll(/"image"\s*:\s*(?:\[\s*)?(?:"(https?:[^"]+)"|\{[^{}]*?"url"\s*:\s*"(https?:[^"]+)")/gi)) add(m[1] || m[2], "structured data (image)");
+  const rel = /<link\b[^>]*rel\s*=\s*["']image_src["'][^>]*>/i.exec(html); if (rel) add(attr(rel[0], "href"), "link rel=image_src");
+  const art = (/<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html) || /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html) || [])[1] || "";
+  for (const m of art.matchAll(/<img\b[^>]*>/gi)) { const w = +attr(m[0], "width") || 0; if (w && w < 200) continue; add(attr(m[0], "src") || attr(m[0], "data-src"), "image in the article"); }
+  return out;
+}
+
 const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—", hellip: "…", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", copy: "©" };
 const decode = s => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => e[0] === "#" ? (() => { const n = e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : +e.slice(1); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ""; })() : ENT[e.toLowerCase()] ?? m);
 const attr = (tag, name) => { const m = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag); return m ? decode(m[2] ?? m[3] ?? m[4] ?? "") : null; };
@@ -105,5 +143,5 @@ export function extractHtml(html, url) {
   let author = meta("author", "article:author", "parsely-author", "dc.creator");
   if (!author) { const m = /"author"\s*:\s*(?:\[\s*)?\{[^{}]*?"name"\s*:\s*"([^"]{2,120})"/i.exec(html); if (m) author = decode(m[1]); }
   if (author && /^https?:\/\//i.test(author)) author = null;
-  return { title, text, published, publishedBasis: basis, author: author ? author.slice(0, 200) : null, modified: modified && !isNaN(new Date(modified)) ? new Date(modified).toISOString() : null, site: meta("og:site_name") || url.hostname, description: meta("og:description", "description") };
+  return { title, text, published, publishedBasis: basis, author: author ? author.slice(0, 200) : null, modified: modified && !isNaN(new Date(modified)) ? new Date(modified).toISOString() : null, site: meta("og:site_name") || url.hostname, description: meta("og:description", "description"), images: pageImages(html, url) };
 }

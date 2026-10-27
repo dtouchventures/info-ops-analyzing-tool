@@ -58,7 +58,12 @@ export const config = {
   },
   // one-click automatic investigations: total time per investigation, how many run at once, and whether case content may
   // go to an AI service outside your network (off: only Ollama on your own network is used automatically)
-  investigate: { timeoutMs: int(env.INVESTIGATE_TIMEOUT_S, 900) * 1000, concurrency: int(env.INVESTIGATE_CONCURRENCY, 2), allowExternalAI: env.INVESTIGATE_ALLOW_EXTERNAL_AI === "true" },
+  investigate: { timeoutMs: int(env.INVESTIGATE_TIMEOUT_S, 900) * 1000, concurrency: int(env.INVESTIGATE_CONCURRENCY, 2), allowExternalAI: env.INVESTIGATE_ALLOW_EXTERNAL_AI === "true",
+    maxLinkImages: int(env.INVESTIGATE_MAX_LINK_IMAGES, 3),
+    // optional AI image description: a vision model on your own Ollama server (for example qwen2.5vl:7b or llava:7b)
+    visionModel: env.INVESTIGATE_VISION_MODEL || "", visionBase: env.INVESTIGATE_VISION_URL || "" },
+  // optional reverse-image search for automatic investigations (images are sent to Google Cloud Vision web detection)
+  mediaCheck: { visionKey: env.GOOGLE_VISION_API_KEY || "", visionBase: env.GOOGLE_VISION_BASE_URL || "https://vision.googleapis.com", timeoutMs: int(env.SEARCH_TIMEOUT_MS, 15000) },
   // social media post lookup through the platforms' public embed services (no key except Facebook/Instagram)
   social: { metaToken: env.META_OEMBED_TOKEN || "", timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },
   // optional local AI for social media analysis (Ollama on this computer or an institution server; never the internet)

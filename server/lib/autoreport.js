@@ -43,16 +43,20 @@ export function writeSections(r) {
 
   const as = [`Overall: ${o.label}. Strength of the available evidence: ${o.strength_label.toLowerCase()}.${o.note ? ` ${o.note}` : ""}`, r.io.assessment];
   if (["restricted", "failed"].includes(x.access)) as.push("The original content could not be fully read, which limits this assessment.");
+  if (r.media?.images?.length) as.push(r.media.reuse.length ? "Image findings: at least one image appears to be reused from an earlier context (see Image verification)." : `Image findings: ${r.media.images.length} image(s) were checked; no sign of reuse of an older image was found in the reference archive${r.media.services?.reverse_search?.configured ? " or by reverse-image search" : ""}. This does not show that the images are original or unaltered.`);
   if (["insufficient", "mixed"].includes(o.verdict)) as.push("The claim should not be treated as established or as false until stronger evidence is available.");
 
   const rec = [];
   if (o.verdict === "contradicted") rec.push("Treat the claim as false or misleading as presented, and cite the contradicting sources when responding.", "Continue monitoring the narrative: add its key terms to an AI Watchlist.");
   else if (o.verdict === "supported") rec.push("The claim is consistent with independent reliable sources; keep the cited sources with the record.", "Check that attached media, dates and places match the supported event before reuse.");
+  else if (o.verdict === "misleading") rec.push("Do not repeat the content as presented: explain what context is missing (for example an older image or event shown as new).", "Find the original source and date of the image or statement, and cite them when responding.", "Continue monitoring the narrative in AI Watchlist.");
   else if (o.verdict === "mixed") rec.push("Seek confirmation from an authoritative source (the responsible ministry, county or agency).", "Compare the conflicting sources' dates and origins before drawing a conclusion.");
+  else if (o.verdict === "insufficient" && /disagree/.test(o.note || "")) rec.push("Sources disagree: seek confirmation from an authoritative source (the responsible ministry, county or agency).", "Compare the conflicting sources' dates and origins, and avoid drawing conclusions until they are resolved.");
   else if (o.verdict === "insufficient") rec.push("Avoid drawing conclusions until additional evidence is available.", "Seek confirmation from an authoritative source or a fact-checking organisation.", "Flag the claim for further investigation and run the search again later.");
   else rec.push("No factual claim can be checked here; assess the content's purpose and spread instead of its truth.");
   if (r.hashtags?.length) rec.push(`Monitor the related hashtags in AI Watchlist: ${r.hashtags.slice(0, 5).join(" ")}.`);
   if (x.fallback) rec.push(x.fallback);
+  if (r.media?.images?.length && !r.media.services?.reverse_search?.configured) rec.push("Run a reverse-image search on the image(s) (for example with Google Lens or TinEye) to find their earliest appearance; automatic reverse search is not configured.");
   if (!ok.length) rec.push("Configure at least one evidence source (Settings → Service status) and analyse again.");
   return { background: bg, analysis: an, assessment: as, recommendations: rec };
 }
@@ -74,10 +78,20 @@ export function references(r) {
   const ids = [...new Set(r.claims.flatMap(c => r.top[c.id] || []))], by = Object.fromEntries(r.evidence.map(e => [e.id, e]));
   return { main: ids.map(i => by[i]).filter(Boolean), rest: r.evidence.filter(e => !ids.includes(e.id)) };
 }
-const STANCE = { supports: "supports", contradicts: "contradicts", related: "related only" };
+const STANCE = { supports: "supports", contradicts: "contradicts", misleading: "says it is misleading or lacks context", related: "related only" };
+// what the investigation could and could not do, for the report header
+export function completion(r) {
+  const issues = [];
+  if (["restricted", "failed"].includes(r.source.access)) issues.push("the original content could not be fully read");
+  else if (r.source.access === "partial") issues.push("only part of the original content could be read");
+  if (!r.search.some(s => (s.status === "ok" || s.status === "partial") && !["kb", "holdings"].includes(s.key))) issues.push("no outside evidence source could be searched");
+  if (r.search.some(s => s.status === "error" || s.status === "partial")) issues.push("some evidence searches failed");
+  if (!r.ai.used) issues.push("AI analysis was not used");
+  return { status: issues.length ? "Completed with limitations" : "Completed", issues };
+}
 
 // ---------------------------------------------------------------- HTML
-const VC = { supported: "#0f7a4a", contradicted: "#b42318", mixed: "#b54708", insufficient: "#475467", not_verifiable: "#475467" };
+const VC = { supported: "#0f7a4a", contradicted: "#b42318", misleading: "#b54708", mixed: "#475467", insufficient: "#475467", not_verifiable: "#475467" };
 const CSS = `:root{--ink:#101828;--muted:#475467;--line:#d0d5dd;--navy:#0b1f3a}*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .rep{max-width:880px;margin:0 auto;padding:24px 20px}.top{border-bottom:3px solid var(--navy);padding-bottom:10px;margin-bottom:12px}.top h1{font-size:20px;margin:0 0 6px}
 .lab{display:inline-block;background:#fef0c7;color:#7a2e0e;border:1px solid #fedf89;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600}.lab.ok{background:#d1fadf;color:#05603a;border-color:#a6f4c5}.lab.tr{background:#ece6ff;color:#3e1c96;border-color:#d9ccff}
@@ -91,7 +105,15 @@ details{margin-top:10px;border:1px solid var(--line);border-radius:6px;padding:6
 const link = (u, t) => isHttp(u) ? `<a href="${esc(u)}" rel="noopener noreferrer" target="_blank">${esc(t || u)}</a>` : esc(t || u);
 const withCites = (s, ids) => esc(s).replace(/\[(E-\d+)\]/g, (m, id) => ids.has(id) ? `<a href="#${id}">[${id}]</a>` : m);
 export function label(r) { return r.review?.status === "reviewed" ? `AI-generated · reviewed by ${r.review.by} on ${eat(r.review.at)}` : "AI-generated · not reviewed by an analyst"; }
-export function toHtml(r, { standalone = true } = {}) {
+const imgHtml = (r, images) => {
+  const list = (r.media?.images || []);
+  if (!list.length) return "";
+  return `<h2>Image verification</h2>${list.map(i => { const d = images.find(x => x.media_id === i.media_id);
+    return `<div style="display:flex;gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap">${d?.dataUri ? `<img src="${d.dataUri}" alt="${esc(i.name)}" style="max-width:220px;max-height:180px;border:1px solid var(--line);border-radius:4px">` : ""}
+    <div style="flex:1;min-width:220px"><div class="s"><b>${esc(i.name)}</b>${i.width ? ` · ${i.width}×${i.height}` : ""}${i.link ? ` · ${esc(i.link.source)} · ${link(i.link.url, "image link")}` : ""}</div>
+    <ul>${i.observations.map(o => `<li>${esc(o.text)}${o.strength === "ai" ? ' <span class="s">(AI, not verified)</span>' : ""}</li>`).join("")}</ul>${i.reverse?.pages?.length ? `<div class="s">Pages with this image: ${i.reverse.pages.slice(0, 5).map(p => link(p.url, p.title || p.url)).join(" · ")}</div>` : ""}</div></div>`; }).join("")}<p class="s">${esc(r.media.note)}</p>`;
+};
+export function toHtml(r, { standalone = true, images = [] } = {}) {
   const o = r.overall, x = r.source, ids = new Set(r.evidence.map(e => e.id)), { main, rest } = references(r), S = r.sections;
   const ref = e => `<li id="${esc(e.id)}"><b>[${esc(e.id)}]</b> ${link(e.source_url, e.source_title || e.reference)}<div class="s">${esc(e.publisher)} · ${esc(e.source_published_at ? eat(e.source_published_at, false) : "date not known")} · ${esc(e.tier_label)} · claim ${esc(e.claim_seq)}: ${esc(STANCE[e.stance])} (${esc(e.stance_basis)})${e.ai_stance ? ` · AI reading: ${esc(STANCE[e.ai_stance])}${e.ai_disagrees ? " (differs; check this source)" : ""}` : ""}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.repeat_of ? ` · repeats ${esc(e.repeat_of)}` : ""} · found via ${esc(e.connector_label)}, ${esc(eat(e.retrieved_at))}</div></li>`;
   const rows = r.claims.map((c, i) => { const a = r.assessments[i]; return `<tr><td>${c.seq}</td><td>${esc(c.text)}<div class="s">${esc(a.reason)}</div></td><td>${esc(STRENGTH[a.strength])}</td><td><span class="tag" style="--vc:${VC[a.verdict]}">${esc(AUTO_VERDICTS[a.verdict])}</span></td></tr>`; }).join("");
@@ -99,23 +121,28 @@ export function toHtml(r, { standalone = true } = {}) {
   const body = `<div class="rep"><div class="top"><h1>${esc(r.subject)}</h1><span class="lab${r.review?.status === "reviewed" ? " ok" : ""}">${esc(label(r))}</span>${r.training ? ' <span class="lab tr">Training case (synthetic material)</span>' : ""}
   <div class="meta"><div><b>Report</b> ${esc(r.report_id)}</div><div><b>Investigation date</b> ${esc(eat(r.created_at))}</div><div><b>Source published</b> ${esc(x.published_at ? eat(x.published_at) : "Not known")}</div>
   <div><b>Analysis completed</b> ${esc(eat(r.completed_at))}</div><div><b>Source</b> ${x.url ? link(x.url, x.platform || x.url) : esc(x.platform || x.input_type)}</div><div><b>Case</b> ${r.case_id ? esc(r.case_id) : "not created (no readable content)"}</div></div></div>
-  <div class="v" style="--vc:${VC[o.verdict]}"><b>${esc(o.label)}</b><span>Evidence strength: ${esc(o.strength_label)}</span></div>
+  <div class="v" style="--vc:${VC[o.verdict]}"><b>${esc(o.label)}</b><span>Strength of the evidence: ${esc(o.strength_label)} · ${esc(completion(r).status)}${completion(r).issues.length ? ` (${esc(completion(r).issues.join("; "))})` : ""}</span></div>
+  <p class="s">The strength label describes the evidence found, not the probability that the claim is true. It is an AI-generated preliminary assessment; consequential decisions need human review.</p>
+  ${x.url || x.title || r.content ? `<h2>Original content</h2>${x.title ? `<p><b>${esc(x.title)}</b></p>` : ""}${x.description ? `<p class="s">${esc(x.description)}</p>` : ""}${(() => { const m = (images.find(i => i.dataUri && r.media?.images?.[0]?.media_id === i.media_id)); return m ? `<img src="${m.dataUri}" alt="Image from the content" style="max-width:100%;max-height:260px;border:1px solid var(--line);border-radius:4px;margin:4px 0">` : ""; })()}
+  <p class="s" style="white-space:pre-wrap">${esc(String(r.content || "").slice(0, 1200))}${String(r.content || "").length > 1200 ? "…" : ""}</p>
+  <p class="s">${[x.author && `Author: ${esc(x.author)}`, x.publisher && `Publisher: ${esc(x.publisher)}`, r.hashtags?.length && `Hashtags: ${esc(r.hashtags.join(" "))}`, x.mentions?.length && `Mentions: ${esc(x.mentions.join(" "))}`, x.metrics && `Engagement (public counts): ${esc(Object.entries(x.metrics).filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`).join(", "))}`, x.video && `Video: ${esc([x.video.title, x.video.duration, x.video.channel].filter(Boolean).join(" · "))}`].filter(Boolean).join(" · ")}</p>` : ""}
   ${r.written_by === "ai" ? `<p class="s"><b>Sections A–D were drafted by the AI model ${esc(r.ai.model)} from the listed evidence and checked automatically. The assessment labels come from fixed rules.</b></p>` : ""}
   <h2>A. Background</h2>${S.background.map(s => `<p>${withCites(s, ids)}</p>`).join("")}
   <h2>B. Analysis</h2>${S.analysis.map(s => `<p>${withCites(s, ids)}</p>`).join("")}${rows ? `<table><tr><th>#</th><th>Claim</th><th>Evidence strength</th><th>Assessment</th></tr>${rows}</table>` : ""}
   <h2>C. Assessment</h2>${S.assessment.map(s => `<p>${withCites(s, ids)}</p>`).join("")}${ind ? `<p class="s"><b>Information operations indicators (observed):</b></p><ul>${ind}</ul>` : ""}
   <p class="s"><b>Limitations:</b> ${r.limitations.map(esc).join(" ")}</p>
   <h2>D. Recommendations</h2><ul>${S.recommendations.map(s => `<li>${withCites(s, ids)}</li>`).join("")}</ul>
+  ${imgHtml(r, images)}
   <h2>E. References</h2>${main.length ? `<ol class="refs">${main.map(ref).join("")}</ol>` : '<p class="s">No relevant evidence was retrieved.</p>'}
   ${rest.length ? `<details><summary>Supplementary evidence (${rest.length} more item${rest.length > 1 ? "s" : ""}, kept for audit)</summary><ol class="refs">${rest.map(ref).join("")}</ol></details>` : ""}
   <p class="s" style="margin-top:14px">Generated by AIVS ${esc(r.version)}. Text drafted by ${r.written_by === "ai" ? `the AI model ${esc(r.ai.model)} (checked)` : "the AIVS rule-based writer"}. Times in East Africa Time (UTC+3).</p></div>`;
-  return standalone ? `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(r.report_id)} · AIVS report</title><style>${CSS}</style></head><body>${body}</body></html>` : body;
+  return standalone ? `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><title>${esc(r.report_id)} · AIVS report</title><style>${CSS}</style></head><body>${body}</body></html>` : body;
 }
 
 // ---------------------------------------------------------------- PDF
 let replaced = 0;
 const safe = s => String(s ?? "").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/·/g, "-").replace(/→/g, "->").replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff]/gu, () => { replaced++; return "?"; });
-export function toPdf(r) {
+export function toPdf(r, { images = [] } = {}) {
   replaced = 0;
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margins: { top: 48, bottom: 54, left: 50, right: 50 }, info: { Title: `${r.report_id} - AIVS report`, Author: "AIVS (automatic)", Subject: safe(r.subject) } });
@@ -128,12 +155,26 @@ export function toPdf(r) {
     p(r.subject, { bold: true, size: 15, color: NAVY }); doc.moveDown(0.3);
     p(`Report ${r.report_id}  |  Investigation ${eat(r.created_at)}  |  Source published ${r.source.published_at ? eat(r.source.published_at) : "not known"}  |  Completed ${eat(r.completed_at)}${r.case_id ? `  |  Case ${r.case_id}` : ""}`, { size: 8, color: MUTED });
     if (r.source.url) p(`Source: ${r.source.url}`, { size: 8, color: MUTED });
-    doc.moveDown(0.4); p(`${r.overall.label}  -  evidence strength: ${r.overall.strength_label}`, { bold: true, size: 12, color: VC[r.overall.verdict] });
+    doc.moveDown(0.4); p(`${r.overall.label}  -  strength of the evidence: ${r.overall.strength_label}`, { bold: true, size: 12, color: VC[r.overall.verdict] });
+    const cp = completion(r); p(`Status: ${cp.status}${cp.issues.length ? ` (${cp.issues.join("; ")})` : ""}. AI-generated preliminary assessment; the strength label describes the evidence, not the probability that the claim is true.`, { size: 8, color: MUTED });
+    h2("Original content");
+    if (r.source.title) p(r.source.title, { bold: true });
+    const first = images.find(i => i.buffer && i.media_id === r.media?.images?.[0]?.media_id);
+    if (first) { try { doc.image(first.buffer, { fit: [W * 0.6, 170] }); doc.moveDown(0.3); } catch { p("(The image could not be drawn in the PDF.)", { size: 8, color: MUTED }); } }
+    p(String(r.content || "").slice(0, 1200) + (String(r.content || "").length > 1200 ? "..." : ""), { size: 8.5 });
+    const meta = [r.source.author && `Author: ${r.source.author}`, r.source.publisher && `Publisher: ${r.source.publisher}`, r.hashtags?.length && `Hashtags: ${r.hashtags.join(" ")}`, r.source.metrics && `Engagement: ${Object.entries(r.source.metrics).filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`).join(", ")}`].filter(Boolean);
+    if (meta.length) p(meta.join("  |  "), { size: 8, color: MUTED });
+    p("Detected claims:", { bold: true, size: 9 }); r.claims.forEach((c, i) => p(`${c.seq}. ${c.text} - ${AUTO_VERDICTS[r.assessments[i].verdict]}`, { size: 8.5 }));
     h2("A. Background"); r.sections.background.forEach(s => p(s));
     h2("B. Analysis"); r.sections.analysis.forEach(s => { p(s); doc.moveDown(0.15); });
     h2("C. Assessment"); r.sections.assessment.forEach(s => p(s));
     if (r.io.observed.length) { doc.moveDown(0.2); p("Information operations indicators (observed):", { bold: true, size: 9 }); r.io.observed.forEach(i => p(`- ${i.indicator}${i.cue ? ` (seen: "${i.cue}")` : ""}`, { size: 8.5 })); }
     doc.moveDown(0.2); p(`Limitations: ${r.limitations.join(" ")}`, { size: 8, color: MUTED });
+    if (r.media?.images?.length) {
+      h2("Image verification");
+      for (const i of r.media.images) { p(`${i.name}${i.width ? ` (${i.width}x${i.height})` : ""}${i.link ? ` - ${i.link.source}` : ""}`, { bold: true, size: 8.5 }); for (const o of i.observations) p(`- ${o.text}${o.strength === "ai" ? " (AI, not verified)" : ""}`, { size: 8 }); }
+      p(r.media.note, { size: 7.5, color: MUTED });
+    }
     h2("D. Recommendations"); r.sections.recommendations.forEach(s => p(`- ${s}`));
     h2("E. References"); const { main, rest } = references(r);
     if (!main.length) p("No relevant evidence was retrieved.", { size: 8.5, color: MUTED });
@@ -170,6 +211,8 @@ export function toDocx(r) {
   const sec = (t, lines, bullet) => { P.push(para(t, { style: "Heading1" })); for (const s of lines) P.push(para(bullet ? `• ${s}` : s)); };
   sec("A. Background", r.sections.background); sec("B. Analysis", r.sections.analysis);
   r.claims.forEach((c, i) => P.push(para(`Claim ${c.seq}: ${c.text} — ${AUTO_VERDICTS[r.assessments[i].verdict]} (strength: ${STRENGTH[r.assessments[i].strength]})`, { b: true })));
+  if (r.content) { P.push(para("Original content", { style: "Heading1" })); if (r.source.title) P.push(para(r.source.title, { b: true })); P.push(para(String(r.content).slice(0, 1500))); }
+  if (r.media?.images?.length) { P.push(para("Image verification", { style: "Heading1" })); for (const i of r.media.images) { P.push(para(i.name, { b: true })); for (const o of i.observations) P.push(para(`• ${o.text}${o.strength === "ai" ? " (AI, not verified)" : ""}`)); } P.push(para("The images are in the PDF and HTML reports.", { size: 18, color: "475467" })); }
   sec("C. Assessment", r.sections.assessment); for (const i of r.io.observed) P.push(para(`• Indicator (observed): ${i.indicator}`));
   P.push(para(`Limitations: ${r.limitations.join(" ")}`, { size: 18, color: "475467" }));
   sec("D. Recommendations", r.sections.recommendations, true);
