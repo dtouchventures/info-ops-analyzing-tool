@@ -84,18 +84,18 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     audit(user, "Automatic investigation failed", "investigation", id, { error: message.slice(0, 300) });
   }
 
-  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null }) {
+  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null }) {
     text = String(text || "").replace(/\r\n/g, "\n").trim(); url = String(url || "").trim();
     if (!url && /^https?:\/\/\S+$/i.test(text)) { url = text; text = ""; }
     if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "Links must start with http:// or https://.");
-    if (!text && !url && !files.length) throw new HttpError(400, "Paste text or a link, or add a file.");
+    if (!text && !url && !files.length) throw new HttpError(400, prefetched ? "The post has no text and no image that could be stored, so there is nothing to analyse." : "Paste text or a link, or add a file.");
     if (text.length > 20000) throw new HttpError(400, "That is more than 20,000 characters. Paste the part that contains the claims.");
     if (files.length > 5) throw new HttpError(400, "Add at most 5 files to one investigation.");
     const now = new Date(), ymd = new Date(now.getTime() + 3 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
     const id = nextId(db, "investigation", n => `INV-${String(n).padStart(6, "0")}`), reportId = nextId(db, `inv-${ymd}`, n => `AIVS-${ymd}-${String(n).padStart(3, "0")}`);
-    const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects };
-    db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)")
-      .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString());
+    const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}) };
+    db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at,origin) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString(), origin);
     audit(user, "Automatic investigation submitted", "investigation", id, { report_id: reportId, link: url || null, files: input.files.map(f => f.name), text_chars: text.length, training: !!isTraining });
     queue.push([id, user]); pump();
     return get(id);
@@ -124,6 +124,11 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const src = { input_type: input.files.length ? "image" : input.url ? "url" : "text", url: input.url || null, platform: null, author: null, author_basis: null, account: null, title: null,
       published_at: null, published_basis: null, access: "full", method: [], notes: [], fallback: null };
     const parts = []; let page = null, embed = null; const ocrs = [], linkImages = [], linkFiles = [];
+    // content already collected through an official API (live monitoring): its record is used as is, nothing is fetched again
+    const P = input.prefetched || null;
+    if (P) { Object.assign(src, { input_type: "url", url: P.url || null, platform: P.platform || null, account: P.account || null, author: P.account || null, author_basis: P.author_basis || null, publisher: P.publisher || null,
+      title: P.title || null, published_at: P.published_at || null, published_basis: P.published_basis || null, access: input.text ? "full" : "partial", metrics: P.metrics || null });
+      if (P.method) src.method.push(P.method); src.notes.push(...(P.notes || []).slice(0, 4)); }
     if (input.url) {
       const L = parseSourceLink(input.url); src.platform = L?.platform?.replace(/ \(website\)$/, "") || null; src.account = L?.account || null;
       if (L?.published_at) Object.assign(src, { published_at: L.published_at, published_basis: L.published_basis });
@@ -171,7 +176,10 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           const o = await ocr(f.path, budget(120000));
           ocrs.push({ file: f, ...o });
           const post = parsePostScreenshot(o.text, {}), body = (post.text || o.text).trim();
-          if (body.replace(/\s/g, "").length >= 15) { parts.push(body); src.method.push(`text read from ${f.name} by OCR (Tesseract, English and Kiswahili)`); }
+          // OCR of a photograph without writing gives noise: only text that reads as words is used
+          const toks = body.split(/\s+/).filter(Boolean), wordy = toks.length ? toks.filter(t => /^[\p{L}][\p{L}'’-]{1,}[.,:;!?)]*$/u.test(t) && /[aeiouy]/i.test(t)).length / toks.length : 0;
+          if (body.replace(/\s/g, "").length >= 15 && (wordy >= 0.6 || (!P && o.confidence >= 70))) { parts.push(body); src.method.push(`text read from ${f.name} by OCR (Tesseract, English and Kiswahili)`); }
+          else if (body.replace(/\s/g, "").length >= 15) src.notes.push(`${f.name}: the image contains little readable writing (OCR confidence ${o.confidence} of 100), so its OCR text was not analysed.`);
           else src.notes.push(`${f.name}: no readable text was found in the image.`);
           if (o.confidence < 70 && body) src.notes.push(`${f.name}: OCR confidence is low (${o.confidence} of 100); check the text against the image.`);
           if (post.platform && !src.platform) src.platform = post.platform;
@@ -186,12 +194,12 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           if (d.meta?.Title && !src.title) src.title = d.meta.Title;
           if (d.meta?.Author && !src.author) Object.assign(src, { author: d.meta.Author, author_basis: "author field in the document's properties" });
           if (d.created && !src.published_at) Object.assign(src, { published_at: d.created, published_basis: "creation date in the document's properties (may differ from publication)" });
-          if (!input.url) src.input_type = "document";
+          if (!input.url && !P) src.input_type = "document";
         } catch (e) { src.notes.push(`${f.name}: ${e.message}`); }
       } else src.notes.push(`${f.name}: this file type is not supported here (use an image, PDF or Word .docx).`);
     }
-    if (input.text) { parts.unshift(input.text); src.method.push("text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
-    if (!input.url && !input.files.length) src.input_type = "text";
+    if (input.text) { parts.unshift(input.text); src.method.push(P ? "post text as returned by the platform API" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
+    if (!input.url && !input.files.length && !P) src.input_type = "text";
     const content = [...new Set(parts.map(p => p.trim()).filter(Boolean))].join("\n\n").slice(0, 20000);
     src.mentions = [...new Set((content.match(/(^|[^\w@])@([A-Za-z0-9_]{2,30})\b/g) || []).map(m => m.trim().replace(/^[^@]*/, "")))].slice(0, 20);
     if (!parts.length && src.access === "full") { src.access = "failed"; src.fallback = src.fallback || "Paste the text, or upload a clearer screenshot."; }
@@ -203,7 +211,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     if (content) {
       const sg = suggestSource({ text: content, url: input.url || undefined });
       caseId = cases.create(user, { title: String(src.title || "").slice(0, 200) || undefined, claim_text: content, received_at: inv.created_at, priority: "routine", is_training: training,
-        source_platform: String(src.platform || sg.platform || (input.files.length ? "Uploaded file" : "Pasted text")).slice(0, 200), source_account: src.account || sg.account || null, source_url: input.url || sg.url || null,
+        source_platform: String(src.platform || sg.platform || (input.files.length ? "Uploaded file" : "Pasted text")).slice(0, 200), source_account: src.account || sg.account || null, source_url: src.url || input.url || sg.url || null,
         published_at: src.published_at, published_basis: src.published_at ? String(src.published_basis || "not stated").slice(0, 300) : null, hashtags: sg.hashtags, claimed_event_at: sg.event?.at || null, claimed_event_basis: sg.event?.basis || null });
       db.prepare("UPDATE investigations SET case_id = ? WHERE id = ?").run(caseId, id);
       if (page?.raw) { const snap = await storage.putBuffer(page.raw, page.mime); db.prepare("UPDATE cases SET source_title = ?, source_snapshot_sha256 = ?, source_snapshot_mime = ?, source_fetched_at = ?, source_final_url = ? WHERE id = ?").run(page.title, snap.sha256, page.mime, nowISO(), page.finalUrl, caseId);
@@ -383,7 +391,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   function list({ from, to, training = false, limit = 100 } = {}) {
     const day = (v, end) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v || ""))) return null; const d = new Date(`${v}T00:00:00+03:00`); if (end) d.setUTCDate(d.getUTCDate() + 1); return d.toISOString(); };
-    let q = "SELECT i.id, i.report_id, i.case_id, i.status, i.stage, i.subject, i.overall, i.source_published_at, i.created_at, i.completed_at, i.error, i.reviewed_at, u.display_name AS created_by_name, r.display_name AS reviewed_by_name FROM investigations i LEFT JOIN users u ON u.id = i.created_by LEFT JOIN users r ON r.id = i.reviewed_by WHERE i.is_training = ?";
+    let q = "SELECT i.id, i.report_id, i.case_id, i.status, i.stage, i.subject, i.overall, i.source_published_at, i.created_at, i.completed_at, i.error, i.reviewed_at, i.approved_at, i.origin, u.display_name AS created_by_name, r.display_name AS reviewed_by_name FROM investigations i LEFT JOIN users u ON u.id = i.created_by LEFT JOIN users r ON r.id = i.reviewed_by WHERE i.is_training = ?";
     const a = [training ? 1 : 0];
     if (day(from)) { q += " AND i.created_at >= ?"; a.push(day(from)); }
     if (day(to, true)) { q += " AND i.created_at < ?"; a.push(day(to, true)); }
@@ -402,10 +410,23 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     audit(user, "Automatic report reviewed", "investigation", r.id, { report_id: r.report_id, note: res.review.note });
     if (r.case_id) cases.change(user, r.case_id, `Automatic report ${r.report_id} reviewed by ${user.display_name}`, () => {});
   }
+  // approval of a reviewed automatic report: a reviewer or administrator who neither submitted nor reviewed it
+  function approve(user, id, note) {
+    const r = row(id); if (!r) throw new HttpError(404, "No such investigation.");
+    if (!can(user, "case.approve")) throw new HttpError(403, "Only reviewers and administrators can approve a report.");
+    if (!r.reviewed_at) throw new HttpError(409, "Record a review before the report can be approved.");
+    if (r.created_by === user.id || r.reviewed_by === user.id) throw new HttpError(403, "The person who submitted or reviewed this report cannot also approve it.");
+    if (r.approved_at) throw new HttpError(409, "This report has already been approved.");
+    if (!String(note || "").trim()) throw new HttpError(400, "Say briefly what the approval covers.");
+    const res = JSON.parse(r.result_json); res.approval = { by: user.display_name, at: nowISO(), note: String(note).trim().slice(0, 1000) };
+    db.prepare("UPDATE investigations SET approved_by = ?, approved_at = ?, approval_note = ?, result_json = ? WHERE id = ?").run(user.id, res.approval.at, res.approval.note, JSON.stringify(res), r.id);
+    audit(user, "Automatic report approved", "investigation", r.id, { report_id: r.report_id, note: res.approval.note });
+    if (r.case_id) cases.change(user, r.case_id, `Automatic report ${r.report_id} approved by ${user.display_name}`, () => {});
+  }
   // the one-page assessment is rebuilt from the saved investigation each time it is opened (header status and review
   // are current); AI-drafted section text saved with the investigation is kept. Nothing is written back.
   function assessmentOf(res, r) {
-    const fresh = buildAssessment(res, { priority: res.priority || (r.case_id ? db.prepare("SELECT priority FROM cases WHERE id = ?").get(r.case_id)?.priority : null) });
+    const fresh = buildAssessment(res, { approval: res.approval || null, priority: res.priority || (r.case_id ? db.prepare("SELECT priority FROM cases WHERE id = ?").get(r.case_id)?.priority : null) });
     const saved = res.io_assessment;
     return saved?.written_by === "ai" ? { ...fresh, background: saved.background, analysis: saved.analysis, assessment: saved.assessment, recommendations: saved.recommendations, written_by: "ai" } : fresh;
   }
@@ -442,5 +463,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     return inv;
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
-  return { start, rerun, get, list, review, file, assessmentOf, idle, close, services, STAGES };
+  return { start, rerun, get, list, review, approve, file, assessmentOf, idle, close, services, STAGES };
 }

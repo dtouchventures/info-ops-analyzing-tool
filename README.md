@@ -31,6 +31,25 @@ Validation: `npm test`, `npm run test:e2e`, and `npm run test:automatic:e2e`. Br
 
 > Training material (cases `TR-…`, archive `TA-…`) is synthetic and clearly labelled. It is stored apart from operational records and never matches them.
 
+## Live Facebook Monitoring (1.26)
+
+AIVS collects every post of the authorised Facebook Pages through the Meta Graph API. It analyses and verifies each new post automatically and prepares a one-page report for review.
+
+**Setup** (`.env` on the server only):
+
+- `META_PAGE_ACCESS_TOKEN`: the Page access token. Use a newly generated token; revoke any token that was shown on screen.
+- `META_PAGE_IDS`: the Page IDs to monitor, comma separated.
+- `META_APP_ID` / `META_APP_SECRET` (optional): AIVS can then read the token's expiry date.
+- Restart AIVS, then run `npm run check:facebook` to confirm the ten points against the real API.
+
+**How it works:**
+
+- **Schedule:** the server checks for new posts every `LIVE_MONITOR_INTERVAL_MINUTES` (5). The AIVS server must be running, but no browser needs to be open.
+- **Duplicates:** posts are stored once (platform post ID). Edits are recorded and analysed again.
+- **Errors:** a refused token stops collection and raises an alert.
+- **Results:** shown under **Live Monitoring** and on the Dashboard. Every result is labelled "AI-generated" until a person reviews it, and alerts must be acknowledged, dismissed or escalated by a person.
+- **Limits:** AIVS does not read groups, personal profiles or Pages the token is not authorised for. It does not infer coordination, intent or threat status. Instagram stays "Not connected" until its connection test passes.
+
 ## Quick start
 
 You need **Node.js 22 or later** (the LTS version from nodejs.org). On Windows, `start-windows.bat` checks this, installs everything on first run and opens your browser when the server is ready. Keep its black window open while you use AIVS.

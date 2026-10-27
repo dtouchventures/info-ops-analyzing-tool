@@ -2,7 +2,8 @@
 // nothing here is sample data. Service status for every module is under Settings → Service status.
 import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
-import { esc, icon, fmtDT, status } from "../ui.js";
+import { esc, icon, fmtDT, status, ago } from "../ui.js";
+import { statusLine } from "./live.js";
 
 const KIND = { match: "Keyword match", threshold: "Keyword threshold exceeded", volume: "Unusual posting spike", narrative: "Emerging narrative", repeated: "Repeated message", coordination: "Coordination indicator", engagement: "High engagement" };
 
@@ -23,9 +24,11 @@ function monitoringLine(W) {
     · ${m.live_sources_connected.length ? `live: ${esc(m.live_sources_connected.join(", "))}` : "no live platform connected (imported datasets only)"}${m.posts_checked && !m.posts_matched ? `<div class="tiny">No imported post matches the watchlist keywords yet.</div>` : ""}</div>`;
 }
 async function draw(el) {
+  const h0 = location.hash;
   crumbs(`<b>Dashboard</b>${App.training ? " · training records" : ""}`);
   const [D, W, IO] = await Promise.all([api.get(`/api/dashboard?${App.q()}`).catch(() => null), api.get("/api/watch/overview").catch(() => null), api.get("/api/io/datasets").catch(() => null)]);
-  const [al, INV] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null)]);
+  const [al, INV, LV] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null)]);
+  if (location.hash !== h0) return;   // the user moved on while the figures were loading: do not draw over the next page
   const c = D?.counts || {}, open = (c.draft || 0) + (c.analysing || 0) + (c.analysis_failed || 0) + (c.analyst_review || 0) + (c.needs_evidence || 0);
   const ds = (IO?.datasets || []).filter(d => App.training ? d.is_sample : !d.is_sample), posts = ds.reduce((a, d) => a + (d.posts || 0), 0);
   const wls = W?.watchlists || [], activeW = wls.filter(w => w.status === "active").length, openAlerts = (W?.alert_counts?.new || 0) + (W?.alert_counts?.acknowledged || 0);
@@ -41,6 +44,7 @@ async function draw(el) {
       ${card("watch", "watch", "AI Watchlist", "Watch topics and hashtags in imported or collected posts, and get alerts for unusual increases and repeated messages.",
         [[activeW, "active watchlists", "#/watch/lists"], [openAlerts, "open alerts", "#/watch/alerts"]], "#/watch", "Open watchlists", monitoringLine(W))}
     </div>
+    ${liveSection(LV)}
     <div class="grid g3" style="margin-top:16px">
       <div class="card"><div class="hd"><h3>Recent automatic reports</h3><a class="small right" href="#/reports">All reports</a></div><div class="bd">
         ${(INV?.investigations || []).length ? `<table class="t"><tbody>${INV.investigations.map(x => `<tr><td><a href="#/investigate/${esc(x.id)}" class="mono small">${esc(x.report_id)}</a></td><td class="small">${esc((x.subject || x.status).slice(0, 70))}</td><td>${x.overall ? `<span class="chip ${({ supported: "sup", contradicted: "con", mixed: "mix" })[x.overall] || "grey"}">${esc(x.overall_label)}</span>` : `<span class="chip grey">${esc(x.status)}</span>`}</td><td class="tiny sub">${fmtDT(x.created_at)}</td></tr>`).join("")}</tbody></table>`
@@ -52,4 +56,19 @@ async function draw(el) {
         ${(al?.alerts || []).length ? `<ul class="mini">${al.alerts.map(a => `<li><span class="chip ${a.status === "new" ? "warn" : "grey"}">${esc(a.status)}</span><a class="small" style="flex:1" href="#/watch/alerts/${a.id}">${esc((t => (t.toLowerCase().startsWith(String(KIND[a.kind] || a.kind).toLowerCase()) ? t : `${KIND[a.kind] || a.kind}: ${t}`))(a.title || "").slice(0, 90))}</a><span class="tiny sub" style="white-space:nowrap">${esc(a.watchlist_name || "")} · ${fmtDT(a.created_at)}</span></li>`).join("")}</ul>`
           : `<p class="small sub" style="margin:0">No alerts. Alerts appear when a watchlist finds matching posts or an unusual increase.</p>`}</div></div>
     </div>`;
+}
+
+// Live Facebook Monitoring: connection, synchronisation and analysis figures from the server, and the latest posts
+const VC = { pending: "info", supported: "sup", contradicted: "con", insufficient: "grey", misleading: "mix", not_verifiable: "grey" };
+function liveSection(o) {
+  if (!o) return `<div class="card livecard" style="margin-top:16px"><div class="hd"><h3>Live Facebook Monitoring</h3></div><div class="bd"><div class="wmon bad">The live monitoring status could not be loaded from the server.</div></div></div>`;
+  const c = o.counts, f = (v, l, h, cls = "") => `<a class="kpi ${cls}" href="${h}" data-fig="${esc(l)}"><div class="l">${l}</div><div class="v">${Number(v).toLocaleString()}</div></a>`;
+  return `<div class="card livecard" style="margin-top:16px" id="liveDash"><div class="hd"><h3>${icon("live")} Live Facebook Monitoring</h3><a class="small right" href="#/live">Open Live Monitoring</a></div><div class="bd">
+    ${statusLine(o)}
+    <div class="kpis">${f(c.total_posts, "real posts collected", "#/live/posts")}${f(c.posts_today, "posts today", "#/live/posts")}${f(c.awaiting_analysis, "awaiting AI analysis", "#/live/posts", c.awaiting_analysis ? "attn" : "")}${f(c.completed_analyses, "AI analyses completed", "#/live/posts")}
+      ${f(c.active_watchlists, "active watchlists", "#/watch/lists")}${f(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${f(c.pending_investigations, "pending investigations", "#/reports")}${f(c.completed_reports, "completed reports", "#/reports")}
+      ${f(c.needs_review, "need human review", "#/live/posts?review=1", c.needs_review ? "attn" : "")}${f(c.failed_analyses, "analyses failed", "#/live/posts?status=failed", c.failed_analyses ? "alert" : "")}</div>
+    ${o.recent_posts.length ? `<ul class="mini">${o.recent_posts.slice(0, 5).map(p => `<li>${p.image_stored ? `<img src="/api/live/posts/${p.id}/image" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ""}<span class="chip ${VC[p.verification] || "grey"}">${esc(p.verification_label || "—")}</span>
+      <a class="small" style="flex:1" href="#/live/post/${p.id}">${esc((p.message || "(no text)").slice(0, 110))}</a><span class="tiny sub">${fmtDT(p.created_time)}</span>${p.permalink_url ? `<a class="tiny" href="${esc(p.permalink_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ""}</li>`).join("")}</ul>`
+      : `<p class="small sub" style="margin:0">${o.facebook.configured || App.training ? "No posts collected yet." : "Not configured: an administrator sets META_PAGE_ACCESS_TOKEN and META_PAGE_IDS on the server."}</p>`}</div></div>`;
 }

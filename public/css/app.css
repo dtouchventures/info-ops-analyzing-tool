@@ -477,3 +477,18 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .istages .running { background: var(--teal-50, #e8f5f4); } .istages .running .dot { border-color: var(--teal-500, #13948f); border-top-color: transparent; animation: ispin 1s linear infinite; }
 .istages .done .dot { background: var(--teal-500, #13948f); border-color: var(--teal-500, #13948f); } .istages .warning .dot { background: #b54708; border-color: #b54708; }
 @keyframes ispin { to { transform: rotate(360deg); } }
+/* Live Monitoring (1.26) */
+.lposts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.lpost { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
+.lpost img { width: 100%; max-height: 220px; object-fit: cover; background: var(--unr-bg); display: block; }
+.lpost .noimg { padding: 8px 12px; background: var(--unr-bg); }
+.lpost .lpb { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.lpost .lmsg { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lalert { border-top: 1px solid var(--line); padding: 10px 0; } .lalert:first-child { border-top: 0; padding-top: 0; }
+.lalert.focus { background: var(--info-bg); margin: 0 -12px; padding: 10px 12px; }
+.livecard .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 10px 0; }
+@media (max-width: 1100px) { .livecard .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .livecard .kpis, .lposts { grid-template-columns: 1fr; } }
+.livecard ul.mini li { flex-wrap: wrap; } .livecard ul.mini li a.small { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .svcs ~ .grid > .card { min-width: 0; } .svcs ~ .grid > .card .bd { overflow-x: auto; } }
+.livecard .hd h3 .ic { width: 18px; height: 18px; vertical-align: -3px; margin-right: 4px; }

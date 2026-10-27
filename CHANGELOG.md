@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.26.0 — Live Facebook monitoring with automatic analysis, verification, alerts and reports (27 October 2026)
+
+- **Live Facebook Monitoring** (`server/lib/livemonitor.js`, `server/lib/meta-graph.js`, new menu item **Live Monitoring**).
+  - **What it collects:** every post of the Pages in `META_PAGE_IDS`, read with the Meta Graph API (v26.0) and the Page access token in `META_PAGE_ACCESS_TOKEN`. The token is server-side only: it is removed from every error, log, audit entry and answer.
+  - **Schedule:** a server scheduler runs every 5 minutes by default, whether or not anyone has AIVS open.
+  - **Each post keeps:** its text, publication and edit times, link, image (downloaded and stored), and public reaction, comment and share counts when the token's permissions include them. Without those permissions it falls back to the basic field set that was tested, and says so.
+  - **No duplicates:** posts are unique by platform post ID. The saved position (newest publication time) is stored after the posts, and each run starts two hours before it.
+  - **Edits:** an edited post is recorded and analysed again.
+  - **Paging and history:** Meta's paging is followed. Every run is recorded (synchronisation history) with its errors (`social_api_errors`).
+  - **Errors:** classified by Meta's codes. A refused or expired token (190) stops collection and raises a high-priority alert. A missing permission (10/200) does the same. Rate limits (4/17/32/613/80001…) wait for the time Meta announces. Network and server errors back off. The `X-App-Usage` and `X-Business-Use-Case-Usage` headers slow collection before the limits are reached.
+  - **Token check:** `/me` confirms which Page the token belongs to. With `META_APP_ID`/`META_APP_SECRET`, `debug_token` also gives its expiry and permissions, and a warning is raised 7 days before expiry.
+- **Automatic analysis of every new post:**
+  - **Local reading:** statements and claims, places, organisations and people, hashtags, themes, tone (with its uncertainty), possible misinformation indicators (cues, never proof), and similar earlier posts.
+  - **Kept apart:** facts from the platform record, unverified claims, inferences and unknowns.
+  - **Verification:** each post then goes through the automatic investigation (evidence search, comparison, image checks and the one-page assessment) from its stored record, without fetching it again. Identical wording reuses the earlier verification instead of searching again.
+  - **Statuses:** Pending verification, Supported by evidence, Contradicted by evidence, Insufficient evidence, Misleading or missing context, and "No checkable claim".
+  - **Confidence:** a score with documented criteria (High 70–100, Moderate 40–69, Low 0–39), shown point by point.
+  - **Human review:** flagged for contradicted or misleading findings, Low confidence, disagreeing sources, AI/rule disagreement, possible image reuse and misinformation indicators.
+- **Alerts:**
+  - **AI Watchlist:** watchlists can use the new source "Live Facebook monitoring". New posts are matched as they arrive.
+  - **Live alerts:** verification outcomes that need attention, unusual posting frequency against the source's own history (at least 7 days), emerging topics (hashtags, places, organisations), repeated wording, unusual engagement, and collection problems.
+  - **Priorities:** explained, with documented rules. Related alerts are grouped.
+  - **Actions:** analysts acknowledge, dismiss (with a reason) or escalate (with a reason). AIVS takes no action itself.
+  - **Never inferred:** repetition or frequency alone is never described as coordination, intent or a threat.
+- **Reports:** a reviewed automatic report can now be **approved** by a third person, who neither submitted nor reviewed it. "Approved" appears on the one-page assessment only then.
+- **Dashboard:** a Live Facebook Monitoring section with:
+  - the connection state and last successful synchronisation;
+  - counts of real posts, posts today, posts awaiting AI analysis, completed analyses, active watchlists, new alerts, pending investigations, completed reports, posts needing review and failed analyses;
+  - the latest posts with their images.
+
+  The Live Monitoring page adds filters by date, source, topic, verification status, alert priority, words and "needs review", post details, alert triage, and sources with their history.
+- **Verify Information:** a link to a Facebook post that live monitoring has already collected is analysed from the stored record. The Graph API lookup for other Page posts now also returns the post's image.
+- **Instagram:** prepared (Graph API media of the professional account linked to the Page). It is shown as **Not connected** until the connection test under Live Monitoring → Sources succeeds. Meta's permissions do not allow monitoring all public accounts or hashtags.
+- **Training mode:** "Load practice posts" adds clearly labelled PRACTICE posts that go through the same pipeline and stay apart from operational records. Operational mode never uses fixtures.
+- **Fixes found while testing:**
+  - A published fact-check rating is now applied only when the fact-checked claim is close enough to the post's claim.
+  - A post that itself warns about the rated claim ("beware of fake recruitment notices…") is no longer marked "contradicted" by a "False" rating.
+  - OCR text from photographs without writing is no longer analysed as claims.
+- **Database (migration 16, additive):**
+  - New tables: `social_sources`, `social_posts`, `social_post_metrics`, `social_syncs`, `social_api_errors`, `social_service`, `live_alerts`, `live_alert_events`.
+  - `investigations` gains `approved_by`, `approved_at`, `approval_note` and `origin`.
+  - A copy of the previous database is saved before upgrading, as for every migration.
+- **New checks:**
+  - `npm run check:facebook` runs the ten integration checks against the REAL Graph API with your `.env`, on a temporary database.
+  - `test/livemonitor.test.js` contains 13 tests against a local test double of the Graph API.
+  - The end-to-end browser test covers the dashboard section, Live Monitoring and Training mode.
+
 ## 1.25.0 — One-page Information Operations Assessment (27 October 2026)
 
 - **New main report: "AIVS — INFORMATION OPERATIONS ASSESSMENT REPORT"**, one A4 portrait page, generated automatically when an investigation completes (`server/lib/ioassessment.js`).

@@ -42,6 +42,7 @@ import { VERDICTS, VERDICT_HELP, STRENGTH_LABELS } from "../shared/verdict.js";
 import { TOPICS } from "../shared/text.js";
 import { suggestSource, parseSourceLink } from "../shared/text.js";
 import { makeLimiter } from "./lib/ratelimit.js";
+import { makeLiveMonitor } from "./lib/livemonitor.js";
 import { submissionHashes, ham, levelOf } from "./lib/hashing.js";
 import { sniff } from "./lib/sniff.js";
 import { THRESH } from "./lib/hashing.js";
@@ -92,7 +93,8 @@ export function createApp(config) {
   const VERSION0 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
   const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
-  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations };
+  const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
+  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live };
 
   const app = express();
   app.disable("x-powered-by");
@@ -189,7 +191,7 @@ export function createApp(config) {
   // rate limits: everything, plus a tighter budget for work that fetches, stores or computes a lot
   const RL = { windowMs: 300000, general: 1500, heavy: 60, ...(config.rateLimit || {}) };
   const general = makeLimiter({ windowMs: RL.windowMs, limit: RL.general, name: "General" }), heavy = makeLimiter({ windowMs: RL.windowMs, limit: RL.heavy, name: "Heavy" });
-  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample)$/;
+  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample|live\/sources(\/\d+\/sync)?|live\/check|live\/instagram\/test|live\/training\/sample)$/;
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
@@ -548,7 +550,7 @@ export function createApp(config) {
     const local = { checked: all.length, matched: m.length, excluded: ex.length, matches: pick(m, 30), excluded_examples: pick(ex, 20), samples: samples.map(x => ({ text: x.text, matched: x.matched, why: x.why || null, terms: x.terms || [] })) };
     let live = null;
     if (b.live) {
-      const want = (Array.isArray(b.live_sources) ? b.live_sources : def.sources).filter(x => def.sources.includes(x) && WATCH_SOURCES[x]?.mode !== "webhook");
+      const want = (Array.isArray(b.live_sources) ? b.live_sources : def.sources).filter(x => def.sources.includes(x) && ["poll", "stream"].includes(WATCH_SOURCES[x]?.mode));
       live = await watchCollector.previewLive(def, [...new Set(want.map(x => (x === "x_stream" && want.includes("x_search") ? null : x)).filter(Boolean))], { max: Math.min(100, Math.max(10, +b.max || 25)) });
     }
     const preview = { local: { checked: local.checked, matched: local.matched, excluded: local.excluded }, live, queries: { x: xQuery(def), x_stream: xQuery(def, { stream: true }), youtube: youtubeQuery(def) } };
@@ -1145,6 +1147,10 @@ export function createApp(config) {
   // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
   api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     const b = req.body || {};
+    // a Facebook post that live monitoring has already collected is analysed from its stored record (text, time, image)
+    const known = !(req.files || []).length && !String(b.text || "").trim().includes(" ") ? live.findByUrl(b.url || b.text) : null;
+    if (known) { const files = []; if (known.image_sha256) { const tmp = path.join(storage.tmpDir, `live-${known.id}-${Date.now()}.${known.image_mime === "image/png" ? "png" : "jpg"}`); fs.writeFileSync(tmp, storage.read(known.image_sha256)); files.push({ originalname: path.basename(tmp), size: fs.statSync(tmp).size, path: tmp }); }
+      return res.status(202).json(investigations.start(req.user, { text: known.message || "", files, prefetched: live.prefetchedFor(known), origin: "verify" })); }
     try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
@@ -1162,6 +1168,24 @@ export function createApp(config) {
     res.type(f.type).send(f.body);
   }));
   api.post("/investigations/:id/review", requirePerm("case.approve"), h((req, res) => { investigations.review(req.user, req.params.id, req.body?.note); res.json(investigations.get(req.params.id)); }));
+  api.post("/investigations/:id/approve", requirePerm("case.approve"), h((req, res) => { investigations.approve(req.user, req.params.id, req.body?.note); res.json(investigations.get(req.params.id)); }));
+
+  // ---------------------------------------------------------------- live monitoring (authorised Facebook Pages; Instagram prepared)
+  api.get("/live/overview", (req, res) => res.json(live.overview({ training: scopeOf(req) })));
+  api.get("/live/posts", (req, res) => res.json(live.posts({ ...req.query, training: scopeOf(req) })));
+  api.get("/live/posts/:id", (req, res) => res.json(live.post(req.params.id)));
+  api.get("/live/posts/:id/image", (req, res) => { const im = live.image(req.params.id); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, max-age=3600"); res.type(im.mime).send(im.buf); });
+  api.get("/live/alerts", (req, res) => res.json(live.alerts({ ...req.query, training: scopeOf(req), group: req.query.group === "1" })));
+  api.get("/live/alerts/:id", (req, res) => res.json(live.alert(req.params.id)));
+  api.post("/live/alerts/:id/action", requirePerm("watch.triage"), h((req, res) => res.json(live.act(req.user, req.params.id, req.body || {}))));
+  api.get("/live/syncs", (req, res) => res.json({ syncs: live.syncs({ source: req.query.source, limit: req.query.limit }) }));
+  api.get("/live/errors", requirePerm("watch.manage"), (req, res) => res.json({ errors: live.errors(req.query.limit) }));
+  api.post("/live/sources", requirePerm("watch.manage"), h(async (req, res) => res.status(201).json(await live.addSource(req.user, req.body || {}))));
+  api.patch("/live/sources/:id", requirePerm("watch.manage"), h((req, res) => res.json(live.setEnabled(req.user, req.params.id, !!req.body?.enabled))));
+  api.post("/live/sources/:id/sync", requirePerm("watch.manage"), h(async (req, res) => { const r = await live.sync(+req.params.id, { kind: "manual", user: req.user }); await live.work(); res.json(r); }));
+  api.post("/live/check", requirePerm("watch.manage"), h(async (req, res) => res.json(await live.checkToken({ force: true }))));
+  api.post("/live/instagram/test", requirePerm("watch.manage"), h(async (req, res) => res.json(await live.testInstagram(req.user))));
+  api.post("/live/training/sample", requirePerm("case.create"), h(async (req, res) => { if (scopeOf(req) !== 1) throw new HttpError(400, "Practice posts can only be loaded in Training mode."); res.status(201).json(await live.loadPractice(req.user)); }));
 
   api.get("/reports", (req, res) => {
     const t = scopeOf(req);

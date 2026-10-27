@@ -86,6 +86,11 @@ export function negates(claimText, body) {
 export function ruleStance(claim, e) {
   if (e.rating) {
     const raw = ratingToVerdict(e.rating), v = activeVerdict(raw);
+    // a rating settles the claim only when the fact-check is about this claim: close enough wording, and the claim is not
+    // itself a warning or denial of the rated claim (a "False" rating then agrees with the post rather than refuting it)
+    if ((e.relevance ?? 1) < 0.12) return ["related", "none", `a fact-check rated a different wording (“${e.rating}”); its claim is not close enough to this one to apply the rating`];
+    const warns = String(claim.text || "").match(/\b(beware|fake|false|hoax|scam|not true|untrue|is free|free of charge|do not pay|don't pay|uongo|feki|si kweli|tahadhari)\b/i);
+    if (warns && ["contradicted", "misleading_context"].includes(raw === "misleading_context" ? raw : v)) return ["related", "none", `the post itself warns about or denies the rated claim (“${warns[0]}”), so the “${e.rating}” rating may agree with it; read the fact-check`];
     if (raw === "misleading_context") return ["misleading", "strong", `published rating “${e.rating}” (misleading or missing context)`];
     if (v === "contradicted") return ["contradicts", "strong", `published rating “${e.rating}”`];
     if (v === "supported") return ["supports", "strong", `published rating “${e.rating}”`];

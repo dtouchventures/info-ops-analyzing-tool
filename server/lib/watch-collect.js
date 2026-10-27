@@ -84,6 +84,7 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
     if (s === "x_stream") return !C.xBearer ? { state: "not_configured", needs: "X_BEARER_TOKEN and WATCH_X_STREAM=true" } : !W.xStream ? { state: "disabled", needs: "WATCH_X_STREAM=true in the server settings, once your X access includes the filtered stream (pay-per-use allows one connection and 1,000 rules; another app using the same stream would disconnect AIVS)" } : { state: "ready" };
     if (s === "youtube") return C.youtubeKey ? { state: "ready" } : { state: "not_configured", needs: "YOUTUBE_API_KEY (YouTube Data API v3)" };
     if (s === "news") return { state: "ready" };
+    if (s === "fb_live") return (config.live?.pageToken) ? { state: "ready" } : { state: "not_configured", needs: "META_PAGE_ACCESS_TOKEN and META_PAGE_IDS (live monitoring of the authorised Facebook Pages)" };
     return { state: "unsupported" };
   }
   const sourcesReady = s => sourceState(s).state === "ready";
@@ -94,6 +95,7 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
         limits: key === "x_search" ? `Up to ${W.xPostsPerRun} posts per run. Charged per post returned (about $${W.usdPerXPost} each; the same post read again on the same UTC day is not charged again). Rate limit 450 requests per 15 min.`
           : key === "x_stream" ? "One connection; rules up to 1,024 characters; posts arrive about 4–5 s after publication when connected. Posts count toward the same daily limit."
           : key === "youtube" ? `search.list: 100 calls a day per project (own quota bucket); AIVS stops at ${W.youtubeSearchDaily}. Results depend on YouTube's search index and can be delayed or incomplete.`
+          : key === "fb_live" ? "Every post that live monitoring collects from the authorised Facebook Pages (META_PAGE_IDS) is checked against this watchlist as it arrives. No separate collection, quota or cost."
           : platforms[key] ? platforms[key].limits
           : "Only the headline, summary, link and date that publishers put in their feeds. Feeds are read on the watchlist's schedule." })),
       unsupported: UNSUPPORTED,

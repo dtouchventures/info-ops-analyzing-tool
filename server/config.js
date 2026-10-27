@@ -81,9 +81,18 @@ export const config = {
     blueskyHandle: env.BLUESKY_HANDLE || "", blueskyAppPassword: env.BLUESKY_APP_PASSWORD || "", blueskyPds: env.BLUESKY_PDS || "https://bsky.social",
     mastodonInstances: env.MASTODON_INSTANCES || "", threadsToken: env.THREADS_ACCESS_TOKEN || "", threadsDailyQueries: Math.min(2200, int(env.WATCH_THREADS_DAILY_QUERIES, 1000)),
     instagramToken: env.INSTAGRAM_ACCESS_TOKEN || "", instagramUserId: env.INSTAGRAM_USER_ID || "", graphVersion: env.META_GRAPH_VERSION || "v26.0",
-    facebookToken: env.FACEBOOK_ACCESS_TOKEN || "", facebookPages: env.FACEBOOK_PAGES || "", facebookCommentPosts: int(env.WATCH_FACEBOOK_COMMENT_POSTS, 10),
+    facebookToken: env.FACEBOOK_ACCESS_TOKEN || env.META_PAGE_ACCESS_TOKEN || "", facebookPages: env.FACEBOOK_PAGES || "", facebookCommentPosts: int(env.WATCH_FACEBOOK_COMMENT_POSTS, 10),
     tiktokClientKey: env.TIKTOK_CLIENT_KEY || "", tiktokClientSecret: env.TIKTOK_CLIENT_SECRET || "", tiktokDailyRequests: Math.min(1000, int(env.WATCH_TIKTOK_DAILY_REQUESTS, 500)),
     telegramToken: env.TELEGRAM_BOT_TOKEN || "", telegramOwnChannels: env.TELEGRAM_OWN_CHANNELS || "",
     whatsappVerifyToken: env.WHATSAPP_VERIFY_TOKEN || "", whatsappAppSecret: env.WHATSAPP_APP_SECRET || "" },
+  // Live monitoring (1.26): every post of the authorised Facebook Pages, collected through the Meta Graph API with a Page
+  // access token kept on the server, then analysed, verified and reported automatically (server/lib/livemonitor.js)
+  live: { enabled: env.LIVE_MONITOR_ENABLED !== "false", pageToken: env.META_PAGE_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "", pageIds: env.META_PAGE_IDS || "",
+    graphVersion: env.META_GRAPH_VERSION || "v26.0", graphBase: env.META_GRAPH_BASE_URL || "https://graph.facebook.com", appId: env.META_APP_ID || "", appSecret: env.META_APP_SECRET || "",
+    intervalMinutes: Math.max(1, int(env.LIVE_MONITOR_INTERVAL_MINUTES, 5)), initialPosts: Math.min(100, int(env.LIVE_MONITOR_INITIAL_POSTS, 25)), maxPagesPerSync: Math.min(20, int(env.LIVE_MONITOR_MAX_PAGES, 5)),
+    autoAnalyse: env.LIVE_AUTO_ANALYSE !== "false", analyseConcurrency: Math.max(1, int(env.LIVE_ANALYSE_CONCURRENCY, 1)), storeImages: env.LIVE_STORE_IMAGES !== "false",
+    engagementRefreshMinutes: int(env.LIVE_ENGAGEMENT_REFRESH_MINUTES, 30), timeoutMs: int(env.LIVE_TIMEOUT_MS, 20000), tickSeconds: int(env.LIVE_TICK_SECONDS, 30),
+    // Instagram stays "Not connected" until a connection test with these settings has succeeded
+    igUserId: env.INSTAGRAM_USER_ID || "", igToken: env.INSTAGRAM_ACCESS_TOKEN || env.META_PAGE_ACCESS_TOKEN || "" },
   isTest: env.NODE_ENV === "test"
 };

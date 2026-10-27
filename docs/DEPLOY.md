@@ -109,3 +109,19 @@ Finally run `systemctl reload caddy`.
 - Apply updates monthly with `apt update && apt -y upgrade`. Update AIVS by copying new files and restarting.
 - Never put API keys in the front end or in chat. They belong only in `.env` on the server.
 - Check **Administration → Usage & storage** for failed services and disk use.
+
+## 9. Live Facebook Monitoring (1.26): keep the server running
+
+Live monitoring runs inside the AIVS server. It collects, analyses and alerts on its own, and nobody needs to keep a browser open. The server must keep running, though.
+
+1. **Set up the token.** Put the new Page access token in `.env` as `META_PAGE_ACCESS_TOKEN`, and the Page IDs as `META_PAGE_IDS` (for example `1229829760216382`).
+   - Never commit `.env`. It is in `.gitignore`.
+   - Revoke any token that was ever shown in a screenshot, then generate a fresh one.
+   - If you can, set `META_APP_ID` and `META_APP_SECRET`. AIVS then reads the token's expiry date and warns 7 days before it expires.
+2. **Check the real connection.** Run `npm run check:facebook`. It tests the ten points against the real Graph API on a temporary database and writes `data/facebook-check.txt`.
+3. **Start AIVS so it keeps running:**
+   - **On a VPS:** use the systemd service above (`systemctl enable --now aivs`). It restarts after failures and reboots.
+   - **On a Windows PC:** open Task Scheduler and create a task that runs `start-windows.bat` "At startup" (or "At log on"), with "Run whether user is logged on or not" selected. Under Settings, tick "If the task fails, restart every 1 minute". Also stop the PC from sleeping (Settings → System → Power).
+4. **Confirm it is running.** Open **Live Monitoring → Sources and history**. Each run is listed with posts read, new and already stored. The Dashboard shows the last successful synchronisation.
+
+When Meta refuses the token, collection stops and a high-priority alert appears. Replace the token in `.env`, restart AIVS, then press **Check the Meta connection**.

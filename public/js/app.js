@@ -27,6 +27,7 @@ const ROUTES = [
   [/^#\/new$/, () => import("./pages/newcase.js"), "new"],
   [/^#\/case\/([^/]+)(?:\/(\w+))?$/, () => import("./pages/case.js"), "cases"],
   [/^#\/watch(?:\/(overview|alerts|lists|sources|list)(?:\/(\d+))?)?(?:\?.*)?$/, () => import("./pages/watch.js"), "watch"],
+  [/^#\/live(?:\/(posts|alerts|sources|post)(?:\/(\d+))?)?(?:\?.*)?$/, () => import("./pages/live.js"), "live"],
   [/^#\/monitor(?:\/(\d+)(?:\/(\w+))?)?(?:\?.*)?$/, () => import("./pages/monitor.js"), "monitor"],
   [/^#\/datasets(?:\/(\d+))?(?:\?.*)?$/, () => import("./pages/datasets.js"), "datasets"],
   [/^#\/archive$/, () => import("./pages/archive.js"), "archive"],
@@ -40,7 +41,7 @@ const ROUTES = [
 
 // The six services in the main menu. Every other module keeps working and stays reachable from Settings
 // (and from "Other tools" in Advanced mode); nothing is removed.
-export const GROUPS = { verify: ["investigate", "start", "cases", "review", "verify", "new", "search"], social: ["monitor"], watch: ["watch"], reports: ["reports"], settings: ["settings", "admin"], home: ["home"] };
+export const GROUPS = { verify: ["investigate", "start", "cases", "review", "verify", "new", "search"], social: ["monitor"], live: ["live"], watch: ["watch"], reports: ["reports"], settings: ["settings", "admin"], home: ["home"] };
 export const OTHER_TOOLS = [["dashboard", "#/dashboard", "Statistics", "dash"], ["verify", "#/verify", "Verify (single page)", "verify"], ["new", "#/new", "New case with files", "new"], ["search", "#/search", "Search and check", "search"],
   ["archive", "#/archive", "Reference archive", "archive"], ["datasets", "#/datasets", "Fact-check datasets", "data"]];
 function shell() {
@@ -48,6 +49,7 @@ function shell() {
     ["home", "#/home", "Dashboard", "dash"],
     ["verify", App.can("case.create") ? "#/investigate" : "#/cases", "Verify Information", "verify"],
     ["social", "#/monitor", "Social Media Analysis", "monitor"],
+    ["live", "#/live", "Live Monitoring", "live"],
     ["watch", "#/watch", "AI Watchlist", "watch"],
     ["reports", "#/reports", "Reports", "reports"],
     ["settings", "#/settings", "Settings", "admin"]
@@ -56,7 +58,7 @@ function shell() {
   $("#root").innerHTML = `<div class="shell">
     <aside class="side" aria-label="Main navigation">
       <div class="brand"><div class="brand-mark">AIVS</div><div><b>AIVS</b><span>Information verification</span></div></div>
-      <nav class="nav">${nav.map(([k, h, l, ic]) => `<a href="${h}" data-nav="${k}">${icon(ic)}<span>${l}</span>${k === "verify" ? `<span class="count" id="navReview" hidden title="Cases awaiting approval"></span>` : k === "watch" ? `<span class="count" id="navWatch" hidden></span>` : ""}</a>`).join("")}
+      <nav class="nav">${nav.map(([k, h, l, ic]) => `<a href="${h}" data-nav="${k}">${icon(ic)}<span>${l}</span>${k === "verify" ? `<span class="count" id="navReview" hidden title="Cases awaiting approval"></span>` : k === "watch" ? `<span class="count" id="navWatch" hidden></span>` : k === "live" ? `<span class="count" id="navLive" hidden></span>` : ""}</a>`).join("")}
         ${more.length ? `<details class="navmore" id="navMore" open><summary>${icon("cases")}<span>Other tools</span></summary>${more.map(([k, h, l, ic]) => `<a href="${h}" data-nav="x-${k}">${icon(ic)}<span>${l}</span></a>`).join("")}</details>` : ""}</nav>
       <div class="side-foot"><b>${esc(App.me.display_name)}</b>${esc(App.meta.roles[App.me.role])} · <a href="#" id="pwLink" style="color:#9fd8d5">Password</a> · <a href="#/privacy" style="color:#9fd8d5">Privacy</a> · <a href="#" id="logout" style="color:#9fd8d5">Sign out</a></div>
     </aside>
@@ -99,6 +101,7 @@ async function route() {
 }
 export async function refreshNavCounts() {
   try { const d = await api.get(`/api/dashboard?${App.q()}`); const n = d.counts.awaiting_approval, el = $("#navReview"); if (el) { el.hidden = !n; el.textContent = n; } } catch {}
+  try { const o = await api.get(`/api/live/alerts?status=new&limit=500&${App.q()}`), el = $("#navLive"); if (el) { el.hidden = !o.alerts.length; el.textContent = o.alerts.length; el.title = "New live monitoring alerts"; } } catch {}
   try { const w = await api.get("/api/watch/alerts?status=new&limit=1"), el = $("#navWatch"); if (el) { el.hidden = !w.total; el.textContent = w.total; el.title = "New mention alerts"; } } catch {}
 }
 
@@ -138,7 +141,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.25.0";
+export const CLIENT_VERSION = "1.26.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

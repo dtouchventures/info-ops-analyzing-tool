@@ -35,7 +35,7 @@ const shot = async (p, n) => shots && p.screenshot({ path: path.join(shots, n + 
 // ---- analyst
 const a = await session("ana");
 await a.waitForSelector(".svc");
-check("the main menu has the six services", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "AI Watchlist", "Reports", "Settings"]));
+check("the main menu has the seven services", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "Live Monitoring", "AI Watchlist", "Reports", "Settings"]));
 check("the dashboard shows three service cards with server figures, recent investigations and recent alerts", (await a.$$(".svc")).length === 3 && (await a.textContent("#page")).includes("Recent investigations") && (await a.textContent("#page")).includes("No alerts"));
 await shot(a, "00a-dashboard-home");
 await a.goto(S.base + "/#/status"); await a.waitForSelector(".module");
@@ -567,7 +567,7 @@ const audit = async (p, where) => (await p.evaluate(() => [...document.querySele
 // ---- Guided mode (1.19): one clearly labelled SYNTHETIC case through the four steps, analyst then a different reviewer
 let guidedDead = [], guidedSeen = 0;
 { const g = await session("ana2", "guided");
-  check("guided menu shows the six services and no secondary tools", (await g.$$(".nav > a")).length === 6 && !(await g.$("#navMore")) && !(await g.isVisible('a[href="#/dashboard"]')));
+  check("guided menu shows the seven services and no secondary tools", (await g.$$(".nav > a")).length === 7 && !(await g.$("#navMore")) && !(await g.isVisible('a[href="#/dashboard"]')));
   await g.click('.nav a[data-nav="verify"]'); await g.waitForSelector("#igo");
   check("Verify Information opens the one-click page, with sub-tabs for analysis, cases and the review queue", (await g.$$eval(".subnav a", x => x.map(e => e.textContent))).join("|") === "Analyze information|Cases|Review queue" && (await g.textContent("#igo")).trim() === "Analyse Automatically" && (await g.getAttribute("#iv", "placeholder")) === "https://example.com/news/article");
   await g.click('a[href="#/start"]'); await g.waitForSelector("#sGo");
@@ -656,7 +656,7 @@ let watchDead = [], watchSeen = 0;
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 950 } }), p = await ctx.newPage();
   p.on("pageerror", e => errors.push(`watch: ${e.message}`)); p.on("console", m => m.type() === "error" && !/401|Failed to load resource/.test(m.text()) && errors.push(`watch: ${m.text()}`));
   await p.goto(SW.base); await p.fill("#lu", "rev"); await p.fill("#lp", PW); await p.click("#lb"); await p.waitForSelector(".shell");
-  check("AI Watchlist is one of the six services in the menu", await p.isVisible('.nav a[href="#/watch"]'));
+  check("AI Watchlist is one of the services in the menu", await p.isVisible('.nav a[href="#/watch"]'));
   await p.click('.nav a[href="#/watch"]'); await p.waitForSelector(".wkpis");
   check("AI Watchlist opens on an overview that explains how to start when no watchlist exists", (await p.textContent("#wb")).includes("Start in three steps") && (await p.textContent("#wb")).includes("How alerts are decided"));
   await p.click('nav.tabs a[href="#/watch/alerts"]'); await p.waitForSelector("#qf");
@@ -758,6 +758,55 @@ let watchDead = [], watchSeen = 0;
   await shot(p, "01b-dashboard-watchlist-after-import");
   await ctx.close(); await SD.close();
 }
+// ---- 1.26: Live Facebook Monitoring against a local TEST DOUBLE of the Graph API (fixture posts labelled TEST FIXTURE)
+{ const TOK = "EAAE2ETESTTOKEN000000000000000001", PG = "900000000000009", H = h => new Date(Date.now() - h * 3600e3).toISOString().replace(/\.\d+Z$/, "+0000");
+  const fg = http.createServer((req, res) => { const u = new URL(req.url, "http://x"), j = (c, o) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+    if (u.pathname === "/img/1.jpg") { res.writeHead(200, { "content-type": "image/jpeg" }); return res.end(fs.readFileSync("training/images/case_convoy.jpg")); }
+    if (u.searchParams.get("access_token") !== TOK) return j(400, { error: { message: "Invalid OAuth access token", code: 190 } });
+    if (u.pathname === "/v26.0/me") return j(200, { id: PG, name: "E2E Fixture Page" });
+    if (u.pathname === `/v26.0/${PG}`) return j(200, { id: PG, name: "E2E Fixture Page", link: `https://www.facebook.com/${PG}` });
+    if (u.pathname === `/v26.0/${PG}/posts`) return j(200, { data: [
+      { id: `${PG}_2`, message: "TEST FIXTURE: Road works will close the Garissa bypass on Saturday morning.", created_time: H(1), permalink_url: `https://www.facebook.com/${PG}/posts/2`, full_picture: `http://127.0.0.1:${fg.address().port}/img/1.jpg`, reactions: { summary: { total_count: 7 } }, comments: { summary: { total_count: 1 } }, shares: { count: 2 } },
+      { id: `${PG}_1`, message: "TEST FIXTURE: Our office is closed on Monday for the public holiday.", created_time: H(5), permalink_url: `https://www.facebook.com/${PG}/posts/1`, reactions: { summary: { total_count: 3 } }, comments: { summary: { total_count: 0 } } }], paging: {} });
+    j(404, { error: { message: "unknown", code: 100 } }); });
+  await new Promise(r => fg.listen(0, "127.0.0.1", r));
+  const SL = await startServer({ allowPrivateFetch: true, watch: { enabled: false, metricsRefreshMinutes: 0 }, live: { pageToken: TOK, pageIds: PG, graphBase: `http://127.0.0.1:${fg.address().port}`, tickSeconds: 3600 } });
+  SL.ctx.live.ensureSources(); await SL.ctx.live.checkToken({ force: true }); await SL.ctx.live.sync(SL.ctx.db.prepare("SELECT id FROM social_sources").get().id);
+  for (let i = 0; i < 400; i++) { await SL.ctx.live.work(); if (!SL.ctx.db.prepare("SELECT COUNT(*) n FROM social_posts WHERE analysis_status IN ('pending','analysing','verifying')").get().n && SL.ctx.investigations.idle()) break; await new Promise(r => setTimeout(r, 100)); }
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 950 } }), p = await ctx.newPage();
+  p.on("pageerror", e => errors.push(`live: ${e.message}`)); p.on("console", m => m.type() === "error" && !/401|Failed to load resource/.test(m.text()) && errors.push(`live: ${m.text()}`));
+  await p.goto(SL.base); await p.fill("#lu", "rev"); await p.fill("#lp", PW); await p.click("#lb"); await p.waitForSelector(".shell");
+  await p.goto(SL.base + "/#/home"); await p.waitForSelector("#liveDash .kpi");
+  const dash = await p.textContent("#liveDash");
+  check("the dashboard shows the Facebook connection, last synchronisation and real database figures", /Facebook: Connected/.test(dash) && /last successful synchronisation/.test(dash) && (await p.textContent('#liveDash [data-fig="real posts collected"] .v')) === "2" && (await p.textContent('#liveDash [data-fig="AI analyses completed"] .v')) === "2" && /Instagram: Not connected/.test(dash), dash.slice(0, 300));
+  await shot(p, "46a-live-dashboard");
+  await p.goto(SL.base + "/#/live/posts"); await p.waitForSelector(".lpost img");
+  await p.waitForFunction(() => [...document.querySelectorAll(".lpost img")].every(i => i.complete && i.naturalWidth > 0));
+  const cards = await p.textContent("#lres");
+  await shot(p, "46b-live-posts");
+  check("Live Monitoring lists the posts with their stored image, publication date, source link and analysis status", (await p.$$(".lpost")).length === 2 && /Open on Facebook/.test(cards) && /published/.test(cards) && /Analysed/.test(cards), cards.slice(0, 300));
+  await p.selectOption("#lver", "insufficient"); await p.click("#lf button.primary"); await p.waitForFunction(() => location.hash.includes("verification=insufficient")); await p.waitForSelector("#lres p, #lres .empty");
+  check("posts can be filtered by verification status", (await p.$$(".lpost")).every(Boolean));
+  await p.click(".lpost a[href^='#/live/post/']"); await p.waitForSelector("text=AI-supported analysis");
+  const det = await p.textContent("#lb"); await shot(p, "46c-live-post-detail");
+  check("a post's details separate facts, claims, inferences and unknowns, and link its one-page report", /Facts \(from the platform record\)/.test(det) && /Claims found/.test(det) && /Verification: .*AI-generated, not reviewed/.test(det) && /Unknowns/.test(det) && !!(await p.$('a[href$="/report.pdf"]')), det.slice(0, 200));
+  await p.goto(SL.base + "/#/live/sources"); await p.waitForSelector("text=Synchronisation history");
+  check("the sources tab shows the Page, its status and the synchronisation history", /E2E Fixture Page/.test(await p.textContent("#lb")) && (await p.$$("#lb table.t")).length === 2);
+  await p.goto(SL.base + "/#/live/alerts"); await p.waitForSelector("#lb .row");
+  check("the live alerts tab explains how priorities are set", /How priorities are set/.test(await p.textContent("#lb")));
+  await shot(p, "46d-live-alerts");
+  const ph = await (await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true })).newPage();
+  await ph.goto(SL.base); await ph.fill("#lu", "rev"); await ph.fill("#lp", PW); await ph.click("#lb"); await ph.waitForSelector(".shell"); await ph.goto(SL.base + "/#/home"); await ph.waitForSelector("#liveDash .kpi");
+  const dw = await ph.evaluate(() => { const W = document.documentElement.clientWidth; return { w: document.documentElement.scrollWidth, wide: [...document.querySelectorAll("#page *")].filter(e => e.getBoundingClientRect().right > W + 1).slice(0, 5).map(e => `${e.tagName}.${e.className}`) }; });
+  check("on a phone the dashboard with its live monitoring section fits the screen", dw.w <= 380, JSON.stringify(dw));
+  await ph.evaluate(() => { location.hash = "#/live/posts"; }); const shown = await ph.waitForSelector(".lpost", { timeout: 60000 }).then(() => true, () => false);
+  const phw = await ph.evaluate(() => document.documentElement.scrollWidth); if (!shown || phw > 380) { await ph.screenshot({ path: path.join(os.tmpdir(), "aivs-phone-live.png"), fullPage: true }); }
+  check("on a phone the Live Monitoring page shows the posts and fits the screen", shown && phw <= 380, `shown ${shown}, width ${phw}, ${(await ph.textContent("#page")).slice(0, 200)}`); await ph.context().close();
+  await p.click('[data-scope="training"]'); await p.waitForSelector(".trainbar"); await p.goto(SL.base + "/#/live"); await p.waitForSelector("#lPractice"); await p.click("#lPractice"); await p.waitForSelector('.toast:has-text("practice posts loaded")');
+  await p.waitForSelector(".lpost"); check("in Training mode the practice posts are labelled PRACTICE and kept apart", (await p.textContent(".lposts")).includes("PRACTICE") && /Training mode: practice posts only/.test(await p.textContent("#liveConn")));
+  await p.click('[data-scope="real"]');
+  await ctx.close(); await SL.ctx.investigations.close(); await SL.close(); fg.close();
+}
 // ---- 1.22: one-click automatic investigation (no evidence service is configured in this test server, so the
 // report must say the evidence is insufficient and why), on a desktop and on a phone-sized screen
 { await a.goto(S.base + "/#/investigate"); await a.waitForSelector("#igo");
@@ -793,7 +842,7 @@ let watchDead = [], watchSeen = 0;
   await shot(ph, "41-automatic-report-phone"); await ph.context().close();
 }
 let dead = [], seen = 0;
-for (const [p, routes] of [[a, ["#/home", "#/investigate", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
+for (const [p, routes] of [[a, ["#/home", "#/live", "#/live/posts", "#/live/alerts", "#/live/sources", "#/investigate", "#/status", "#/settings", "#/models", "#/start", "#/verify", "#/verify/post", "#/search", "#/privacy", "#/dashboard", "#/cases", "#/new", "#/review", "#/archive", "#/reports", "#/datasets", "#/monitor", ...["summary", "messages", "hashtags", "network", "links", "accounts", "posts"].map(t => `#/monitor/${ioId}/${t}`), ...["overview", "sentiment", "topics", "engagement", "claims", "geography", "posts", "report"].map(t => `#/monitor/${discId}/${t}`), ...["overview", "media", "claims", "evidence", "coverage", "ai", "report", "notes", "history"].map(t => `#/case/${caseId}/${t}`)]],
   [ad, ["#/admin/users", "#/admin/permissions", "#/admin/integrations", "#/admin/usage", "#/admin/backups", "#/admin/audit", "#/admin/training", "#/archive", "#/reports"]]]) {
   if (p === ad) await ad.setViewportSize({ width: 1440, height: 950 });
   for (const h of routes) { await p.goto(S.base + "/" + h); await p.waitForSelector("#page > :not(.empty)"); await p.waitForTimeout(400); dead = dead.concat(await audit(p, h)); seen += await p.$$eval("button, a.btn", x => x.filter(b => b.offsetParent !== null).length); }

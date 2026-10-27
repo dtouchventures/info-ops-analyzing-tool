@@ -163,7 +163,47 @@ function mig14(db) {
 }
 // 1.24: what was extracted from a link (shown while the investigation runs)
 function mig15(db) { const cols = db.prepare("PRAGMA table_info(investigations)").all().map(c => c.name); if (!cols.includes("preview_json")) db.exec("ALTER TABLE investigations ADD COLUMN preview_json TEXT"); }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// Migration 16 (1.26): live monitoring of authorised social media sources (Facebook Pages through the Meta Graph API;
+// Instagram prepared). Collected posts (one record per platform post ID), stored images, engagement snapshots, every
+// synchronisation, API errors, local analysis, the verification outcome, live alerts with their history, and the
+// approval of automatic reports. Nothing existing is changed.
+function mig16(db) {
+  db.exec(`
+  CREATE TABLE IF NOT EXISTS social_sources (
+    id INTEGER PRIMARY KEY, platform TEXT NOT NULL, external_id TEXT NOT NULL, name TEXT, url TEXT, is_training INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL DEFAULT 'settings', added_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idle', last_sync_at TEXT, last_ok_at TEXT, next_sync_at TEXT, backoff_until TEXT, failures INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+    checkpoint_time TEXT, fields_level TEXT, last_engagement_at TEXT, UNIQUE(platform, external_id, is_training));
+  CREATE TABLE IF NOT EXISTS social_posts (
+    id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES social_sources(id), platform TEXT NOT NULL, post_id TEXT NOT NULL, is_training INTEGER NOT NULL DEFAULT 0,
+    message TEXT, created_time TEXT, updated_time TEXT, permalink_url TEXT, image_url TEXT, image_sha256 TEXT, image_mime TEXT, image_note TEXT, attachments_json TEXT,
+    likes INTEGER, comments INTEGER, shares INTEGER, engagement_note TEXT, text_hash TEXT, collected_at TEXT NOT NULL, updated_at TEXT NOT NULL, edited INTEGER NOT NULL DEFAULT 0,
+    analysis_status TEXT NOT NULL DEFAULT 'pending' CHECK (analysis_status IN ('pending','analysing','verifying','done','skipped','failed')), analysis_attempts INTEGER NOT NULL DEFAULT 0,
+    analysis_error TEXT, analysis_json TEXT, analysed_at TEXT, investigation_id TEXT REFERENCES investigations(id), same_as_post INTEGER REFERENCES social_posts(id),
+    verification TEXT, confidence INTEGER, confidence_json TEXT, needs_review INTEGER NOT NULL DEFAULT 0, review_reasons_json TEXT, topics_json TEXT,
+    UNIQUE(platform, post_id, is_training));
+  CREATE INDEX IF NOT EXISTS social_posts_created ON social_posts(created_time);
+  CREATE INDEX IF NOT EXISTS social_posts_status ON social_posts(analysis_status);
+  CREATE INDEX IF NOT EXISTS social_posts_source ON social_posts(source_id, created_time);
+  CREATE TABLE IF NOT EXISTS social_post_metrics (id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES social_posts(id), at TEXT NOT NULL, likes INTEGER, comments INTEGER, shares INTEGER);
+  CREATE TABLE IF NOT EXISTS social_syncs (
+    id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES social_sources(id), kind TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running', requests INTEGER NOT NULL DEFAULT 0, pages INTEGER NOT NULL DEFAULT 0, fetched INTEGER NOT NULL DEFAULT 0, new_posts INTEGER NOT NULL DEFAULT 0,
+    duplicates INTEGER NOT NULL DEFAULT 0, updated_posts INTEGER NOT NULL DEFAULT 0, since TEXT, error_kind TEXT, error TEXT, note TEXT, usage_json TEXT);
+  CREATE INDEX IF NOT EXISTS social_syncs_source ON social_syncs(source_id, id);
+  CREATE TABLE IF NOT EXISTS social_api_errors (id INTEGER PRIMARY KEY, at TEXT NOT NULL, platform TEXT NOT NULL, source_id INTEGER REFERENCES social_sources(id), kind TEXT NOT NULL, code INTEGER, subcode INTEGER, message TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS social_service (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS live_alerts (
+    id INTEGER PRIMARY KEY, kind TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, group_key TEXT, is_training INTEGER NOT NULL DEFAULT 0, source_id INTEGER REFERENCES social_sources(id),
+    post_id INTEGER REFERENCES social_posts(id), priority TEXT NOT NULL CHECK (priority IN ('low','medium','high')), title TEXT NOT NULL, reason TEXT NOT NULL, priority_reasons_json TEXT NOT NULL,
+    detail_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acknowledged','dismissed','escalated')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    updated_by INTEGER REFERENCES users(id), note TEXT);
+  CREATE INDEX IF NOT EXISTS live_alerts_status ON live_alerts(status, created_at);
+  CREATE TABLE IF NOT EXISTS live_alert_events (id INTEGER PRIMARY KEY, alert_id INTEGER NOT NULL REFERENCES live_alerts(id), action TEXT NOT NULL, note TEXT, by_user INTEGER REFERENCES users(id), at TEXT NOT NULL);`);
+  const cols = db.prepare("PRAGMA table_info(investigations)").all().map(c => c.name);
+  if (!cols.includes("approved_by")) db.exec("ALTER TABLE investigations ADD COLUMN approved_by INTEGER REFERENCES users(id); ALTER TABLE investigations ADD COLUMN approved_at TEXT; ALTER TABLE investigations ADD COLUMN approval_note TEXT; ALTER TABLE investigations ADD COLUMN origin TEXT");
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

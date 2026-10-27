@@ -243,7 +243,7 @@ export function makeSocial(db, { config }) {
     // 1. Graph API (full text of Page posts and videos the token may read)
     if (P.facebookToken && ids.kind !== "share" && ids.kind !== "unknown") {
       try {
-        let gid = null, fields = "message,created_time,permalink_url,from{name,username},story";
+        let gid = null, fields = "message,created_time,permalink_url,full_picture,from{name,username},story";
         if (ids.kind === "post" && ids.post && !ids.pfbid) gid = ids.owner ? `${ids.owner}_${ids.post}` : ids.page ? `${(await graph(encodeURIComponent(ids.page), "id")).j.id}_${ids.post}` : null;
         else if (ids.kind === "video" && ids.video) { gid = ids.video; fields = "description,title,created_time,permalink_url,from{name,username},length"; }
         else if (ids.kind === "photo" && ids.photo) { gid = ids.photo; fields = "name,created_time,link,from{name,username}"; }
@@ -252,7 +252,7 @@ export function makeSocial(db, { config }) {
         else {
           const { j, raw } = await graph(gid, fields), words = ids.kind === "page" ? [j.about, j.description].filter(Boolean).join("\n\n") : [j.title, j.message || j.description || j.name].filter(Boolean).join("\n\n");
           Object.assign(out, { raw, text: words || null, text_status: words ? "full" : "none", text_source: ids.kind === "page" ? "Facebook Graph API (Page details)" : "Facebook Graph API", author_name: j.from?.name || (ids.kind === "page" ? j.name : null) || out.author_name, account: j.from?.username || j.username || out.account,
-            title: ids.kind === "page" ? j.name : j.title || null, post_id: j.id || gid, permalink: j.permalink_url || j.link || null });
+            title: ids.kind === "page" ? j.name : j.title || null, post_id: j.id || gid, permalink: j.permalink_url || j.link || null, ...(j.full_picture ? { thumbnail_url: j.full_picture } : {}) });
           if (j.created_time) Object.assign(out, { posted_at: new Date(j.created_time).toISOString(), posted_basis: "time stated by the Facebook Graph API" });
           A.push({ method: "Facebook Graph API", result: words ? "ok" : "no text" }); if (words) return;
         }

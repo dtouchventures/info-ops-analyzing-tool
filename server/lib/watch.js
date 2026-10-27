@@ -20,6 +20,7 @@ export const WATCH_SOURCES = {
   threads: { label: "Threads keyword search (scheduled)", platform: "Threads", mode: "poll" },
   instagram: { label: "Instagram hashtag search (scheduled)", platform: "Instagram", mode: "poll" },
   facebook: { label: "Facebook public Pages and their comments (scheduled)", platform: "Facebook", mode: "poll" },
+  fb_live: { label: "Live Facebook monitoring (every post of the authorised Pages, collected by AIVS)", platform: "Facebook", mode: "push" },
   tiktok: { label: "TikTok Research API (scheduled)", platform: "TikTok", mode: "poll" },
   telegram: { label: "Telegram channels where our bot is a member (scheduled)", platform: "Telegram", mode: "poll" },
   whatsapp_business: { label: "WhatsApp Business: messages sent to our own business number (webhook)", platform: "WhatsApp Business", mode: "webhook" }

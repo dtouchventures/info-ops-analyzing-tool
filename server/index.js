@@ -38,6 +38,8 @@ const server = app.listen(config.port, config.host, () => {
   admin.schedule();
   ctx.transcriber.resume();
   ctx.watchCollector.start();
+  ctx.live.start();
+  { const o = ctx.live.overview(); console.log(`  Live Facebook monitoring: ${o.facebook.configured ? `${o.sources.filter(x => x.platform === "facebook" && x.enabled).length} Page(s), every ${o.scheduler.interval_minutes} min` : "off (META_PAGE_ACCESS_TOKEN not set)"} · Instagram: ${o.instagram.status}`); }
   { const w = ctx.watchCollector.status(), act = ctx.watch.list().filter(x => x.status === "active").length; console.log(`  Mention watch: ${act} active watchlist(s); X search ${w.sources.find(s => s.key === "x_search").state}, X stream ${w.sources.find(s => s.key === "x_stream").state}, YouTube ${w.sources.find(s => s.key === "youtube").state}`); }
   if (config.transcribe?.url) ctx.transcriber.checkHealth({ force: true }).then(h => console.log(`  Speech-to-text: ${h.state === "ok" ? `available (${h.engine} ${h.model}, ${h.cpu_threads} threads)` : h.state}${h.error ? ` — ${h.error}` : ""}`)).catch(() => {});
   if (config.ai.provider) ctx.ai.health({ force: true }).then(h => console.log(`  AI (${config.ai.provider}, ${config.ai.model}): ${h.state === "ok" ? `available, answered in ${h.latency_ms} ms` : h.state}${h.error ? ` — ${h.error}` : ""}`)).catch(() => {});
