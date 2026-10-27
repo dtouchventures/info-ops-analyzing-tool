@@ -502,3 +502,7 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .airead { margin: 4px 0; padding: 6px 8px; border-left: 3px solid var(--teal, #0a7c86); background: rgba(10, 124, 134, .06); border-radius: 4px; }
 .kwt td { vertical-align: middle; }
 .kwt input[type="text"], .kwt input:not([type]) { min-width: 0; }
+/* 1.29: AI connection indicator on Live Monitoring */
+.pagehead .aiind { margin-left: auto; text-align: right; min-width: 180px; }
+.pagehead .aiind .chip { font-weight: 600; }
+@media (max-width: 700px) { .pagehead .aiind { margin-left: 0; text-align: left; } }

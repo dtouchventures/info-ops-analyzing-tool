@@ -96,7 +96,7 @@ export function createApp(config) {
   const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
-  const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live });
+  const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai });
   const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
@@ -513,10 +513,10 @@ export function createApp(config) {
   const template = () => { const t = kdfTemplate(), ready = ["x_search", "youtube", "reddit", "bluesky", "mastodon", "threads", "instagram", "tiktok"].filter(s => watchCollector.sourcesReady(s));
     t.definition.sources = [...new Set([...(ready.length ? ready : ["x_search"]), ...(String(config.collect?.rssFeeds || "").trim() ? ["news"] : [])])]; return t; };
   api.get("/watch/overview", (req, res) => res.json({ status: watchCollector.status(), caveats: WATCH_CAVEATS, sources: WATCH_SOURCES, manual_sources: MANUAL_SOURCES, watchlists: watch.list(), template: template(), users: assignable(),
-    alert_counts: Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts GROUP BY status").all().map(r => [r.status, r.n])),
+    alert_counts: Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts WHERE is_training = 0 GROUP BY status").all().map(r => [r.status, r.n])),
     datasets: db.prepare("SELECT id, name, posts, first_at, last_at, is_sample, imported_at FROM io_datasets ORDER BY id DESC").all(),
     stats: { monitored_posts: db.prepare("SELECT COUNT(DISTINCT m.post_id) n FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE w.deleted_at IS NULL").get().n,
-      open_by_severity: Object.fromEntries(db.prepare("SELECT coalesce(a.severity,'low') s, COUNT(*) n FROM watch_alerts a JOIN watchlists w ON w.id = a.watchlist_id WHERE a.status IN ('new','acknowledged') GROUP BY s").all().map(r => [r.s, r.n])),
+      open_by_severity: Object.fromEntries(db.prepare("SELECT coalesce(a.severity,'low') s, COUNT(*) n FROM watch_alerts a JOIN watchlists w ON w.id = a.watchlist_id WHERE a.status IN ('new','acknowledged') AND a.is_training = 0 GROUP BY s").all().map(r => [r.s, r.n])),
       monitoring: (() => {
         const act = db.prepare("SELECT id FROM watchlists WHERE status = 'active' AND deleted_at IS NULL").all().map(r => r.id);
         const sc = act.length ? db.prepare(`SELECT COALESCE(SUM(posts_checked),0) checked, COALESCE(SUM(matched),0) matched, MAX(CASE WHEN status = 'ok' THEN scanned_at END) last_ok, SUM(status = 'failed') failed FROM watch_dataset_scans WHERE watchlist_id IN (${act.map(() => "?").join(",")})`).get(...act) : { checked: 0, matched: 0, last_ok: null, failed: 0 };
@@ -625,7 +625,7 @@ export function createApp(config) {
   }));
   api.get("/watch/lists/:id/analytics", (req, res) => res.json(dsWatch.analytics(req.params.id)));
   api.delete("/watch/lists/:id", requirePerm("watch.manage"), h((req, res) => { watch.remove(req.user, req.params.id); watchCollector.ensureStream(); res.json({ ok: true }); }));
-  api.get("/watch/alerts", (req, res) => res.json(watch.alerts(req.query, req.user)));
+  api.get("/watch/alerts", (req, res) => res.json(watch.alerts({ ...req.query, training: scopeOf(req) }, req.user)));
   api.get("/watch/alerts/:id", (req, res) => res.json(watch.alert(req.params.id)));
   api.post("/watch/alerts/:id/action", requirePerm("watch.triage"), h((req, res) => res.json(watch.act(req.user, req.params.id, req.body || {}, { canAssignOthers: can(req.user, "case.assign"), canCreateCase: can(req.user, "case.create") }))));
   // live verification of one configured source (a real request; the result is shown next to the capability table)
@@ -1203,17 +1203,17 @@ export function createApp(config) {
   // ---------------------------------------------------------------- live monitoring (authorised Facebook Pages; Instagram prepared)
   // ---------------------------------------------------------------- keyword search and monitoring of public information (1.27)
   api.get("/monitor/sources", (req, res) => res.json(keywords.sources()));
-  api.get("/monitor/overview", (req, res) => res.json(keywords.overview()));
+  api.get("/monitor/overview", (req, res) => res.json(keywords.overview({ training: scopeOf(req) })));
   api.post("/monitor/searches", requirePerm("watch.triage"), h((req, res) => res.status(202).json(keywords.start(req.user, { ...(req.body || {}), training: scopeOf(req) === 1 }))));
   api.get("/monitor/searches", (req, res) => res.json({ searches: keywords.list(req.query.limit) }));
   api.post("/monitor/parse", (req, res) => { try { const p = keywords.parseQuery(req.body?.query); res.json({ ok: true, parsed: p }); } catch (e) { res.json({ ok: false, error: e.message }); } });
   api.get("/monitor/searches/:id", (req, res) => res.json(keywords.get(req.params.id)));
-  api.get("/monitor/searches/:id/results", (req, res) => res.json(keywords.results(req.params.id, req.query)));
+  api.get("/monitor/searches/:id/results", (req, res) => res.json(keywords.results(req.params.id, { ...req.query, training: scopeOf(req) })));
   api.post("/monitor/searches/:id/watchlist", requirePerm("watch.manage"), h((req, res) => res.status(201).json(keywords.saveAsWatchlist(req.user, req.params.id, req.body || {}))));
   api.post("/monitor/searches/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { searchId: +req.params.id }))));
   api.post("/monitor/watchlists/:id/report", requirePerm("watch.triage"), h(async (req, res) => res.status(201).json(await keywords.report(req.user, { watchlistId: +req.params.id, hours: Math.min(720, Math.max(1, +req.body?.hours || 24)) }))));
-  api.get("/monitor/feed", (req, res) => res.json(keywords.feed(req.query)));
-  api.get("/monitor/ai", (req, res) => res.json(keywords.aiQueueCounts()));
+  api.get("/monitor/feed", (req, res) => res.json(keywords.feed({ ...req.query, training: scopeOf(req) })));
+  api.get("/monitor/ai", (req, res) => res.json(keywords.aiIndicator()));
   api.post("/monitor/items/:id/ai-retry", requirePerm("watch.triage"), h((req, res) => res.json(keywords.retryAi(req.user, +req.params.id))));
   api.get("/monitor/contextual", (req, res) => res.json({ contextual: [...keywords.contextualLibrary().values()] }));
   api.get("/monitor/items/:id", (req, res) => res.json(keywords.item(req.params.id)));

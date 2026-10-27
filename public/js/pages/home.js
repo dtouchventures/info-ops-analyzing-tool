@@ -3,7 +3,6 @@
 import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
 import { esc, icon, fmtDT, status, ago } from "../ui.js";
-import { statusLine } from "./live.js";
 
 const KIND = { match: "Keyword match", threshold: "Keyword threshold exceeded", volume: "Unusual posting spike", narrative: "Emerging narrative", repeated: "Repeated message", coordination: "Coordination indicator", engagement: "High engagement" };
 
@@ -27,7 +26,7 @@ async function draw(el) {
   const h0 = location.hash;
   crumbs(`<b>Dashboard</b>${App.training ? " · training records" : ""}`);
   const [D, W, IO] = await Promise.all([api.get(`/api/dashboard?${App.q()}`).catch(() => null), api.get("/api/watch/overview").catch(() => null), api.get("/api/io/datasets").catch(() => null)]);
-  const [al, INV, LV, MO] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null), api.get("/api/monitor/overview").catch(() => null)]);
+  const [al, INV, LV, MO] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null), api.get(`/api/monitor/overview?${App.q()}`).catch(() => null)]);
   if (location.hash !== h0) return;   // the user moved on while the figures were loading: do not draw over the next page
   const c = D?.counts || {}, open = (c.draft || 0) + (c.analysing || 0) + (c.analysis_failed || 0) + (c.analyst_review || 0) + (c.needs_evidence || 0);
   const ds = (IO?.datasets || []).filter(d => App.training ? d.is_sample : !d.is_sample), posts = ds.reduce((a, d) => a + (d.posts || 0), 0);
@@ -58,8 +57,8 @@ async function draw(el) {
     </div>`;
 }
 
-// Public information monitoring: keyword discovery across the connected sources, with the organisation's own Facebook Page
-// shown as one authorised source among others. Figures come from the server's records.
+// Public information monitoring: keyword discovery across the connected public sources (the organisation's own Facebook Page is not
+// a monitoring source). Figures come from the server's records.
 const VC = { pending: "info", supported: "sup", contradicted: "con", insufficient: "grey", misleading: "mix", not_verifiable: "grey", not_verified: "grey" };
 const CATC = { Connected: "sup", "Configured, not yet tested": "info", Restricted: "warn", Unavailable: "con", "Not configured": "grey" };
 function liveSection(o, m) {
@@ -70,9 +69,9 @@ function liveSection(o, m) {
     <div class="kpis">${f(c.items, "items discovered", "#/live/discovered")}${f(c.items_today, "found today", "#/live/discovered")}${f(c.active_watchlists, "active watchlists", "#/live/watchlists")}${f(c.searches, "searches run", "#/live/search")}
       ${f(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${f(c.verified, "items sent for verification", "#/live/discovered?verification=verified")}${f(c.reports, "monitoring reports", "#/live/reports")}
 </div>
-    ${o ? `<div class="tiny sub" style="margin:6px 0 10px">Own Facebook Page (a separate source, not part of these results): <a href="#/live/posts">${o.counts.total_posts} post(s)</a> · ${o.counts.awaiting_analysis} awaiting AI analysis${m.counts.own_page_alerts ? ` · <a href="#/live/alerts?scope=own_page">${m.counts.own_page_alerts} new alert(s)</a>` : ""}</div>` : ""}
+    ${(a => a ? `<div class="wmon ${a.ready ? "ok" : "warn"}" id="monAi" style="margin:6px 0 10px"><b>${esc(a.label)}</b>${a.model ? ` · ${esc(a.model)}` : ""} · ${a.queue.done} item(s) analysed · ${a.queue.pending} queued${a.ready ? "" : a.queue.pending ? " (retried automatically when the AI server answers)" : ""}</div>` : "")(c.ai_indicator)}
     ${m.recent.length ? `<ul class="mini">${m.recent.slice(0, 6).map(p => `<li>${p.has_image ? `<img src="/api/monitor/items/${p.id}/image" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ""}<span class="chip navy">${esc(p.platform)}</span><span class="chip ${VC[p.verification.status] || "grey"}">${esc(p.verification.label)}</span>
       <a class="small" style="flex:1" href="${p.url ? esc(p.url) : "#/live/discovered"}" ${p.url ? 'target="_blank" rel="noopener noreferrer"' : ""}>${esc(p.text.slice(0, 110))}</a><span class="tiny sub">${p.posted_at ? fmtDT(p.posted_at) : "date not given"}</span></li>`).join("")}</ul>`
       : `<p class="small sub" style="margin:0">Nothing discovered yet. <a href="#/live/search">Search a keyword</a> across the connected sources, or keep a search as a recurring watchlist.</p>`}
-    ${o ? `<div style="margin-top:10px">${statusLine(o)}</div>` : ""}</div></div>`;
+</div></div>`;
 }

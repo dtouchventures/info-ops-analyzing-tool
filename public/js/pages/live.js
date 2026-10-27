@@ -18,25 +18,24 @@ const q = (extra = "") => App.q(extra);
 
 export async function render(el, [tab = "overview", id = null] = []) {
   crumbs(`<a href="#/home">Dashboard</a> › <b>Live Monitoring</b>${App.training ? " · training records" : ""}`);
-  const tabs = [["overview", "Overview"], ["search", "Search"], ["discovered", "Discovered items"], ["watchlists", "Watchlists"], ["reports", "Reports"], ["alerts", "Alerts"], ["posts", "Own Facebook Page"], ["sources", "Sources"]];
-  const on = { post: "posts", item: "discovered" }[tab] || tab;
-  el.innerHTML = `<div class="pagehead"><div><h1>Live Monitoring</h1><p>Search any keyword, phrase, hashtag or topic across the connected public sources, keep searches as recurring watchlists, and get evidence-based analysis and draft reports. Results are AI-supported leads until a person reviews them.</p></div></div>
+  // keyword-based monitoring of public information only (1.29): the organisation's own Facebook Page is not a monitoring source
+  const tabs = [["overview", "Overview"], ["search", "Search"], ["discovered", "Discovered items"], ["watchlists", "Watchlists"], ["reports", "Reports"], ["alerts", "Alerts"], ["sources", "Sources"]];
+  if (["posts", "post"].includes(tab)) tab = "overview";
+  const on = { item: "discovered" }[tab] || tab;
+  el.innerHTML = `<div class="pagehead"><div><h1>Live Monitoring</h1><p>Search any keyword, phrase, hashtag or topic across the connected public sources, keep searches as recurring watchlists, and get evidence-based analysis and draft reports. Results are AI-supported leads until a person reviews them.</p></div><div id="aiInd" class="aiind"></div></div>
     <nav class="tabs">${tabs.map(([k, l]) => `<a href="#/live/${k}" class="${k === on ? "on" : ""}">${l}</a>`).join("")}</nav><div id="lb"></div>`;
   const body = $("#lb", el);
   const K = await import("./keywords.js");
   if (!body.isConnected) return;   // the analyst moved to another page meanwhile
-  if (App.training && ["search", "discovered", "watchlists", "reports"].includes(tab)) { body.innerHTML = `<div class="callout info"><div>Keyword searches use live public sources, so they run with Operational records only. Switch Records to Operational. In Training mode, the Own Facebook Page tab offers practice posts.</div></div>`; return; }
-  if (tab === "post" && id) return postView(body, id);
-  if (tab === "posts") { const own = await api.get(`/api/live/overview?${q()}`); body.innerHTML = `${statusLine(own)}<p class="tiny sub">Posts of the organisation's own Facebook Page(s), collected with the Page's token. This is one authorised source, not a search of Facebook.</p><div id="lplist" style="margin-top:12px"></div>`; return postsView($("#lplist", body)); }
+  K.aiIndicator($("#aiInd", el));
+  if (App.training && ["search", "watchlists", "reports"].includes(tab)) { body.innerHTML = `<div class="callout info"><div>Searches, watchlists and reports use live public sources, so they work with Operational records only. Switch Records to Operational. Training mode shows test records in Overview, Discovered items and Alerts.</div></div>`; return; }
   if (tab === "alerts") return alertsView(body);
-  if (tab === "sources") { body.innerHTML = `<div id="ksrc"></div><h2 style="margin-top:18px">Own Facebook Page (authorised source)</h2><div id="lsrc"></div>`; await K.sourcesTable($("#ksrc", body)); return sourcesView($("#lsrc", body)); }
+  if (tab === "sources") return K.sourcesTable(body);
   if (tab === "search") return K.searchView(body, id);
   if (tab === "discovered") return K.discoveredView(body);
   if (tab === "watchlists") return K.watchlistsView(body);
   if (tab === "reports") return K.reportsView(body);
-  if (App.training) { await overviewView(body); return; }
-  const own = await api.get(`/api/live/overview?${q()}`).catch(() => null);
-  await K.overviewView(body, own ? `<div class="card" style="margin-top:12px"><div class="hd"><h3>Own Facebook Page (authorised source)</h3><a class="small right" href="#/live/posts">Open</a></div><div class="bd">${statusLine(own)}<p class="tiny sub" style="margin:6px 0 0">${own.counts.total_posts} post(s) collected from the organisation's own Page. This is a separate source: its posts and alerts are kept out of the keyword monitoring results above. <a href="#/live/alerts?scope=own_page">Own Page alerts</a>.</p></div></div>` : "");
+  await K.overviewView(body, "");
 }
 
 export function statusLine(o) {
@@ -114,20 +113,21 @@ async function postView(body, id) {
         ${d.metrics.length ? `<p class="tiny sub">${d.metrics.length} later reading(s); latest ${dt(d.metrics[0].at)}.</p>` : ""}</div></div></div></div>`;
 }
 
-// watchlist alerts (keyword monitoring) first; the organisation's own Facebook Page has its alerts apart
+// alerts of the keyword watchlists: matches, emerging topics, AI assessments and verification outcomes (operational or training
+// records, by the Records switch); alerts about the organisation's own Facebook Page are no longer shown here
 async function alertsView(body) {
-  const f = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")), st = f.status ?? "new,acknowledged,escalated", scope = f.scope === "own_page" ? "own_page" : "watchlists";
-  const [r, wa] = await Promise.all([api.get(`/api/live/alerts?${q(new URLSearchParams({ group: "1", status: st, scope, ...(f.priority ? { priority: f.priority } : {}), limit: 300 }).toString())}`),
-    scope === "watchlists" && !App.training ? api.get(`/api/watch/alerts?status=${st.includes("dismissed") && !st.includes("new") ? "dismissed" : st === "" ? "" : "open"}&limit=60`).catch(() => null) : null]);
+  const f = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")), st = f.status ?? "new,acknowledged,escalated";
+  const [r, wa] = await Promise.all([api.get(`/api/live/alerts?${q(new URLSearchParams({ group: "1", status: st, scope: "watchlists", ...(f.priority ? { priority: f.priority } : {}), limit: 300 }).toString())}`),
+    api.get(`/api/watch/alerts?${q(`status=${st.includes("dismissed") && !st.includes("new") ? "dismissed" : st === "" ? "" : "open"}&limit=60`)}`).catch(() => null)]);
   const KL = { match: "Keyword match", volume: "Unusual volume", narrative: "Emerging topic", repeated: "Repeated wording", coordination: "Coordination indicator", engagement: "Unusual engagement", threshold: "Threshold" };
-  const watchList = wa ? `<div class="card" style="margin-bottom:12px"><div class="hd"><h3>Watchlist alerts</h3><a class="small right" href="#/watch/alerts">Work all watchlist alerts</a></div><div class="bd">${wa.alerts.length ? `<ul class="mini">${wa.alerts.map(a => `<li>${chip(a.status, a.status === "new" ? "con" : "grey")}${chip(a.severity || "low", a.severity === "high" ? "con" : a.severity === "medium" ? "warn" : "grey")}<a class="small" style="flex:1" href="#/watch/alerts/${a.id}">${esc(KL[a.kind] || a.kind)}: ${esc((a.title || "").slice(0, 140))}</a><span class="tiny sub">${esc(a.watchlist_name || "")} · ${dt(a.created_at)}</span></li>`).join("")}</ul>` : `<p class="sub" style="margin:0">No open watchlist alert.</p>`}</div></div>` : "";
-  body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:6px"><a class="btn sm ${scope === "watchlists" ? "primary" : "ghost"}" href="#/live/alerts">Watchlist alerts</a><a class="btn sm ${scope === "own_page" ? "primary" : "ghost"}" href="#/live/alerts?scope=own_page">Own Facebook Page alerts</a></div>
-    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${[["new,acknowledged,escalated", "Open"], ["new", "New"], ["escalated", "Escalated"], ["dismissed", "Dismissed"], ["", "All"]].map(([v, l]) => `<a class="btn sm ${st === v ? "primary" : "ghost"}" href="#/live/alerts?status=${v}${scope === "own_page" ? "&scope=own_page" : ""}">${l}</a>`).join("")}</div>
-    ${watchList}${scope === "watchlists" ? `<h3 style="margin:6px 0">Findings across watchlist items</h3>` : `<p class="tiny sub">Alerts about the organisation's own Page. They are kept out of the keyword monitoring results.</p>`}
+  const watchList = wa ? `<div class="card" style="margin-bottom:12px"><div class="hd"><h3>Watchlist alerts</h3><a class="small right" href="#/watch/alerts">Work all watchlist alerts</a></div><div class="bd">${wa.alerts.length ? `<ul class="mini">${wa.alerts.map(a => `<li>${chip(a.status, a.status === "new" ? "con" : "grey")}${chip(a.severity || "low", a.severity === "high" ? "con" : a.severity === "medium" ? "warn" : "grey")}<a class="small" style="flex:1" href="#/watch/alerts/${a.id}">${esc(KL[a.kind] || a.kind)}: ${esc((a.title || "").slice(0, 140))}</a><span class="tiny sub">${esc(a.watchlist_name || "")} · ${dt(a.created_at)}</span></li>`).join("")}</ul>` : `<p class="sub" style="margin:0">No ${App.training ? "training" : "open"} watchlist alert.</p>`}</div></div>` : "";
+  body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${[["new,acknowledged,escalated", "Open"], ["new", "New"], ["escalated", "Escalated"], ["dismissed", "Dismissed"], ["", "All"]].map(([v, l]) => `<a class="btn sm ${st === v ? "primary" : "ghost"}" href="#/live/alerts?status=${v}">${l}</a>`).join("")}</div>
+    ${App.training ? `<div class="callout info" style="margin-bottom:10px"><div>Training records: test and practice alerts. They never appear with Operational records.</div></div>` : ""}
+    ${watchList}<h3 style="margin:6px 0">Findings across watchlist items</h3>
     ${r.groups.length ? r.groups.map(g => `<div class="card lgroup"><div class="hd">${chip(PRI[g.top_priority][0], PRI[g.top_priority][1])}<h3>${esc(g.kind_label)}${g.alerts.length > 1 ? ` · ${g.alerts.length} related alerts` : ""}</h3></div><div class="bd">
       ${g.alerts.map(a => `<div class="lalert ${String(a.id) === f.id ? "focus" : ""}" data-id="${a.id}"><div class="row" style="gap:6px;flex-wrap:wrap">${chip(AST[a.status][0], AST[a.status][1])}${chip(PRI[a.priority][0], PRI[a.priority][1])}<b style="flex:1">${esc(a.title)}</b><span class="tiny sub">${dt(a.created_at)}</span></div>
         <p class="small">${esc(a.reason)}</p><p class="tiny sub"><b>Why this priority:</b> ${esc(a.priority_reasons.join("; "))}. <i>${esc(a.detail.priority_rule || "")}</i></p>
-        ${a.post_id ? `<p class="tiny"><a href="#/live/post/${a.post_id}">Open the post</a>${a.detail.report_id ? ` · report ${esc(a.detail.report_id)}` : ""}</p>` : ""}${a.note ? `<p class="tiny">Note: ${esc(a.note)}</p>` : ""}
+        ${a.detail.url || a.detail.report_id || a.detail.investigation ? `<p class="tiny">${a.detail.url ? `<a href="${esc(a.detail.url)}" target="_blank" rel="noopener noreferrer">Open the original</a>` : ""}${a.detail.investigation ? ` · <a href="#/investigate/${esc(a.detail.investigation)}">report ${esc(a.detail.report_id || "")}</a>` : a.detail.report_id ? ` · report ${esc(a.detail.report_id)}` : ""}</p>` : ""}${a.note ? `<p class="tiny">Note: ${esc(a.note)}</p>` : ""}
         ${App.can("watch.triage") ? `<div class="row" style="gap:6px">${a.status !== "acknowledged" && a.status !== "dismissed" ? `<button class="btn sm" data-act="acknowledge">Acknowledge</button>` : ""}${a.status !== "dismissed" ? `<button class="btn sm ghost" data-act="dismiss">Dismiss</button>` : ""}${a.status !== "escalated" ? `<button class="btn sm ghost" data-act="escalate">Escalate</button>` : ""}${a.status === "dismissed" ? `<button class="btn sm ghost" data-act="reopen">Reopen</button>` : ""}</div>` : ""}</div>`).join("")}</div></div>`).join("")
       : empty("No alerts", "No live alert matches this view. Alerts appear for verification outcomes that need attention, unusual posting frequency, emerging topics, repeated wording, unusual engagement and collection problems.")}
     <details class="card" style="margin-top:12px"><summary class="hd"><h3>How priorities are set</h3></summary><div class="bd small"><ul>${Object.entries(r.priority_rules).map(([k, v]) => `<li><b>${esc(k.replace(/_/g, " "))}:</b> ${esc(v)}</li>`).join("")}</ul><p>Alerts point an analyst to something worth checking. Escalation records that a person must decide; AIVS takes no action itself.</p></div></details>`;

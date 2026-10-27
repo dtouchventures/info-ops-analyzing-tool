@@ -101,7 +101,7 @@ async function route() {
 }
 export async function refreshNavCounts() {
   try { const d = await api.get(`/api/dashboard?${App.q()}`); const n = d.counts.awaiting_approval, el = $("#navReview"); if (el) { el.hidden = !n; el.textContent = n; } } catch {}
-  try { const o = await api.get(`/api/live/alerts?status=new&limit=500&${App.q()}`), el = $("#navLive"); if (el) { el.hidden = !o.alerts.length; el.textContent = o.alerts.length; el.title = "New live monitoring alerts"; } } catch {}
+  try { const o = await api.get(`/api/live/alerts?status=new&scope=watchlists&limit=500&${App.q()}`), el = $("#navLive"); if (el) { el.hidden = !o.alerts.length; el.textContent = o.alerts.length; el.title = "New live monitoring alerts"; } } catch {}
   try { const w = await api.get("/api/watch/alerts?status=new&limit=1"), el = $("#navWatch"); if (el) { el.hidden = !w.total; el.textContent = w.total; el.title = "New mention alerts"; } } catch {}
 }
 
@@ -141,7 +141,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.28.0";
+export const CLIENT_VERSION = "1.29.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

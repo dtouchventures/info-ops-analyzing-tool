@@ -102,13 +102,16 @@ test("collection: real-shaped posts saved with images and counts, pagination fol
   G.posts = null;
 });
 
-test("watchlist on live Facebook monitoring: a new post matching the terms raises an alert", async () => {
+test("watchlist on live Facebook monitoring: the backend still matches a new post, but own-Page alerts are not listed as monitoring results", async () => {
   const id = (await rev.post("/api/watch/lists", { name: "Recruitment fraud (test)", definition: { terms: ["recruitment"], context: [], sources: ["fb_live"], alert_mode: "every_post" }, authorisation: "Own Page, Page access token" })).body.id;
   await rev.post(`/api/watch/lists/${id}/preview`, {}); const a = await rev.post(`/api/watch/lists/${id}/status`, { status: "active" }); assert.equal(a.status, 200, JSON.stringify(a.body));
   G.posts = [{ id: `${PAGE}_4`, message: "TEST FIXTURE: Beware of fake recruitment notices asking for money. KDF recruitment is free of charge.", created_time: H(0.5), permalink_url: `https://www.facebook.com/${PAGE}/posts/4`, reactions: { summary: { total_count: 1 } }, comments: { summary: { total_count: 0 } } }, ...fixturePosts()];
   const r = await L().sync(src().id); assert.equal(r.new_posts, 1);
+  // the backend still matches and records it (kept for later authorised use), but posts of the organisation's own Page are not
+  // monitoring results (1.29): the alert is not listed among the watchlist alerts
+  assert.ok(S.ctx.db.prepare("SELECT 1 FROM watch_alerts WHERE watchlist_id = ? AND title LIKE '%fake recruitment notices%'").get(id));
   const al = (await rev.get("/api/watch/alerts?limit=20")).body.alerts;
-  assert.ok(al.some(x => x.watchlist_id === id && /fake recruitment notices/.test(x.title)), JSON.stringify(al.map(x => x.title)));
+  assert.ok(!al.some(x => x.watchlist_id === id), JSON.stringify(al.map(x => x.title)));
   G.posts = null;
 });
 

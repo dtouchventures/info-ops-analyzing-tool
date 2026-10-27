@@ -113,6 +113,13 @@ export const KDF_DEFAULT = {
   }
 };
 
+// test records (1.29): an item labelled "TEST FIXTURE" or published at a test address is kept with the Training records, never
+// among operational ones
+export function isTestRecord(text, url) {
+  if (/\bTEST FIXTURE\b/i.test(String(text || ""))) return true;
+  try { const h = new URL(url).hostname.toLowerCase(); return h === "localhost" || h === "127.0.0.1" || /\.(example|test|invalid)$/.test(h) || h === "example.com"; } catch { return false; }
+}
+
 // ---------------------------------------------------------------- definitions
 const listOf = (v, max, label) => {
   const a = (Array.isArray(v) ? v : String(v || "").split(/\r?\n|,/)).map(x => String(x).replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -247,6 +254,8 @@ export const ACTION = {
 // ---------------------------------------------------------------- the module
 export function makeWatch(db, { audit, cases, config = {} }) {
   const W = { usdPerXPost: 0.005, ...(config.watch || {}) };
+  // test records are recognised on a real server; the automated tests' stand-in servers say for themselves (markTestData)
+  const markTest = W.markTestData ?? !config.isTest;
   const getWl = id => { const w = db.prepare("SELECT * FROM watchlists WHERE id = ?").get(Number(id)); if (!w) throw new HttpError(404, "Watchlist not found."); return { ...w, definition: JSON.parse(w.definition_json), preview: w.preview_json ? JSON.parse(w.preview_json) : null, previewed_current: w.previewed_sha256 === w.definition_sha256 }; };
   const version = (wl, user, note) => db.prepare("INSERT INTO watchlist_versions(watchlist_id,definition_json,definition_sha256,status,changed_by,changed_at,note) VALUES (?,?,?,?,?,?,?)").run(wl.id, wl.definition_json, wl.definition_sha256, wl.status, user?.id ?? null, nowISO(), note || null);
 
@@ -302,8 +311,8 @@ export function makeWatch(db, { audit, cases, config = {} }) {
 
   // ------------------------------------------------------------ ingesting collected posts
   // rows: { platform, post_id, url, account, author_name, text, language, posted_at, likes, comments, shares, views, repost_of, quote_of, collected_via }
-  const insPost = db.prepare(`INSERT INTO watch_posts(platform,post_id,url,account,author_name,text,language,posted_at,first_detected_at,first_source,collected_via,repost_of,quote_of,text_hash,likes,comments,shares,views,metrics_at,metrics_source,dataset_id,io_post_id)
-    VALUES (@platform,@post_id,@url,@account,@author_name,@text,@language,@posted_at,@now,@source,@collected_via,@repost_of,@quote_of,@text_hash,@likes,@comments,@shares,@views,@metrics_at,@metrics_source,@dataset_id,@io_post_id) ON CONFLICT(platform, post_id) DO NOTHING`);
+  const insPost = db.prepare(`INSERT INTO watch_posts(platform,post_id,url,account,author_name,text,language,posted_at,first_detected_at,first_source,collected_via,repost_of,quote_of,text_hash,likes,comments,shares,views,metrics_at,metrics_source,dataset_id,io_post_id,is_training)
+    VALUES (@platform,@post_id,@url,@account,@author_name,@text,@language,@posted_at,@now,@source,@collected_via,@repost_of,@quote_of,@text_hash,@likes,@comments,@shares,@views,@metrics_at,@metrics_source,@dataset_id,@io_post_id,@is_training) ON CONFLICT(platform, post_id) DO NOTHING`);
   const getPost = db.prepare("SELECT * FROM watch_posts WHERE platform = ? AND post_id = ?");
   function observeMetrics(post, row, source, at) {
     const m = { likes: row.likes ?? null, comments: row.comments ?? null, shares: row.shares ?? null, views: row.views ?? null };
@@ -326,7 +335,7 @@ export function makeWatch(db, { audit, cases, config = {} }) {
         const row = { platform: r.platform, post_id: String(r.post_id), url: r.url || null, account: r.account || null, author_name: r.author_name || null, text: String(r.text).slice(0, 10000), language: r.language || null,
           posted_at: r.posted_at || null, now, source, collected_via: r.collected_via || WATCH_SOURCES[source]?.label || MANUAL_SOURCES[source] || source, repost_of: r.repost_of || null, quote_of: r.quote_of || null,
           text_hash: sha(normForRepeat(r.text)), likes: r.likes ?? null, comments: r.comments ?? null, shares: r.shares ?? null, views: r.views ?? null, metrics_at: null, metrics_source: null,
-          dataset_id: r.dataset_id ?? null, io_post_id: r.io_post_id ?? null };
+          dataset_id: r.dataset_id ?? null, io_post_id: r.io_post_id ?? null, is_training: markTest && isTestRecord(r.text, r.url) ? 1 : 0 };
         const isNew = insPost.run(row).changes > 0; if (isNew) out.new_posts++;
         let post = getPost.get(row.platform, row.post_id);
         if (r.image_url && /^https?:\/\//.test(r.image_url) && !post.image_url) { db.prepare("UPDATE watch_posts SET image_url = ? WHERE id = ?").run(String(r.image_url).slice(0, 2000), post.id); post = getPost.get(row.platform, row.post_id); }
@@ -356,8 +365,9 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   const addEvent = (alertId, action, user, note) => db.prepare("INSERT INTO watch_alert_events(alert_id,action,note,by_user,at) VALUES (?,?,?,?,?)").run(alertId, action, note || null, user?.id ?? null, nowISO());
   function raise(wl, kind, key, { post_id = null, title, reason, detail, severity = null }) {
     const sev = severity || SEVERITY_DEFAULT[kind] || "low";
-    const now = nowISO(), r = db.prepare("INSERT INTO watch_alerts(watchlist_id,kind,dedupe_key,post_id,title,reason,detail_json,status,created_at,updated_at,severity) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO NOTHING")
-      .run(wl.id, kind, key, post_id, title.slice(0, 300), reason, JSON.stringify({ ...detail, recommended_action: detail?.recommended_action || ACTION[kind] }), "new", now, now, sev);
+    const ids = [post_id, ...(detail?.post_ids || [])].filter(Boolean), tr = ids.length && ids.every(id => db.prepare("SELECT is_training FROM watch_posts WHERE id = ?").get(id)?.is_training) ? 1 : 0;
+    const now = nowISO(), r = db.prepare("INSERT INTO watch_alerts(watchlist_id,kind,dedupe_key,post_id,title,reason,detail_json,status,created_at,updated_at,severity,is_training) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO NOTHING")
+      .run(wl.id, kind, key, post_id, title.slice(0, 300), reason, JSON.stringify({ ...detail, recommended_action: detail?.recommended_action || ACTION[kind] }), "new", now, now, sev, tr || (markTest && isTestRecord(title, null)) ? 1 : 0);
     if (r.changes) { addEvent(Number(r.lastInsertRowid), "raised", null, reason); return 1; }
     return 0;
   }
@@ -451,7 +461,8 @@ export function makeWatch(db, { audit, cases, config = {} }) {
   // ------------------------------------------------------------ the queue
   const alertRow = a => ({ ...a, detail: JSON.parse(a.detail_json), detail_json: undefined });
   function alerts(q = {}, user) {
-    const w = ["1"], P = [];
+    // operational and training records are kept apart; posts of the organisation's own Facebook Page are not monitoring results
+    const w = ["a.is_training = ?", "(a.post_id IS NULL OR (coalesce(p.first_source,'') <> 'fb_live' AND NOT EXISTS (SELECT 1 FROM social_posts sp WHERE sp.post_id = p.post_id AND p.platform IN ('Facebook','Instagram'))))"], P = [q.training == 1 || q.training === "1" ? 1 : 0];
     if (["new", "acknowledged", "dismissed", "converted"].includes(q.status)) { w.push("a.status = ?"); P.push(q.status); } else if (q.status === "open") w.push("a.status IN ('new','acknowledged')");
     if (ALERT_KINDS.includes(q.kind)) { w.push("a.kind = ?"); P.push(q.kind); }
     if (["high", "medium", "low"].includes(q.severity)) { w.push("a.severity = ?"); P.push(q.severity); }
@@ -466,7 +477,7 @@ export function makeWatch(db, { audit, cases, config = {} }) {
       FROM watch_alerts a JOIN watchlists w ON w.id = a.watchlist_id LEFT JOIN watch_posts p ON p.id = a.post_id LEFT JOIN users u ON u.id = a.assigned_to
       WHERE ${where} ORDER BY (a.status = 'new') DESC, a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`).all(...P, limit, offset)
       .map(a => ({ ...alertRow(a), definition_json: undefined, highlights: a.post_text ? highlights(JSON.parse(a.definition_json), a.post_text) : [] }));
-    const counts = Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts GROUP BY status").all().map(r => [r.status, r.n]));
+    const counts = Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts WHERE is_training = ? GROUP BY status").all(P[0]).map(r => [r.status, r.n]));
     return { total, offset, limit, counts, alerts: rows };
   }
   function alert(id) {

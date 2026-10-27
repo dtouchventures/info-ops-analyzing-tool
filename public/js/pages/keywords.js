@@ -15,6 +15,17 @@ const chip = (l, c) => `<span class="chip ${c}">${esc(l)}</span>`;
 const dt = iso => (iso ? fmtDT(iso) : "date not given");
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || ""));
 
+// "Ollama AI Ready" only when AIVS itself has had a working answer from the model; otherwise what is wrong and how many analyses wait
+export async function aiIndicator(el) {
+  if (!el) return;
+  const show = a => {
+    const q = a.queue || {};
+    el.innerHTML = a.ready ? `<span class="chip sup" title="${esc(`${a.model} at ${a.endpoint}, answered in ${a.latency_ms} ms, checked ${a.checked_at ? fmtDT(a.checked_at) : ""}`)}">● ${esc(a.label)}</span><div class="tiny sub">${esc(a.model || "")} · ${q.done || 0} analysed · ${q.pending || 0} queued</div>`
+      : `<span class="chip warn" title="${esc(a.error || "")}">● ${esc(a.label)}</span><div class="tiny sub">${q.pending ? `${q.pending} analyses queued, retried automatically` : "analyses will wait in a queue"}${a.error ? ` · ${esc(String(a.error).slice(0, 120))}` : ""}</div>${App.can("watch.triage") ? `<button class="btn sm ghost" id="aiCheck" style="margin-top:4px">Check now</button>` : ""}`;
+    const b = $("#aiCheck", el); if (b) b.onclick = async () => { b.disabled = true; b.textContent = "Checking…"; try { await api.get("/api/ai/health?force=1"); } catch {} show(await api.get("/api/monitor/ai")); };
+  };
+  try { show(await api.get("/api/monitor/ai")); } catch { el.innerHTML = ""; }
+}
 export function aiQueueLine(q) {
   if (!q) return "";
   const st = q.state === "waiting" ? "warn" : q.state === "running" ? "ok" : "";
@@ -25,7 +36,7 @@ export function itemCard(it) {
     ${it.has_image ? `<img src="/api/monitor/items/${it.id}/image" alt="Image published with the item" loading="lazy">` : ""}
     <div class="lpb"><div class="row" style="gap:6px;flex-wrap:wrap">${chip(it.platform, "navy")}${chip(it.verification.label, VER[it.verification.status] || "grey")}
       ${QCHIP[it.quality] ? chip(it.quality_label, QCHIP[it.quality]) : ""}${it.ai?.status === "done" && it.ai.result?.about_subject ? chip(...AIC[it.ai.result.about_subject]) : ""}
-      ${it.duplicate_of ? chip("Same item found by another source", "grey") : ""}${it.origin === "own_page" ? chip("Own Page", "teal") : it.origin === "test" ? chip("Test data", "train") : ""}
+      ${it.duplicate_of ? chip("Same item found by another source", "grey") : ""}${it.origin === "test" ? chip("Test data (Training)", "train") : ""}
       ${(it.analysis?.indicators || []).length ? chip("Misinformation indicators", "warn") : ""}</div>
       <p class="lmsg">${esc(it.text.slice(0, 420))}${it.text.length > 420 ? "…" : ""}</p>
       <div class="tiny sub">${esc(it.account || "source not named")} · published ${esc(dt(it.posted_at))} · found ${ago(it.collected_at)}
@@ -60,18 +71,17 @@ function filterBar(f, sourcesSeen) {
     <div><label class="f" for="kfv">Verification</label><select id="kfv">${opt("", "Any")}${opt("not_verified", "Not verified yet", f.verification)}${opt("verified", "Sent for verification", f.verification)}</select></div>
     <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="kfd" ${f.hide_duplicates === "1" ? "checked" : ""}> Hide duplicates</label>
     <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="kfi" ${f.images === "1" ? "checked" : ""}> With images</label>
-    <label class="small" style="display:flex;gap:6px;align-items:center" title="The organisation's own Facebook Page is a separate source and is left out of monitoring results unless chosen here"><input type="checkbox" id="kfo" ${f.own === "1" ? "checked" : ""}> Include own Facebook Page</label>
     <button class="btn primary sm">Apply</button></div></form>`;
 }
 function readFilters(root, base, keep = {}) {
   const p = new URLSearchParams(keep); for (const [k, s] of [["source", "#kfs"], ["from", "#kff"], ["to", "#kft"], ["q", "#kfq"], ["verification", "#kfv"], ["quality", "#kfm"]]) { const v = $(s, root).value; if (v) p.set(k, v); }
-  if ($("#kfd", root).checked) p.set("hide_duplicates", "1"); if ($("#kfi", root).checked) p.set("images", "1"); if ($("#kfo", root).checked) p.set("own", "1"); location.hash = `${base}${p.toString() ? `?${p}` : ""}`;
+  if ($("#kfd", root).checked) p.set("hide_duplicates", "1"); if ($("#kfi", root).checked) p.set("images", "1"); location.hash = `${base}${p.toString() ? `?${p}` : ""}`;
 }
 const groupsIn = rows => [...new Set(rows.map(r => /^News/.test(r.platform) ? "News" : r.platform === "X (Twitter)" ? "X" : r.platform))];
 
 // ---------------------------------------------------------------- overview (multi-source)
 export async function overviewView(body, ownPage) {
-  const o = await api.get("/api/monitor/overview"), c = o.counts;
+  const o = await api.get(`/api/monitor/overview?${App.q()}`), c = o.counts;
   const fig = (v, l, h, cls = "") => `<a class="kpi ${cls}" href="${h}"><div class="l">${l}</div><div class="v">${Number(v).toLocaleString()}</div></a>`;
   body.innerHTML = `<div class="kpis">${fig(c.items, "items discovered", "#/live/discovered")}${fig(c.items_today, "found today", "#/live/discovered")}${fig(c.active_watchlists, "active watchlists", "#/live/watchlists")}
       ${fig(c.searches, "searches run", "#/live/search")}${fig(c.new_alerts, "new alerts", "#/live/alerts", c.new_alerts ? "alert" : "")}${fig(c.verified, "items sent for verification", "#/live/discovered?verification=verified")}${fig(c.reports, "monitoring reports", "#/live/reports")}</div>
@@ -119,7 +129,7 @@ async function runView(body, id) {
         ${s.watchlist_id ? `<a class="btn sm ghost" href="#/live/discovered?watchlist=${s.watchlist_id}">Recurring watchlist</a>` : App.can("watch.manage") ? `<button class="btn sm" id="kwl">Save as recurring watchlist</button>` : `<span class="tiny sub">A reviewer can save this search as a recurring watchlist.</span>`}</div>` : ""}</div></div>
     <div id="kres" style="margin-top:12px"></div>`;
   if (s.status === "running") { const h = location.hash; setTimeout(() => { if (location.hash === h) runView(body, id); }, 1500); }
-  const r = await api.get(`/api/monitor/searches/${id}/results?${new URLSearchParams({ ...f, limit: 200 })}`);
+  const r = await api.get(`/api/monitor/searches/${id}/results?${App.q(new URLSearchParams({ ...f, limit: 200 }).toString())}`);
   $("#kres", body).innerHTML = `${filterBar(f, groupsIn(r.by_source))}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.${!f.quality && (r.held?.ambiguous || r.held?.engine) ? ` Not shown: ${[r.held.ambiguous ? `<a href="#/live/search/${id}?quality=ambiguous">${r.held.ambiguous} matching only an ambiguous keyword</a>` : "", r.held.engine ? `<a href="#/live/search/${id}?quality=engine">${r.held.engine} found only by a platform's own search</a>` : ""].filter(Boolean).join(", ")}.` : ""}</p>${r.items.length ? `<div class="lposts">${r.items.map(itemCard).join("")}</div>` : s.status === "done" ? empty("No results", "None of the searched sources returned an item that matches. Nothing is shown that a source did not return.") : ""}`;
   $("#kf", body).onsubmit = e => { e.preventDefault(); readFilters(body, `#/live/search/${id}`); };
   wireVerify(body, () => runView(body, id));
@@ -129,7 +139,7 @@ async function runView(body, id) {
 
 // ---------------------------------------------------------------- everything discovered
 export async function discoveredView(body) {
-  const f = qs(), [r, ov] = await Promise.all([api.get(`/api/monitor/feed?${new URLSearchParams({ ...f, limit: 150 })}`), api.get("/api/watch/overview").catch(() => ({ watchlists: [] }))]);
+  const f = qs(), [r, ov] = await Promise.all([api.get(`/api/monitor/feed?${App.q(new URLSearchParams({ ...f, limit: 150 }).toString())}`), api.get("/api/watch/overview").catch(() => ({ watchlists: [] }))]);
   const wls = ov.watchlists.filter(w => w.status === "active");
   body.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><a class="btn sm ${!f.watchlist ? "primary" : "ghost"}" href="#/live/discovered">All watchlists and searches</a>${wls.map(w => `<a class="btn sm ${String(f.watchlist) === String(w.id) ? "primary" : "ghost"}" href="#/live/discovered?watchlist=${w.id}">${esc(w.name)}</a>`).join("")}</div>
     <div id="kemerg"></div>${filterBar(f, null)}<p class="small sub">${r.total} item(s)${r.by_source.length ? `: ${esc(r.by_source.map(b => `${b.platform} ${b.n}`).join(", "))}` : ""}.</p>

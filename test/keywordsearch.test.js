@@ -74,7 +74,7 @@ test("an analyst-entered keyword is searched across every connected source; resu
   const per = Object.fromEntries(s.per_source.map(p => [p.source, p]));
   assert.equal(per.gdelt.state, "ok"); assert.equal(per.gdelt.matched, 4); assert.equal(per.brave_news.state, "ok"); assert.equal(per.news.state, "ok"); assert.equal(per.youtube.state, "ok");
   assert.equal(per.x_search.state, "not_configured"); assert.match(per.x_search.error, /X_BEARER_TOKEN/);
-  assert.equal(per.facebook.state, "not_configured"); assert.equal(per.fb_live.state, "not_configured");
+  assert.equal(per.facebook.state, "not_configured"); assert.equal(per.fb_live, undefined, "the organisation's own Page is not a monitoring source (1.29)");
   assert.equal(per.brave_news.matched, 1, "the football article is excluded"); assert.equal(per.brave_news.duplicates, 1, "the same article found by GDELT is marked as a duplicate");
   assert.equal(per.news.matched, 1, "only the RSS item that contains the keyword");
   const gq = seen.find(x => x.path === "/api/v2/doc/doc").q.query; assert.match(gq, /"Lamu ferry"/); assert.match(gq, /-football/);
@@ -94,7 +94,7 @@ test("an analyst-entered keyword is searched across every connected source; resu
 test("source status shows connected, restricted, unavailable and not configured, with the platforms' limits", async () => {
   const s = (await ana.get("/api/monitor/sources")).body, by = Object.fromEntries(s.sources.map(x => [x.key, x]));
   assert.equal(by.gdelt.category, "Connected"); assert.ok(by.gdelt.items_collected >= 4); assert.equal(by.x_search.category, "Not configured"); assert.equal(by.facebook.category, "Not configured");
-  assert.match(by.facebook.access_limit, /does not offer keyword search of Facebook/); assert.match(by.fb_live.access_limit, /not a search of Facebook/);
+  assert.match(by.facebook.access_limit, /does not offer keyword search of Facebook/); assert.equal(by.fb_live, undefined);
   assert.match(s.note, /cannot search all public Facebook posts, personal profiles/); assert.ok(s.not_available.length);
   STATE.braveFail = true; const st = await ana.post("/api/monitor/searches", { query: "Lamu ferry", sources: ["brave_news", "gdelt"] }); const d = await done(ana, st.body.id); STATE.braveFail = false;
   const b = d.per_source.find(p => p.source === "brave_news"); assert.equal(b.state, "restricted"); assert.equal(d.per_source.find(p => p.source === "gdelt").state, "ok", "one failing source does not stop the others");

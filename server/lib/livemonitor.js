@@ -54,7 +54,7 @@ export const PRIORITY_RULES = {
   engagement: "Low when a post's public reactions, comments and shares reach ten times the Page's usual level (at least 50); medium at 25 times.",
   collection: "High when Meta refuses the token or a permission (collection has stopped). Medium after 5 failed runs in a row, or when the token expires within 7 days."
 };
-const KIND_LABEL = { verification: "Verification outcome", frequency: "Unusual posting frequency", emerging_topic: "Emerging topic", repeated: "Repeated wording", engagement: "Unusual engagement", collection: "Collection problem" };
+const KIND_LABEL = { ai_assessment: "AI assessment of a watchlist item", contradiction: "Conflicting reports", narrative: "Emerging narrative", verification: "Verification outcome", frequency: "Unusual posting frequency", emerging_topic: "Emerging topic", repeated: "Repeated wording", engagement: "Unusual engagement", collection: "Collection problem" };
 const STOP = new Set("this that with from have will your their they them there been were what when which about into more than just also over only some such after before then these those very would could should other being because while where most must make made many much said says news today page post posts".split(" "));
 const eatDay = (d = new Date()) => new Date(new Date(d).getTime() + 3 * 3600e3).toISOString().slice(0, 10);
 const eatTime = iso => { const d = new Date(Date.parse(iso) + 3 * 3600e3), M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], p = x => String(x).padStart(2, "0"); return isNaN(d) ? iso : `${d.getUTCDate()} ${M[d.getUTCMonth()]} ${d.getUTCFullYear()} ${p(d.getUTCHours())}${p(d.getUTCMinutes())}hrs EAT`; };

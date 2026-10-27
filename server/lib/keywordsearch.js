@@ -21,7 +21,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { nowISO } from "./db.js";
 import { HttpError } from "./auth.js";
-import { WATCH_SOURCES, UNSUPPORTED, normaliseDefinition, matchPost, normForRepeat, similarity, KENYA_NEWS_SITES, KDF_DEFAULT } from "./watch.js";
+import { WATCH_SOURCES, UNSUPPORTED, normaliseDefinition, matchPost, normForRepeat, similarity, KENYA_NEWS_SITES, KDF_DEFAULT, isTestRecord } from "./watch.js";
 import { fetchImage } from "./fetchurl.js";
 import { classifySentiment, themesOf, THEMES, SENTIMENT_LABELS, topicClusters, sourceCategory } from "./social-analysis.js";
 import { extractEntities, extractHashtags, splitSentences, classifyStatement, redFlags } from "../../shared/text.js";
@@ -31,7 +31,11 @@ import { checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDoc
 import { docxFromBody } from "./autoreport.js";
 
 // sources an analyst can search on demand, and what their access really is
-export const SEARCHABLE = ["news", "gdelt", "brave_news", "youtube", "x_search", "reddit", "bluesky", "mastodon", "threads", "instagram", "facebook", "tiktok", "fb_live"];
+// (the organisation's own Facebook Page is no longer a monitoring source (1.29): its posts are not public information discovered by
+// keyword; the Meta Graph integration stays for Verify Information and later authorised use)
+export const SEARCHABLE = ["news", "gdelt", "brave_news", "youtube", "x_search", "reddit", "bluesky", "mastodon", "threads", "instagram", "facebook", "tiktok"];
+// posts of the organisation's own Page never count as monitoring results, whichever way they were stored
+const NOT_OWN = p => `coalesce(${p}.first_source,'') <> 'fb_live' AND NOT EXISTS (SELECT 1 FROM social_posts sp WHERE sp.post_id = ${p}.post_id AND ${p}.platform IN ('Facebook','Instagram'))`;
 const RESTRICTED = {
   facebook: "Meta does not offer keyword search of Facebook. AIVS reads only the Pages named in the watchlist or FACEBOOK_PAGES, with a token those Pages allow (Page Public Content Access for other organisations' Pages). Personal profiles and groups are never read.",
   instagram: "Hashtag search only, through an Instagram professional account and Meta's Instagram Public Content Access approval. Personal accounts are not searched.",
@@ -167,7 +171,7 @@ export function draftReport(sit, items, { reference, subject, status = "AI-Gener
     report_status: `Generated automatically by AIVS ${version}; not reviewed or approved by a person. Analytical support product; not an official KDF intelligence document.`, verdict_label: sit.total ? "Monitoring summary" : "No results", strength, written_by: "rules", training };
 }
 
-export function makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version = "dev", live = null }) {
+export function makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version = "dev", live = null, ai = null }) {
   const W = { searchMaxPerSource: 50, ...(config.watch || {}) };
   const running = new Set();
   const SRC = () => watchCollector.status().sources;
@@ -190,12 +194,13 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   }
 
   // ---------------------------------------------------------------- run a search
-  const insPost = db.prepare(`INSERT INTO watch_posts(platform,post_id,url,account,author_name,text,language,posted_at,first_detected_at,first_source,collected_via,repost_of,quote_of,text_hash,likes,comments,shares,views,image_url,url_key)
-    VALUES (@platform,@post_id,@url,@account,@author_name,@text,@language,@posted_at,@now,@source,@collected_via,@repost_of,@quote_of,@text_hash,@likes,@comments,@shares,@views,@image_url,@url_key) ON CONFLICT(platform, post_id) DO NOTHING`);
+  const insPost = db.prepare(`INSERT INTO watch_posts(platform,post_id,url,account,author_name,text,language,posted_at,first_detected_at,first_source,collected_via,repost_of,quote_of,text_hash,likes,comments,shares,views,image_url,url_key,is_training)
+    VALUES (@platform,@post_id,@url,@account,@author_name,@text,@language,@posted_at,@now,@source,@collected_via,@repost_of,@quote_of,@text_hash,@likes,@comments,@shares,@views,@image_url,@url_key,@is_training) ON CONFLICT(platform, post_id) DO NOTHING`);
   function storeRow(source, r, now) {
     const row = { platform: r.platform, post_id: String(r.post_id).slice(0, 500), url: /^https?:\/\//.test(r.url || "") ? r.url : null, account: r.account || null, author_name: r.author_name || null, text: String(r.text).slice(0, 10000), language: r.language || null,
       posted_at: r.posted_at || null, now, source, collected_via: r.collected_via || WATCH_SOURCES[source]?.label || source, repost_of: r.repost_of || null, quote_of: r.quote_of || null, text_hash: sha(normForRepeat(r.text)),
-      likes: r.likes ?? null, comments: r.comments ?? null, shares: r.shares ?? null, views: r.views ?? null, image_url: /^https?:\/\//.test(r.image_url || "") ? r.image_url : null, url_key: r.url ? urlKey(r.url) : null };
+      likes: r.likes ?? null, comments: r.comments ?? null, shares: r.shares ?? null, views: r.views ?? null, image_url: /^https?:\/\//.test(r.image_url || "") ? r.image_url : null, url_key: r.url ? urlKey(r.url) : null,
+      is_training: (config.watch?.markTestData ?? !config.isTest) && isTestRecord(r.text, r.url) ? 1 : 0 };
     const isNew = insPost.run(row).changes > 0, post = db.prepare("SELECT * FROM watch_posts WHERE platform = ? AND post_id = ?").get(row.platform, row.post_id);
     if (!isNew && row.image_url && !post.image_url) db.prepare("UPDATE watch_posts SET image_url = ? WHERE id = ?").run(row.image_url, post.id);
     if (!isNew && row.url_key && !post.url_key) db.prepare("UPDATE watch_posts SET url_key = ? WHERE id = ?").run(row.url_key, post.id);
@@ -203,7 +208,7 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   }
   function start(user, b = {}) {
     if (b.training) throw new HttpError(400, "Searches use live public sources, so they run in Operational mode only. Switch Records to Operational.");
-    const q = parseQuery(b.query), avail = SEARCHABLE.filter(k => k === "fb_live" || WATCH_SOURCES[k]);
+    const q = parseQuery(b.query), avail = SEARCHABLE.filter(k => WATCH_SOURCES[k]);
     const sources = (Array.isArray(b.sources) && b.sources.length ? b.sources : avail).filter(k => avail.includes(k));
     if (!sources.length) throw new HttpError(400, "Choose at least one source.");
     const from = eatIso(b.from) || new Date(Date.now() - 7 * 864e5).toISOString(), to = eatIso(b.to, true);
@@ -288,7 +293,7 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
     collected_at: r.first_detected_at, collected_via: r.collected_via, has_image: !!(r.image_url || r.image_sha256), likes: r.likes, comments: r.comments, shares: r.shares, views: r.views,
     matched_terms: J(r.terms_json) || [], engine_match: r.terms_json === "[]" || r.quality === "engine", quality: r.quality || (r.terms_json === "[]" ? "article" : "confirmed"), quality_label: QUALITY_LABEL[r.quality || (r.terms_json === "[]" ? "article" : "confirmed")], disambiguated_by: J(r.context_json) || [],
     ai: r.ai_status ? { status: r.ai_status, attempts: r.ai_attempts, next_at: r.ai_next_at, error: r.ai_error, model: r.ai_model, at: r.ai_at, result: J(r.ai_json) } : null, duplicate_of: r.duplicate_of || null, is_new: r.is_new == null ? null : !!r.is_new, verification: verificationOf(r), analysis: analysisOf(r),
-    origin: r.first_source === "fb_live" ? "own_page" : r.dataset_id ? "imported" : /demo|training|practice/i.test(r.collected_via || "") ? "test" : "live" });
+    origin: r.is_training ? "test" : r.first_source === "fb_live" ? "own_page" : r.dataset_id ? "imported" : /demo|training|practice/i.test(r.collected_via || "") ? "test" : "live" });
   const SEL = `SELECT p.*, a.analysed_at, a.themes_json, a.sentiment_json, a.claims_json, a.entities_json, a.indicators_json, a.figures_json, a.ai_status, a.ai_attempts, a.ai_next_at, a.ai_error, a.ai_model, a.ai_at, a.ai_json, i.status inv_status, i.overall inv_overall, i.report_id inv_report_id, i.reviewed_at inv_reviewed`;
   const JOINS = `LEFT JOIN watch_post_analysis a ON a.post_id = p.id LEFT JOIN investigations i ON i.id = p.investigation_id`;
   function filtersSql(f, a) {
@@ -301,8 +306,8 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
     if (f.verification === "not_verified") w.push("p.investigation_id IS NULL"); else if (f.verification === "verified") w.push("p.investigation_id IS NOT NULL");
     if (f.images === "1") w.push("(p.image_url IS NOT NULL OR p.image_sha256 IS NOT NULL)");
     if (f.hide_duplicates === "1") w.push("x.duplicate_of IS NULL");
-    // the organisation's own Facebook Page is a separate source: its posts are left out of monitoring results unless asked for
-    if (f.own !== "1") w.push("coalesce(p.first_source,'') <> 'fb_live'");
+    // the organisation's own Facebook Page is not a monitoring source; test records appear only with the Training records
+    w.push(NOT_OWN("p")); w.push("p.is_training = @tr"); a.tr = f.training == 1 || f.training === "1" ? 1 : 0;
     return w;
   }
   function get(id) {
@@ -374,8 +379,8 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   function scopeItems({ searchId = null, watchlistId = null, from = null, to = null, limit = 150 }) {
     let rows;
     const base = `${SEL}, NULL terms_json, NULL duplicate_of, NULL is_new FROM watch_posts p ${JOINS}`;
-    if (searchId) rows = db.prepare(`${base} WHERE p.id IN (SELECT post_id FROM monitor_search_results x WHERE x.search_id = ? AND x.duplicate_of IS NULL AND ${GOOD("x.quality")}) AND coalesce(p.first_source,'') <> 'fb_live' ORDER BY coalesce(p.posted_at, p.first_detected_at) DESC LIMIT ?`).all(searchId, limit);
-    else rows = db.prepare(`${base} WHERE p.id IN (SELECT post_id FROM watch_matches m WHERE m.watchlist_id = ? AND ${GOOD("m.quality")}) AND coalesce(p.first_source,'') <> 'fb_live' AND coalesce(p.posted_at, p.first_detected_at) >= ? AND coalesce(p.posted_at, p.first_detected_at) <= ? ORDER BY coalesce(p.posted_at, p.first_detected_at) DESC LIMIT ?`).all(watchlistId, from, to, limit);
+    if (searchId) rows = db.prepare(`${base} WHERE p.id IN (SELECT post_id FROM monitor_search_results x WHERE x.search_id = ? AND x.duplicate_of IS NULL AND ${GOOD("x.quality")}) AND ${NOT_OWN("p")} AND p.is_training = 0 ORDER BY coalesce(p.posted_at, p.first_detected_at) DESC LIMIT ?`).all(searchId, limit);
+    else rows = db.prepare(`${base} WHERE p.id IN (SELECT post_id FROM watch_matches m WHERE m.watchlist_id = ? AND ${GOOD("m.quality")}) AND ${NOT_OWN("p")} AND p.is_training = 0 AND coalesce(p.posted_at, p.first_detected_at) >= ? AND coalesce(p.posted_at, p.first_detected_at) <= ? ORDER BY coalesce(p.posted_at, p.first_detected_at) DESC LIMIT ?`).all(watchlistId, from, to, limit);
     return rows.map((r, i) => { const it = itemRow(r); if (!it.analysis) it.analysis = analyseStore(r.id, r.text); return { ...it, n: i + 1 }; });
   }
   async function report(user, { searchId = null, watchlistId = null, hours = 24, origin = "analyst" } = {}) {
@@ -465,19 +470,19 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
     }
     return n;
   }
-  function overview() {
+  function overview(f = {}) {
+    const tr = f.training == 1 || f.training === "1" ? 1 : 0;
     const n = (sql, ...a) => db.prepare(sql).get(...a).n, today = new Date(`${new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10)}T00:00:00+03:00`).toISOString();
-    const scope = `coalesce(p.first_source,'') <> 'fb_live' AND (p.id IN (SELECT m.post_id FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE w.deleted_at IS NULL AND ${GOOD("m.quality")}) OR p.id IN (SELECT x.post_id FROM monitor_search_results x WHERE ${GOOD("x.quality")}))`;
+    const scope = `${NOT_OWN("p")} AND p.is_training = ${tr} AND (p.id IN (SELECT m.post_id FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE w.deleted_at IS NULL AND ${GOOD("m.quality")}) OR p.id IN (SELECT x.post_id FROM monitor_search_results x WHERE ${GOOD("x.quality")}))`;
     const src = sources().sources, cat = {}; for (const x of src) cat[x.category] = (cat[x.category] || 0) + 1;
     return { counts: { items: n(`SELECT COUNT(*) n FROM watch_posts p WHERE ${scope}`), items_today: n(`SELECT COUNT(*) n FROM watch_posts p WHERE ${scope} AND p.first_detected_at >= ?`, today),
         verified: n(`SELECT COUNT(*) n FROM watch_posts p WHERE ${scope} AND p.investigation_id IS NOT NULL`), searches: n("SELECT COUNT(*) n FROM monitor_searches"),
         active_watchlists: n("SELECT COUNT(*) n FROM watchlists WHERE status = 'active' AND deleted_at IS NULL"), reports: n("SELECT COUNT(*) n FROM monitor_reports"),
-        new_alerts: n("SELECT COUNT(*) n FROM watch_alerts a JOIN watchlists w ON w.id = a.watchlist_id WHERE a.status = 'new' AND w.deleted_at IS NULL") + n("SELECT COUNT(*) n FROM live_alerts WHERE status = 'new' AND is_training = 0 AND group_key LIKE 'watchlist:%'"),
-        own_page_alerts: n("SELECT COUNT(*) n FROM live_alerts WHERE status = 'new' AND is_training = 0 AND coalesce(group_key,'') NOT LIKE 'watchlist:%'"),
-        ambiguous: n("SELECT COUNT(*) n FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE w.deleted_at IS NULL AND m.quality = 'ambiguous'"), ai: aiQueueCounts() },
+        new_alerts: n("SELECT COUNT(*) n FROM watch_alerts a JOIN watchlists w ON w.id = a.watchlist_id WHERE a.status = 'new' AND w.deleted_at IS NULL AND a.is_training = ?", tr) + n("SELECT COUNT(*) n FROM live_alerts WHERE status = 'new' AND is_training = ? AND group_key LIKE 'watchlist:%'", tr),
+        ai_indicator: aiIndicator(), ambiguous: n(`SELECT COUNT(*) n FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id JOIN watch_posts p ON p.id = m.post_id WHERE w.deleted_at IS NULL AND m.quality = 'ambiguous' AND p.is_training = ? AND ${NOT_OWN("p")}`, tr), ai: aiQueueCounts() },
       by_category: cat, connected: src.filter(x => x.category === "Connected").map(x => x.platform), sources: src,
       by_platform: db.prepare(`SELECT p.platform, COUNT(*) n, MAX(p.first_detected_at) last FROM watch_posts p WHERE ${scope} GROUP BY p.platform ORDER BY n DESC`).all(),
-      recent: feed({ limit: 8 }).items, searches: list(5) };
+      recent: feed({ limit: 8, training: tr }).items, searches: list(5) };
   }
   // ---------------------------------------------------------------- which matches are shown
   function qualitySql(col, q) {
@@ -507,7 +512,7 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   function enqueueAi() {
     const since = new Date(Date.now() - AIQ.days * 864e5).toISOString(), now = nowISO();
     const ids = db.prepare(`SELECT DISTINCT p.id, p.text FROM watch_posts p JOIN watch_matches m ON m.post_id = p.id JOIN watchlists w ON w.id = m.watchlist_id LEFT JOIN watch_post_analysis a ON a.post_id = p.id
-      WHERE w.deleted_at IS NULL AND coalesce(m.quality,'confirmed') IN ('confirmed','contextual','analyst','ambiguous') AND coalesce(p.first_source,'') <> 'fb_live' AND m.detected_at >= ? AND (a.post_id IS NULL OR a.ai_status IS NULL) LIMIT 500`).all(since);
+      WHERE w.deleted_at IS NULL AND coalesce(m.quality,'confirmed') IN ('confirmed','contextual','analyst','ambiguous') AND ${NOT_OWN("p")} AND p.is_training = 0 AND m.detected_at >= ? AND (a.post_id IS NULL OR a.ai_status IS NULL) LIMIT 500`).all(since);
     for (const r of ids) { analyseStore(r.id, r.text, { keepAi: true }); db.prepare("UPDATE watch_post_analysis SET ai_status = 'pending', ai_queued_at = ?, ai_next_at = ? WHERE post_id = ? AND ai_status IS NULL").run(now, now, r.id); }
     return ids.length;
   }
@@ -515,12 +520,14 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   async function analyseOneAi(user, post, model) {
     const wls = db.prepare("SELECT w.name, w.definition_json, coalesce(m.quality,'confirmed') quality, m.terms_json FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE m.post_id = ? AND w.deleted_at IS NULL").all(post.id);
     const subject = wls.map(w => `${w.name} (keywords found: ${(J(w.terms_json) || []).join(", ") || "none"})`).join("; ");
-    const prompt = `A monitoring watchlist collected the public item below because it contains these keywords: ${subject}.\nItem (${post.platform}, ${post.account || "source not named"}, published ${post.posted_at || "date not given"}):\n<content>\n${String(post.text).slice(0, 4000)}\n</content>\n\nUsing ONLY the words of the item:\n1. Does the item concern the subject of the watchlist (for the Kenya Defence Forces: Kenya's military, its services, commanders or operations)? Some keywords are ambiguous (CDF can mean Chief of Defence Forces or Constituency Development Fund). Answer yes, no or unclear and give the reason.\n2. Summarise the item in one or two sentences without adding facts.\n3. List up to 5 factual claims, each with the exact words of the item that state it ("quote", copied exactly).\n4. Give the main themes (up to 4 short labels) and the tone towards the subject: positive, negative, neutral or mixed.\n5. List signs of possible misinformation that are visible in the text itself (unsourced figures, calls to share, emotional framing); an empty list if none.\nJSON: {"about_subject": "yes|no|unclear", "about_reason": "...", "summary": "...", "claims": [{"text": "...", "quote": "..."}], "themes": ["..."], "tone": "positive|negative|neutral|mixed", "indicators": ["..."]}`;
+    const prompt = `A monitoring watchlist collected the public item below because it contains these keywords: ${subject}.\nItem (${post.platform}, ${post.account || "source not named"}, published ${post.posted_at || "date not given"}):\n<content>\n${String(post.text).slice(0, 4000)}\n</content>\n\nUsing ONLY the words of the item:\n1. Does the item concern the subject of the watchlist (for the Kenya Defence Forces: Kenya's military, its services, commanders or operations)? Some keywords are ambiguous (CDF can mean Chief of Defence Forces or Constituency Development Fund). Answer yes, no or unclear and give the reason.\n2. Summarise the item in one or two sentences without adding facts.\n3. List up to 5 factual claims, each with the exact words of the item that state it ("quote", copied exactly).\n4. Give the main themes (up to 4 short labels) and the tone towards the subject: positive, negative, neutral or mixed.\n5. List signs of possible misinformation that are visible in the text itself (unsourced figures, calls to share, emotional framing); an empty list if none.\n6. Judge how credible the item is from what it shows (named sources, attribution, an established outlet, specific verifiable details): high, medium or low, and say why. Then say how uncertain this reading is (low, medium or high uncertainty) and what would reduce the uncertainty.\nJSON: {"about_subject": "yes|no|unclear", "about_reason": "...", "summary": "...", "claims": [{"text": "...", "quote": "..."}], "themes": ["..."], "tone": "positive|negative|neutral|mixed", "indicators": ["..."], "credibility": "high|medium|low", "credibility_reason": "...", "uncertainty": "low|medium|high", "uncertainty_reason": "..."}`;
     const out = await investigations.askJson(user, null, "monitoring item analysis", prompt);
     const claims = (Array.isArray(out.claims) ? out.claims : []).filter(c => c && quoteIn(c.quote, post.text)).slice(0, 5).map(c => ({ text: String(c.text || c.quote).slice(0, 300), quote: String(c.quote).slice(0, 300) }));
     return { about_subject: ["yes", "no", "unclear"].includes(out.about_subject) ? out.about_subject : "unclear", about_reason: String(out.about_reason || "").slice(0, 400), summary: String(out.summary || "").slice(0, 600),
       claims, claims_dropped: (Array.isArray(out.claims) ? out.claims.length : 0) - claims.length, themes: (Array.isArray(out.themes) ? out.themes : []).map(String).slice(0, 4), tone: ["positive", "negative", "neutral", "mixed"].includes(out.tone) ? out.tone : null,
-      indicators: (Array.isArray(out.indicators) ? out.indicators : []).map(String).slice(0, 5), model, note: "AI-supported reading of the item's own words; not a verification. A person decides." };
+      indicators: (Array.isArray(out.indicators) ? out.indicators : []).map(String).slice(0, 5), model,
+      credibility: ["high", "medium", "low"].includes(out.credibility) ? out.credibility : null, credibility_reason: String(out.credibility_reason || "").slice(0, 400),
+      uncertainty: ["low", "medium", "high"].includes(out.uncertainty) ? out.uncertainty : "high", uncertainty_reason: String(out.uncertainty_reason || "").slice(0, 400), note: "AI-supported reading of the item's own words; not a verification. A person decides." };
   }
   let aiBusy = false;
   async function aiTick() {
@@ -536,6 +543,7 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
         try {
           const r = await analyseOneAi(user, p, ready.model);
           db.prepare("UPDATE watch_post_analysis SET ai_json = ?, ai_status = 'done', ai_model = ?, ai_at = ?, ai_error = NULL, ai_attempts = ai_attempts + 1 WHERE post_id = ?").run(JSON.stringify(r), ready.model, nowISO(), p.id); analysed++;
+          afterAnalysis(user, p, r);
         } catch (e) {
           const net = /cannot be reached|did not answer|refused the connection|Could not connect|fetch failed|ETIMEDOUT|ECONNRE|UND_ERR/i.test(e.message);
           if (net) { aiState = { state: "waiting", at: nowISO(), reason: e.message.slice(0, 400) }; db.prepare("UPDATE watch_post_analysis SET ai_error = ? WHERE post_id = ?").run(`waiting for the AI server: ${e.message}`.slice(0, 400), p.id); break; }
@@ -543,8 +551,65 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
           db.prepare("UPDATE watch_post_analysis SET ai_attempts = ?, ai_error = ?, ai_status = ?, ai_next_at = ? WHERE post_id = ?").run(n, e.message.slice(0, 400), n >= AIQ.maxAttempts ? "failed" : "pending", new Date(Date.now() + Math.min(6 * 3600e3, 60e3 * 2 ** n)).toISOString(), p.id);
         }
       }
-      return { queued, analysed };
+      const verified = autoVerify(user), followed = verificationAlerts(), reports = await autoReports(user);
+      return { queued, analysed, verified, verification_alerts: followed, reports };
     } finally { aiBusy = false; }
+  }
+  // ---- what follows the AI reading of each genuine item (1.29): explainable alerts, evidence search, reports. Nothing is invented:
+  // an alert says which words of the item and which AI judgement raised it, and a person decides.
+  const AUTO = { verifyPerHour: Math.max(0, +(process.env.MONITOR_AUTO_VERIFY_PER_HOUR ?? config.monitorAi?.verifyPerHour ?? 6)), reportMinItems: Math.max(1, +(process.env.MONITOR_AUTO_REPORT_MIN_ITEMS ?? 5)), reportEveryH: Math.max(1, +(process.env.MONITOR_AUTO_REPORT_HOURS ?? 6)) };
+  const wlsOf = postId => db.prepare("SELECT w.id, w.name, coalesce(m.quality,'confirmed') quality FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE m.post_id = ? AND w.deleted_at IS NULL AND w.status = 'active'").all(postId);
+  function afterAnalysis(user, post, r) {
+    if (!live?.raise || post.is_training) return;
+    const genuine = wlsOf(post.id).filter(w => ["confirmed", "contextual", "analyst", "article"].includes(w.quality));
+    if (!genuine.length || r.about_subject === "no") return;
+    const why = [r.indicators.length ? `signs of possible misinformation in the text: ${r.indicators.join("; ")}` : null, r.credibility === "low" ? `low credibility: ${r.credibility_reason || "no reason given"}` : null].filter(Boolean);
+    if (!why.length) return;
+    for (const w of genuine) live.raise({ kind: "ai_assessment", key: `aia:${w.id}:${post.id}`, group: `watchlist:${w.id}`, isTraining: 0, priority: r.indicators.length >= 2 && r.credibility === "low" ? "medium" : "low",
+      priorityReasons: why, title: `Check before relying on it: ${post.text.replace(/\s+/g, " ").slice(0, 120)}`,
+      reason: `The AI reading of this ${post.platform} item (${r.model || "AI"}) found ${why.join("; ")}. Uncertainty: ${r.uncertainty}${r.uncertainty_reason ? ` (${r.uncertainty_reason})` : ""}. This is an AI-supported lead, not a finding; verify the item before use.`,
+      detail: { watch_post: post.id, url: post.url, watchlist: w.id, ai: { credibility: r.credibility, uncertainty: r.uncertainty, indicators: r.indicators }, watch_posts: true } });
+  }
+  // supporting and contradicting evidence: the automatic investigation of Verify Information, for genuine items the AI read as
+  // being about the subject, within an hourly limit (each one searches the evidence sources)
+  function autoVerify(user) {
+    if (!AUTO.verifyPerHour) return 0;
+    const done = db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'Discovered item sent for verification' AND at >= ? AND user_id = ?").get(new Date(Date.now() - 3600e3).toISOString(), user.id)?.n || 0;
+    const room = Math.max(0, AUTO.verifyPerHour - done); if (!room) return 0;
+    const due = db.prepare(`SELECT p.id FROM watch_posts p JOIN watch_post_analysis a ON a.post_id = p.id WHERE a.ai_status = 'done' AND p.investigation_id IS NULL AND p.is_training = 0 AND ${NOT_OWN("p")}
+      AND json_extract(a.ai_json, '$.about_subject') <> 'no' AND EXISTS (SELECT 1 FROM watch_matches m JOIN watchlists w ON w.id = m.watchlist_id WHERE m.post_id = p.id AND w.status = 'active' AND w.deleted_at IS NULL AND ${GOOD("m.quality")})
+      ORDER BY coalesce(p.posted_at, p.first_detected_at) DESC LIMIT ?`).all(room);
+    let n = 0; for (const d of due) { try { verify(user, d.id); n++; } catch (e) { console.warn("[monitor] automatic verification:", e.message); } }
+    return n;
+  }
+  // a finished verification that contradicts the item, or finds it misleading, becomes an explainable alert once
+  function verificationAlerts() {
+    if (!live?.raise) return 0; let n = 0;
+    for (const r of db.prepare(`SELECT p.id, p.text, p.platform, p.url, i.overall, i.report_id, i.id inv FROM watch_posts p JOIN investigations i ON i.id = p.investigation_id WHERE i.status = 'done' AND i.overall IN ('contradicted','misleading') AND p.is_training = 0 AND i.completed_at >= ?`).all(new Date(Date.now() - 2 * 864e5).toISOString()))
+      for (const w of wlsOf(r.id)) n += live.raise({ kind: "verification", key: `ver:${w.id}:${r.id}`, group: `watchlist:${w.id}`, isTraining: 0, priority: "medium", priorityReasons: [`the automatic verification found the item ${VERIFY_LABELS[VERDICT_TO_STATUS[r.overall]].toLowerCase()}`],
+        title: `${VERIFY_LABELS[VERDICT_TO_STATUS[r.overall]]}: ${r.text.replace(/\s+/g, " ").slice(0, 120)}`, reason: `Report ${r.report_id} compared the item's claims with the evidence found and rated it ${VERIFY_LABELS[VERDICT_TO_STATUS[r.overall]].toLowerCase()}. Read the report's evidence before acting; a person decides.`,
+        detail: { watch_post: r.id, url: r.url, report_id: r.report_id, investigation: r.inv, watch_posts: true } });
+    return n;
+  }
+  // a draft report (Background, Analysis, Assessment, Recommendations) for each active watchlist once enough new genuine items have
+  // been analysed since its last report
+  async function autoReports(user) {
+    let n = 0;
+    for (const w of db.prepare("SELECT id FROM watchlists WHERE status = 'active' AND deleted_at IS NULL").all()) {
+      const last = db.prepare("SELECT MAX(created_at) t FROM monitor_reports WHERE watchlist_id = ? AND is_training = 0").get(w.id).t;
+      if (last && Date.now() - Date.parse(last) < AUTO.reportEveryH * 3600e3) continue;
+      const fresh = db.prepare(`SELECT COUNT(DISTINCT p.id) n FROM watch_matches m JOIN watch_posts p ON p.id = m.post_id JOIN watch_post_analysis a ON a.post_id = p.id WHERE m.watchlist_id = ? AND ${GOOD("m.quality")} AND a.ai_status = 'done' AND p.is_training = 0 AND ${NOT_OWN("p")} AND a.ai_at > ?`).get(w.id, last || "").n;
+      if (fresh < AUTO.reportMinItems) continue;
+      try { await report(user, { watchlistId: w.id, hours: last ? Math.min(168, Math.ceil((Date.now() - Date.parse(last)) / 3600e3)) : 24, origin: "auto" }); n++; } catch (e) { console.warn("[monitor] automatic report:", e.message); }
+    }
+    return n;
+  }
+  // "Ollama AI Ready" only after AIVS itself has had a working answer from the model
+  function aiIndicator() {
+    const st = ai?.status ? ai.status() : null, h = st?.health || {};
+    const ready = !!st?.configured && st.enabled && h.state === "ok";
+    return { ready, label: ready ? `${st.provider === "ollama" ? "Ollama AI" : "AI"} Ready` : !st?.configured ? "AI not configured" : !st.enabled ? "AI switched off" : h.state === "failed" ? `${st.provider === "ollama" ? "Ollama AI" : "AI"} unavailable` : "AI not checked yet",
+      provider: st?.provider || null, model: st?.model || null, endpoint: st?.endpoint || null, checked_at: h.checked_at || null, latency_ms: h.latency_ms ?? null, error: ready ? null : h.error || st?.reason || null, queue: aiQueueCounts() };
   }
   function retryAi(user, id) {
     const a = db.prepare("SELECT post_id FROM watch_post_analysis WHERE post_id = ?").get(id); if (!a) throw new HttpError(404, "This item has no analysis record yet.");
@@ -602,5 +667,5 @@ export function makeKeywordSearch(db, { watch, watchCollector, investigations, s
   }
 
   return { overview, sources, start, run, get, results, list, feed, item, image, verify, report, reportGet, reports, reportFile, reviewReport, saveAsWatchlist, daily, running: () => [...running], parseQuery,
-    aiTick, aiQueueCounts, retryAi, emerging, emergingTick, ensureDefault, contextualLibrary };
+    aiTick, aiQueueCounts, aiIndicator, retryAi, emerging, emergingTick, ensureDefault, contextualLibrary };
 }

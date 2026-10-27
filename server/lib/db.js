@@ -233,7 +233,30 @@ function mig18(db) {
   for (const [c, d] of [["ai_status", "TEXT"], ["ai_attempts", "INTEGER NOT NULL DEFAULT 0"], ["ai_next_at", "TEXT"], ["ai_error", "TEXT"], ["ai_model", "TEXT"], ["ai_at", "TEXT"], ["ai_queued_at", "TEXT"]]) add("watch_post_analysis", c, d);
   db.exec("CREATE INDEX IF NOT EXISTS watch_post_analysis_ai ON watch_post_analysis(ai_status, ai_next_at); CREATE INDEX IF NOT EXISTS watch_matches_quality ON watch_matches(watchlist_id, quality)");
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// Migration 19 (1.29): test records never appear among operational records. Watch posts and alerts get a training flag; records
+// that carry the test label ("TEST FIXTURE") or point to a test address (localhost, *.example) are moved to Training. Nothing is
+// deleted.
+export const TEST_TEXT_SQL = (col) => `(${col} LIKE '%TEST FIXTURE%')`;
+export const TEST_URL_SQL = (col) => `(${col} LIKE 'http://127.0.0.1%' OR ${col} LIKE 'http://localhost%' OR ${col} LIKE '%.example/%' OR ${col} LIKE '%.example' OR ${col} LIKE '%.test/%' OR ${col} LIKE '%.invalid/%')`;
+function mig19(db) {
+  const add = (t, c, def) => { if (!db.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
+  add("watch_posts", "is_training", "INTEGER NOT NULL DEFAULT 0");
+  add("watch_alerts", "is_training", "INTEGER NOT NULL DEFAULT 0");
+  markTestRecords(db);
+  db.exec("CREATE INDEX IF NOT EXISTS watch_posts_training ON watch_posts(is_training)");
+}
+// moves records labelled as tests to Training (also usable later by an administrator); returns how many rows of each kind moved
+export function markTestRecords(db) {
+  const n = {};
+  for (const [k, sql] of Object.entries({ watch_posts: `UPDATE watch_posts SET is_training = 1 WHERE is_training = 0 AND (${TEST_TEXT_SQL("text")} OR ${TEST_URL_SQL("coalesce(url,'')")})`,
+    watch_alerts: `UPDATE watch_alerts SET is_training = 1 WHERE is_training = 0 AND (${TEST_TEXT_SQL("title")} OR post_id IN (SELECT id FROM watch_posts WHERE is_training = 1))`,
+    live_alerts: `UPDATE live_alerts SET is_training = 1 WHERE is_training = 0 AND (${TEST_TEXT_SQL("title")} OR ${TEST_TEXT_SQL("reason")})`,
+    social_posts: `UPDATE OR IGNORE social_posts SET is_training = 1 WHERE is_training = 0 AND ${TEST_TEXT_SQL("coalesce(message,'')")}`,
+    monitor_reports: `UPDATE monitor_reports SET is_training = 1 WHERE is_training = 0 AND ${TEST_TEXT_SQL("situation_json")}`,
+    monitor_searches: "UPDATE monitor_searches SET is_training = 1 WHERE is_training = 0 AND id IN (SELECT search_id FROM monitor_search_results x JOIN watch_posts p ON p.id = x.post_id GROUP BY search_id HAVING MIN(p.is_training) = 1)" })) n[k] = db.prepare(sql).run().changes;
+  return n;
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

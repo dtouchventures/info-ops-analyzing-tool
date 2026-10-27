@@ -84,7 +84,7 @@ export function makeWatchCollector(db, { watch, collectors, config, audit, versi
     if (s === "x_stream") return !C.xBearer ? { state: "not_configured", needs: "X_BEARER_TOKEN and WATCH_X_STREAM=true" } : !W.xStream ? { state: "disabled", needs: "WATCH_X_STREAM=true in the server settings, once your X access includes the filtered stream (pay-per-use allows one connection and 1,000 rules; another app using the same stream would disconnect AIVS)" } : { state: "ready" };
     if (s === "youtube") return C.youtubeKey ? { state: "ready" } : { state: "not_configured", needs: "YOUTUBE_API_KEY (YouTube Data API v3)" };
     if (s === "news") return { state: "ready" };
-    if (s === "fb_live") return (config.live?.pageToken) ? { state: "ready" } : { state: "not_configured", needs: "META_PAGE_ACCESS_TOKEN and META_PAGE_IDS (live monitoring of the authorised Facebook Pages)" };
+    if (s === "fb_live") return config.live?.enabled === false ? { state: "disabled", needs: "monitoring of the organisation's own Facebook Page is switched off (LIVE_FACEBOOK_MONITORING=true to switch it on)" } : config.live?.pageToken ? { state: "ready" } : { state: "not_configured", needs: "META_PAGE_ACCESS_TOKEN and META_PAGE_IDS (live monitoring of the authorised Facebook Pages)" };
     return { state: "unsupported" };
   }
   const sourcesReady = s => sourceState(s).state === "ready";

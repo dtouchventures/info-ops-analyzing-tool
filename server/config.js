@@ -92,7 +92,9 @@ export const config = {
     whatsappVerifyToken: env.WHATSAPP_VERIFY_TOKEN || "", whatsappAppSecret: env.WHATSAPP_APP_SECRET || "" },
   // Live monitoring (1.26): every post of the authorised Facebook Pages, collected through the Meta Graph API with a Page
   // access token kept on the server, then analysed, verified and reported automatically (server/lib/livemonitor.js)
-  live: { enabled: env.LIVE_MONITOR_ENABLED !== "false", pageToken: env.META_PAGE_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "", pageIds: env.META_PAGE_IDS || "",
+  // automatic monitoring of the organisation's own Facebook Page is off unless LIVE_FACEBOOK_MONITORING=true (1.29); the Meta Graph
+  // integration stays available for Verify Information and for later authorised use
+  live: { enabled: env.LIVE_FACEBOOK_MONITORING === "true",  pageToken: env.META_PAGE_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "", pageIds: env.META_PAGE_IDS || "",
     graphVersion: env.META_GRAPH_VERSION || "v26.0", graphBase: env.META_GRAPH_BASE_URL || "https://graph.facebook.com", appId: env.META_APP_ID || "", appSecret: env.META_APP_SECRET || "",
     intervalMinutes: Math.max(1, int(env.LIVE_MONITOR_INTERVAL_MINUTES, 5)), initialPosts: Math.min(100, int(env.LIVE_MONITOR_INITIAL_POSTS, 25)), maxPagesPerSync: Math.min(20, int(env.LIVE_MONITOR_MAX_PAGES, 5)),
     autoAnalyse: env.LIVE_AUTO_ANALYSE !== "false", analyseConcurrency: Math.max(1, int(env.LIVE_ANALYSE_CONCURRENCY, 1)), storeImages: env.LIVE_STORE_IMAGES !== "false",
