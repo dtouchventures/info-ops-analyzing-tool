@@ -590,6 +590,7 @@ let guidedDead = [], guidedSeen = 0;
   await g.click("#sEx"); await g.waitForFunction(() => document.querySelector("#si")?.value.startsWith("SYNTHETIC PRACTICE CASE"));
   check("the synthetic example is labelled and becomes a training case", (await g.inputValue("#si")).includes("invented, not a real post") && !!(await g.$(".trainbar")));
   check("the main button reads Analyze content", (await g.textContent("#sGo")).trim() === "Analyze content");
+  await g.uncheck('#sAuto'); // Exercise the existing guided workflow; automatic reports have their own browser test.
   await g.click("#sGo"); await g.waitForFunction(() => /\/step2$/.test(location.hash), null, { timeout: 30000 }); await g.waitForSelector(".gbody .card");
   await g.waitForFunction(() => /What the source shows/.test(document.querySelector("#gCAbd")?.textContent || ""), null, { timeout: 10000 });
   { const t = await g.textContent("#gCAbd"); check("step 2 content analysis keeps source facts, unverified claims, estimates and missing evidence apart", ["What the source shows", "Claims: unverified until assessed", "Automatic estimate", "Not available", "Tone:", "Garissa", "never proof of coordination"].every(x => t.includes(x)), t.slice(0, 200)); }
@@ -627,7 +628,7 @@ let guidedDead = [], guidedSeen = 0;
   check("submitting needs no extra dialog and leaves the case waiting for a different person", !(await g.$(".modal-bg")) && /Waiting for a reviewer|different reviewer must decide/.test(await g.textContent(".gbody")) && (await g.textContent(".ghead")).includes("Awaiting review"), (await g.textContent(".ghead")).slice(0, 200));
   check("the analyst who submitted cannot approve", !(await g.$("#gAppr")));
   for (const n of [1, 2, 3, 4]) { await g.goto(S.base + `/#/case/${gid}/step${n}`); await g.waitForSelector(".gbody > *"); await g.waitForTimeout(300); guidedDead = guidedDead.concat(await audit(g, `step${n}`)); guidedSeen += await g.$$eval("button, a.btn", x => x.filter(b => b.offsetParent !== null).length); }
-  await g.click(".moretools > summary"); check("More tools lists the case tools, without the secondary assistant tools", (await g.$$(".mt-menu a")).length === 8);
+  await g.click(".moretools > summary"); check("More tools lists the case tools and automatic report, without the secondary assistant tools", (await g.$$(".mt-menu a")).length === 9 && !!(await g.$('.mt-menu a[href$="/automatic"]')));
   await g.click('.mt-menu a[href$="/history"]'); await g.waitForSelector(".gback");
   check("a tool page in Guided mode has a way back to the steps", await g.isVisible('.gback a:has-text("Back to the steps")'));
   const rv = await session("rev2", "guided"); await rv.click('[data-scope="training"]'); await rv.goto(S.base + `/#/case/${gid}`); await rv.waitForSelector("#gAppr");

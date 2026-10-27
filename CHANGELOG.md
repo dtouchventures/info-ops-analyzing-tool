@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.22.0 — Automatic public-content fact-checking reports
+
+- Restore the working source directory structure from the existing local project; keep runtime data and secrets outside Git.
+- Add background automatic reports with a Nairobi date, background, analysis, qualified assessment, recommendations and citations, without mandatory analyst comments.
+- Add explicit AI and external-search options, source-retrieval checks, local OCR for screenshots and scanned PDFs, and printable HTML/JSON exports.
+- Preserve the existing approval workflow and recorded decisions. Search leads remain unaccepted; inaccessible sources and missing services are disclosed.
+- Fix Windows PDF font-directory separators. Add API and browser coverage for the upload-to-report flow, with isolated HTTP test connections for CPU-heavy checks.
+
 ## 1.21.1 — AI Watchlist: dashboard figures, monitoring status, stale-server warning (26 October 2026)
 
 Fix for "the dashboard shows 0 active watchlists and 0 open alerts".

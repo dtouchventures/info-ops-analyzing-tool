@@ -6,6 +6,7 @@ import { $, esc, toast, kb } from "../ui.js";
 import { recognise } from "../lib/ocr.js";
 import { parseSourceLink } from "/shared/text.js";
 import { STEP_NAMES } from "./steps.js";
+import { extractAttachedText, readPdfText } from '../lib/automatic-extraction.js';
 
 const SOCIAL = ["X (Twitter)", "Facebook", "Instagram", "TikTok", "YouTube", "Telegram", "Threads", "LinkedIn", "WhatsApp", "Reddit"];
 // a clearly labelled, invented example for practice (becomes a training case)
@@ -27,6 +28,8 @@ export async function render(el) {
       <label class="f">Files <span class="sub">(optional)</span></label>
       <div class="dropzone" id="sdz" tabindex="0" role="button" aria-label="Add files"><b>Drop pictures, video, voice notes or documents</b><div class="small muted">or <u>choose files</u>, or paste a screenshot (Ctrl+V)</div><input type="file" id="sfi" multiple hidden></div>
       <ul class="uplist" id="sfl"></ul>
+      <label class="small" style="display:block;margin-top:12px"><input type="checkbox" id="sAuto" checked> Automatically generate a dated fact-checking report (no analyst comments required)</label>
+      <label class="small" style="display:block;margin-top:8px"><input type="checkbox" id="sAI"> Send the case's text, OCR and evidence to the configured AI service for analysis</label>
       <details style="margin-top:12px"><summary class="small">Options</summary><div class="grid g2" style="margin-top:6px">
         <div><label class="f" for="st">Title</label><input type="text" id="st" maxlength="200" placeholder="AIVS suggests one"></div>
         <div><label class="f" for="sp">Priority</label><select id="sp"><option value="routine">Routine</option><option value="priority">Priority</option><option value="urgent">Urgent</option></select></div></div>
@@ -108,9 +111,12 @@ export async function render(el) {
     try {
       let text = "";
       if (f.type.startsWith("image/")) { const langs = App.meta.ocr || []; if (!langs.length) return; prog.textContent = `Reading the text in ${f.name}…`; text = (await recognise(f, langs.length > 1 ? "eng+swa" : langs[0].code, p => (prog.textContent = `Reading the text in ${f.name}… ${Math.round(p * 100)}%`))).text; }
-      else if (/\.(pdf|docx|txt|csv|json)$/i.test(f.name)) { prog.textContent = `Reading ${f.name}…`; const fd = new FormData(); fd.append("file", f, f.name); const r = await api.upload("/api/extract-text", fd); text = r.text || ""; }
+      else if (/\.(pdf|docx|txt|csv|json)$/i.test(f.name)) {
+        prog.textContent = `Reading ${f.name}…`; const fd = new FormData(); fd.append("file", f, f.name); const r = await api.upload("/api/extract-text", fd); text = r.text || "";
+        if (/\.pdf$/i.test(f.name) && (r.scanned || !text.trim())) text = (await readPdfText(f, App.meta.ocr || [], p => { prog.textContent = `Reading scanned pages… ${Math.round(p * 100)}%`; })).text;
+      }
       if (text.trim()) { input.value = text.trim(); onInput(); miss.hidden = false; miss.className = "gnote"; miss.textContent = `Text read from ${f.name}. Check it against the file and correct any reading mistakes before you start.`; }
-    } catch { /* the analyst can type the text */ } finally { prog.textContent = ""; }
+    } catch (e) { miss.hidden = false; miss.className = 'gmiss'; miss.textContent = `Text extraction failed for ${f.name}: ${e.message}. Paste the text or retry the file.`; } finally { prog.textContent = ""; }
   }
   dz.onclick = () => fi.click(); dz.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fi.click(); } };
   dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
@@ -129,14 +135,14 @@ export async function render(el) {
     try {
       let id;
       if (L) {
-        const fd = new FormData(); fd.append("url", v); fd.append("text", $("#pt").value.trim()); fd.append("text_source", pSrc === "ocr" ? "ocr-edited" : pSrc); fd.append("priority", $("#sp").value); fd.append("is_training", String(App.training)); fd.append("search", String($("#sx").checked));
+        const fd = new FormData(); fd.append("url", v); fd.append("text", $("#pt").value.trim()); fd.append("text_source", pSrc === "ocr" ? "ocr-edited" : pSrc); fd.append("priority", $("#sp").value); fd.append("is_training", String(App.training)); fd.append("search", String(!$("#sAuto").checked && $("#sx").checked));
         if ($("#st").value.trim()) fd.append("title", $("#st").value.trim());
         files.forEach((f, i) => { fd.append("files", f, f.name); if (ocrs[i]) fd.append(`ocr_${i}`, JSON.stringify(ocrs[i])); });
         prog.textContent = "Reading the post and saving the files…";
         id = (await api.upload("/api/verify/post", fd)).id;
       } else {
         prog.textContent = /^https?:\/\//i.test(v) ? "Retrieving the page…" : "Saving…";
-        id = (await api.post("/api/verify", { input: v, text: linkOf() && ptx.value.trim() ? ptx.value.trim() : undefined, title: $("#st").value.trim() || undefined, priority: $("#sp").value, is_training: App.training, search: $("#sx").checked })).id;
+        id = (await api.post("/api/verify", { input: v, text: linkOf() && ptx.value.trim() ? ptx.value.trim() : undefined, title: $("#st").value.trim() || undefined, priority: $("#sp").value, is_training: App.training, search: !$("#sAuto").checked && $("#sx").checked })).id;
         if (files.length) {
           for (const f of files) { prog.textContent = `Uploading ${f.name}…`; const fd = new FormData(); fd.append("files", f, f.name); await api.upload(`/api/cases/${id}/media`, fd); }
           // run the checks again once the first run has finished, so the files are compared too
@@ -145,8 +151,23 @@ export async function render(el) {
           await api.post(`/api/cases/${id}/analyse`);
         }
       }
-      refreshNavCounts(); toast(`Investigation ${id} started.`);
-      App.go(`#/case/${encodeURIComponent(id)}`);   // opens at the step the case has reached (step 2 once the checks are done)
+      if ($("#sAuto").checked) {
+        prog.textContent = 'Preparing text extraction…';
+        let saved;
+        for (let i = 0; i < 120; i++) {
+          saved = await api.get(`/api/cases/${encodeURIComponent(id)}`);
+          if (saved.case.status !== 'analysing') break;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        for (const media of saved.media.filter(m => !saved.ocr.some(o => o.media_id === m.id) && (m.kind === 'image' || m.kind === 'document' && /pdf/.test(m.mime)))) {
+          try { await extractAttachedText(media, App.meta.ocr || [], p => { prog.textContent = `Reading ${media.original_name}… ${Math.round(p * 100)}%`; }); }
+          catch (e) { toast(`Text extraction for ${media.original_name}: ${e.message}`, 'err'); }
+        }
+        await api.post(`/api/cases/${encodeURIComponent(id)}/automatic-report`, { search_external: $("#sx").checked, confirm_external: $("#sAI").checked });
+        refreshNavCounts(); App.go(`#/case/${encodeURIComponent(id)}/automatic`);
+      } else {
+        refreshNavCounts(); toast(`Investigation ${id} started.`); App.go(`#/case/${encodeURIComponent(id)}`);
+      }
     } catch (e) {
       b.disabled = false; b.textContent = "Analyze content"; prog.textContent = "";
       if (L && /needs the words of the post/i.test(e.message)) { $("#ptBox").hidden = false; pmsg.className = "gmiss"; pmsg.textContent = `${e.message.replace(/^The case needs the words of the post\.\s*/, "") || `${L.platform} did not give AIVS the words of this post.`} Paste them here, or add a screenshot.`; $("#pt").focus(); return; }

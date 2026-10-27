@@ -46,7 +46,7 @@ function claimProblems(A) {
 }
 
 export function moreTools(c, extra = "") {
-  return `<details class="moretools"><summary>More tools</summary><div class="mt-menu">${TOOLS.filter(([k]) => !HIDDEN_TOOLS.includes(k)).map(([k, l, d]) => `<a href="#/case/${esc(c.id)}/${k}"><b>${esc(l)}</b><span>${esc(d)}</span></a>`).join("")}${extra}</div></details>`;
+  return `<details class="moretools"><summary>More tools</summary><div class="mt-menu"><a href="#/case/${esc(c.id)}/automatic"><b>Automatic report</b><span>Dated fact-checking report; no analyst comments required</span></a>${TOOLS.filter(([k]) => !HIDDEN_TOOLS.includes(k)).map(([k, l, d]) => `<a href="#/case/${esc(c.id)}/${k}"><b>${esc(l)}</b><span>${esc(d)}</span></a>`).join("")}${extra}</div></details>`;
 }
 
 export function renderSteps(el, step, ctx) {

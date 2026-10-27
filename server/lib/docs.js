@@ -64,7 +64,7 @@ async function readPdf(buf) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   // load the parser in this process (no separate worker file to locate; avoids path problems on Windows)
   if (!globalThis.pdfjsWorker) globalThis.pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
-  let doc, task; try { task = pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, disableFontFace: true, useSystemFonts: false, standardFontDataUrl: path.join(pdfjsDir, "standard_fonts") + path.sep, verbosity: 0 }); doc = await task.promise; }
+  let doc, task; try { task = pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, disableFontFace: true, useSystemFonts: false, standardFontDataUrl: path.join(pdfjsDir, "standard_fonts").replace(/\\/g, "/") + "/", verbosity: 0 }); doc = await task.promise; }
   catch (e) { if (/password/i.test(e?.name || e?.message)) throw new HttpError(422, "This PDF is password-protected. Ask for an unprotected copy, or open it and save a copy without a password."); console.error("PDF read error:", e); throw new HttpError(422, `The PDF could not be read (${String(e?.message || e).slice(0, 160)}). If other PDFs open, this one may be damaged.`); }
   const info = (await doc.getMetadata().catch(() => ({}))).info || {};
   const meta = clean({ Title: info.Title, Author: info.Author, Subject: info.Subject, Keywords: info.Keywords, Creator: info.Creator, Producer: info.Producer, Created: pdfDate(info.CreationDate), Modified: pdfDate(info.ModDate), PDFVersion: info.PDFFormatVersion, Pages: String(doc.numPages) });

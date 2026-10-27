@@ -21,9 +21,11 @@ export async function login(base, username, password = PW) {
   const r = await fetch(base + "/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "x-aivs": "1" }, body: JSON.stringify({ username, password }) });
   const cookie = (r.headers.get("set-cookie") || "").split(";")[0];
   const call = async (method, url, body, { form, headers = {} } = {}) => {
-    const opts = { method, headers: { cookie, "x-aivs": "1", ...headers } };
+    // CPU-heavy checks share this process with the server and can outlive its keep-alive timeout.
+    // Isolate requests so an expired socket cannot leak between otherwise independent checks.
+    const opts = { method, headers: { cookie, "x-aivs": "1", connection: "close", ...headers } };
     if (form) opts.body = form; else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["content-type"] = "application/json"; }
-    const res = await fetch(base + url, opts), ct = res.headers.get("content-type") || "";
+    const res = await fetch(base + url, opts).catch(error => { throw new Error(`${method} ${url}: ${error.message}`, { cause: error }); }), ct = res.headers.get("content-type") || "";
     return { status: res.status, body: ct.includes("json") ? await res.json() : await res.text(), headers: res.headers };
   };
   return { status: r.status, cookie, get: u => call("GET", u), post: (u, b, o) => call("POST", u, b, o), patch: (u, b, o) => call("PATCH", u, b, o), put: (u, b) => call("PUT", u, b), del: u => call("DELETE", u) };

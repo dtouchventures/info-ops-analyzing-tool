@@ -17,6 +17,7 @@ const env = process.env;
 const int = (v, d) => (v === undefined || v === "" ? d : parseInt(v, 10));
 
 export const config = {
+  reportTimezone: env.REPORT_TIMEZONE || 'Africa/Nairobi',
   port: int(env.PORT, 8080),
   host: env.HOST || "127.0.0.1",
   dataDir: path.resolve(ROOT, env.DATA_DIR || "data"),

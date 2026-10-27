@@ -1,0 +1,4 @@
+AIVS network addresses (2026-10-27T08:09:09.397Z)
+http://192.168.56.1:8080  (Ethernet 3)
+http://172.16.39.29:8080  (OpenVPN TAP-Windows6)
+http://10.100.100.72:8080  (Wi-Fi)

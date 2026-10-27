@@ -12,6 +12,7 @@ import { makeStorage } from "./lib/storage.js";
 import { makeMedia } from "./lib/media.js";
 import { makeCases, STATES, CONCLUSIONS, DEFAULT_CHECKS } from "./lib/cases.js";
 import { makeReports } from "./lib/report.js";
+import { makeAutomaticReports, automaticReportHtml } from "./lib/automatic-report.js";
 import { makeAI } from "./ai/index.js";
 import { seedTraining, seedCoverageDemo } from "./lib/training.js";
 import { fetchPage } from "./lib/fetchurl.js";
@@ -64,6 +65,7 @@ export function createApp(config) {
     try { db.prepare("INSERT INTO api_usage(at,service,operation,units,unit,est_cost_usd,status,case_id,user_id) VALUES (?,?,?,?,?,?,?,?,?)").run(nowISO(), service, operation, units, unit, costUsd == null ? null : costUsd * units, status, caseId, userId); } catch {}
   };
   const retrieval = makeRetrieval(db, { config, audit, usage });
+  const automaticReports = makeAutomaticReports(db, { cases, retrieval, ai, storage, config, audit });
   const social = makeSocial(db, { config });
   const ollama = makeOllama(db, { config }), collectors = makeCollectors(db, { config });
   const transcriber = makeTranscriber(db, { config, storage, audit, cases });
@@ -88,7 +90,7 @@ export function createApp(config) {
   }
   const VERSION0 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
-  const ctx = { db, audit, storage, media, cases, reports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector };
+  const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector };
 
   const app = express();
   app.disable("x-powered-by");
@@ -888,6 +890,19 @@ export function createApp(config) {
     res.status(202).json({ status: cases.getCase(req.params.id).status });
   }));
   api.get("/cases/:id/readiness", (req, res) => res.json(cases.readiness(cases.mustCase(req.params.id).id)));
+  api.post("/cases/:id/automatic-report", requirePerm("case.edit"), heavy, h((req, res) => {
+    automaticReports.start(req.user, req.params.id, { search_external: req.body?.search_external === true, confirm_external: req.body?.confirm_external === true });
+    res.status(202).json({ status: 'running' });
+  }));
+  api.get("/cases/:id/automatic-report", (req, res) => res.json(automaticReports.get(req.params.id)));
+  api.get("/cases/:id/automatic-report.:fmt(html|json)", h((req, res) => {
+    const saved = automaticReports.get(req.params.id);
+    if (!saved?.report) throw new HttpError(404, 'No automatic report has been generated yet.');
+    res.setHeader('Content-Disposition', `inline; filename="${req.params.id}-${saved.report.report_date}-automatic.${req.params.fmt}"`);
+    if (req.params.fmt === 'json') return res.json(saved.report);
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.type('html').send(automaticReportHtml(saved.report));
+  }));
   api.post("/cases/:id/submit", requirePerm("case.edit"), h((req, res) => { cases.submit(req.user, req.params.id); res.json({ ok: true }); }));
   api.post("/cases/:id/decision", h((req, res) => { cases.decide(req.user, req.params.id, req.body || {}, id => reports.render(id)); res.json({ ok: true }); }));
   api.post("/cases/:id/archive", h((req, res) => { cases.archiveCase(req.user, req.params.id); res.json({ ok: true }); }));

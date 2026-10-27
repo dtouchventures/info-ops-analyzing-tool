@@ -11,6 +11,7 @@ import { coverageTab } from "./coverage.js";
 import { verdictNeeds, ACTIVE_VERDICTS, ACTIVE_CONCLUSIONS } from "/shared/verdict.js";
 import { LOCATION_SOURCES } from "/shared/account-location.js";
 import { renderSteps, currentStep, STEP_NAMES, moreTools } from "./steps.js";
+import { renderAutomatic } from "./automatic.js";
 
 const TABS = [["overview", "Overview"], ["media", "Media & matches"], ["claims", "Claims"], ["evidence", "Evidence"], ["coverage", "Evidence coverage"], ["assistant", "Assistant"], ["ai", "AI assistance"], ["report", "Conclusion & report"], ["notes", "Notes"], ["history", "History"]];
 const STYPE = { appeal: "call to action", opinion: "opinion", prediction: "prediction", satire: "satire or humour", question: "question" };
@@ -25,7 +26,7 @@ const fmtClock = s => { const x = Math.max(0, Number(s) || 0), m = Math.floor(x 
 
 export async function render(el, [id, tabArg], { isCurrent }) {
   const GSTEP = /^step[1-4]$/;
-  let tab = TABS.some(t => t[0] === tabArg) ? tabArg : GSTEP.test(tabArg || "") ? tabArg : "overview";
+  let tab = tabArg === 'automatic' ? 'automatic' : TABS.some(t => t[0] === tabArg) ? tabArg : GSTEP.test(tabArg || "") ? tabArg : "overview";
   let A, pollT, lastView = null, lastStatus = null;
   const load = async () => { A = await api.get(`/api/cases/${encodeURIComponent(id)}`); };
   try { await load(); } catch (e) { el.innerHTML = `<div class="callout bad"><div><b>Case not available.</b> ${esc(e.message)}</div></div>`; return; }
@@ -35,6 +36,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   function draw() {
     const c = A.case, P = A.perms;
     crumbs(`<a href="#/cases">Cases</a> / <b>${esc(c.id)}</b>`);
+    if (tab === 'automatic') { renderAutomatic(el, c.id, P.edit, isCurrent); return; }
     // guided mode: the case in four steps (#/case/ID/step1..4); the full tools stay one click away under "More tools"
     if (App.guided() && (GSTEP.test(tab) || !tabArg)) {
       let n = GSTEP.test(tab) ? +tab.slice(4) : currentStep(A);

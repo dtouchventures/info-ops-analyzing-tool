@@ -7,7 +7,25 @@ AIVS is a working tool for authorised Information Operations analysts. They use 
 - record evidence and the uncertainty that remains;
 - produce verification reports that a second person reviews.
 
-Automated checks and optional cloud AI only produce **leads and suggestions**. Every assessment is made by an analyst and approved by a different, authorised reviewer.
+Automated checks and optional AI produce **preliminary findings with stated limits**. The existing reviewed-report workflow still requires a different authorised reviewer for approval.
+
+## Automatic public-content fact-checking reports (1.22)
+
+In **New investigation**, paste a public social media or website URL, paste text, or upload images or documents. **Automatically generate a dated fact-checking report** is selected by default. Choose **Analyze content**. No analyst comments, rationale or approval are required to generate this preliminary report.
+
+The workflow preserves the original, reads document text and image OCR, extracts claims, runs local checks, optionally analyses them with AI, researches evidence, checks source accessibility and generates the report. Scanned PDFs are read locally with OCR, up to the first 12 pages per file; that coverage is disclosed. English and Kiswahili OCR assets are served locally. Text-reading failures remain visible rather than being treated as successful extraction.
+
+The report includes **Background, Analysis, Assessment, Recommendations and Citations**, with separate received, published and claimed-event dates. The report date uses **Africa/Nairobi** by default (`REPORT_TIMEZONE` can select another IANA timezone); timestamps retain their explicit UTC offset. Read or print the report, or download its JSON. To regenerate an existing case, use **More tools → Automatic report**. A report remains available after restarting the server; interrupted jobs are labelled and can be retried.
+
+External evidence searches use the configured connectors only when the search option is selected. AI requires selecting the option that allows sending the case's text, OCR and evidence to the configured service. A run can make two AI requests: initial analysis and synthesis after research. AI training-only restrictions still apply. Missing configuration and failed searches are disclosed; no evidence is invented.
+
+Search snippets and accessible pages are leads, not proof. Source checks retrieve and fingerprint up to eight public citation pages per run. Automatic assessments synthesise accepted evidence links or published fact-check ratings where the full claim text appears on the archived page; published ratings remain explicitly provisional and need date, event and context checks. Otherwise the assessment states **Insufficient evidence**. The workflow does not accept suggestions, change existing claim verdicts, approve a case, or infer an author's intent. The existing reviewed reports and approval tools remain available. Switch off automatic reporting to follow the original four-step workflow.
+
+### Source restoration
+
+The original GitHub upload flattened files into the repository root and omitted required modules. The working source is restored under `server/`, `public/`, `shared/`, `test/`, `scripts/` and the documented supporting directories. Legacy root-level uploads are retained; `npm start` and the Windows launchers use the restored directory structure. Runtime databases, uploads, secrets and backups are excluded from Git.
+
+Validation: `npm test`, `npm run test:e2e`, and `npm run test:automatic:e2e`. Browser tests require Playwright Chromium, or set `CHROMIUM_PATH` to an installed Chrome executable.
 
 > Training material (cases `TR-…`, archive `TA-…`) is synthetic and clearly labelled. It is stored apart from operational records and never matches them.
 
