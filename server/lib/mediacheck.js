@@ -16,11 +16,25 @@ const DAY = 864e5;
 
 export function makeMediaCheck(db, { config, storage, audit }) {
   const V = { visionKey: "", visionBase: "https://vision.googleapis.com", timeoutMs: 15000, ...(config.mediaCheck || {}) };
-  const vision = { model: config.investigate?.visionModel || "", base: String(config.investigate?.visionBase || config.ai?.baseUrl || config.ollama?.url || "").replace(/\/+$/, "").replace(/\/(v1|api)$/, "") };
+  // image understanding (1.30): the model named in INVESTIGATE_VISION_MODEL, or else the organisation's own Ollama model, is used
+  // only after Ollama confirms the model can read images (its "vision" capability); qwen3:4b-instruct, for example, cannot
+  const vision = { model: config.investigate?.visionModel || (config.ai?.provider === "ollama" ? config.ai?.model || "" : ""), named: !!config.investigate?.visionModel, base: String(config.investigate?.visionBase || config.ai?.baseUrl || config.ollama?.url || "").replace(/\/+$/, "").replace(/\/(v1|api)$/, "") };
   const status = () => ({
     reverse_search: V.visionKey ? { configured: true, service: "Google Cloud Vision web detection" } : { configured: false, needs: "GOOGLE_VISION_API_KEY (Google Cloud Vision API with web detection; the image is sent to Google)" },
-    ai_vision: vision.model && vision.base && isLocalHost(safeHost(vision.base)) ? { configured: true, model: vision.model } : { configured: false, needs: "INVESTIGATE_VISION_MODEL: a vision model installed on your own Ollama server (for example qwen2.5vl or llava)" }
+    ai_vision: vision.model && vision.base && isLocalHost(safeHost(vision.base)) ? (visionState && visionState.supported === false ? { configured: false, model: vision.model, checked_at: visionState.at, needs: `${visionState.reason} Set INVESTIGATE_VISION_MODEL to a vision model installed on your own Ollama server (for example qwen2.5vl or llava) to have images described.` }
+      : { configured: true, model: vision.model, checked: !!visionState, ...(visionState ? { checked_at: visionState.at } : {}) }) : { configured: false, needs: "INVESTIGATE_VISION_MODEL: a vision model installed on your own Ollama server (for example qwen2.5vl or llava)" }
   });
+  let visionState = null;
+  async function visionCheck() {
+    if (visionState && Date.now() - Date.parse(visionState.at) < 10 * 60e3) return visionState;
+    if (!vision.model || !vision.base || !isLocalHost(safeHost(vision.base))) return (visionState = { supported: false, at: new Date().toISOString(), reason: "No AI model on the organisation's own server is set for images." });
+    try {
+      const j = await post(`${vision.base}/api/show`, { model: vision.model }, 15000), caps = Array.isArray(j?.capabilities) ? j.capabilities : null;
+      const supported = caps ? caps.includes("vision") : !!(j?.projector_info || /clip|mllama/i.test(JSON.stringify(j?.details?.families || [])));
+      visionState = { supported, at: new Date().toISOString(), capabilities: caps, reason: supported ? null : `The AI model ${vision.model} does not support image understanding (Ollama reports its capabilities as: ${caps ? caps.join(", ") || "none" : "not stated, and no image component was found"}), so images were not interpreted by AI.` };
+    } catch (e) { visionState = { supported: false, at: new Date().toISOString(), reason: `Whether ${vision.model} can read images could not be checked (${e.message}), so images were not interpreted by AI.` }; }
+    return visionState;
+  }
   const safeHost = u => { try { return new URL(u).hostname; } catch { return ""; } };
 
   async function post(url, body, timeoutMs) {
@@ -45,7 +59,8 @@ export function makeMediaCheck(db, { config, storage, audit }) {
   async function analyse({ user, caseId, claims, claimDate, links = {}, budgetMs = 60000, check = () => {} }) {
     const t0 = Date.now(), left = () => budgetMs - (Date.now() - t0);
     const media = db.prepare("SELECT * FROM media WHERE case_id = ? AND kind = 'image' AND parent_media_id IS NULL ORDER BY uploaded_at, id").all(caseId);
-    const cd = claimDate ? Date.parse(claimDate) : NaN, st = status(), out = [];
+    const cd = claimDate ? Date.parse(claimDate) : NaN, out = [];
+    const vc = media.length && vision.model ? await visionCheck() : null, st = status();
     for (const m of media) {
       check();
       const img = { media_id: m.id, name: m.original_name, width: m.width, height: m.height, sha256: m.sha256, link: links[m.id] || null, observations: [], ocr: null, archive: [], reverse: null, ai: null };
@@ -88,7 +103,8 @@ export function makeMediaCheck(db, { config, storage, audit }) {
       out.push(img);
     }
     const reuse = out.flatMap(i => i.observations.filter(o => o.kind === "reuse").map(o => ({ media_id: i.media_id, text: o.text })));
-    return { images: out, reuse, services: st, note: out.length ? "AIVS reports observations about images; it does not decide that an image is manipulated or AI-generated." : "No image was available for this investigation." };
+    return { images: out, reuse, services: st, vision: vc ? { model: vision.model, supported: vc.supported, capabilities: vc.capabilities || null, reason: vc.reason } : null,
+      note: out.length ? `AIVS reports observations about images; it does not decide that an image is manipulated or AI-generated.${vc && !vc.supported ? ` ${vc.reason}` : ""}` : "No image was available for this investigation." };
   }
-  return { analyse, status };
+  return { analyse, status, visionCheck };
 }

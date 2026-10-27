@@ -38,6 +38,7 @@ const SOCIAL = ["X (Twitter)", "Facebook", "Instagram", "TikTok", "YouTube", "Te
 const CONNECTOR_LABEL = { factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
 const kindOf = b => b.subarray(0, 4).toString("latin1") === "%PDF" ? "pdf" : b[0] === 0x50 && b[1] === 0x4b ? "docx"
   : (b[0] === 0x89 && b[1] === 0x50) || (b[0] === 0xff && b[1] === 0xd8) || b.subarray(0, 3).toString("latin1") === "GIF" || b.subarray(0, 2).toString("latin1") === "BM" || (b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") ? "image" : "other";
+const avOf = (b, name) => (b.subarray(4, 8).toString("latin1") === "ftyp" || b.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || (b.subarray(0, 4).toString("latin1") === "RIFF" && /AVI |WAVE/.test(b.subarray(8, 12).toString("latin1"))) || b.subarray(0, 3).toString("latin1") === "ID3" || b.subarray(0, 4).toString("latin1") === "OggS" || /\.(mp4|mov|webm|3gp|m4a|mp3|wav|ogg|opus)$/i.test(name || "")) ? "av" : null;
 class Cancelled extends Error { constructor() { super("cancelled after the time limit"); } }
 const fence = t => String(t ?? "").replace(/<\/?content/gi, m => m.replace("<", "‹"));   // untrusted text cannot close the <content> block
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} did not finish within ${Math.round(ms / 1000)} s`)), ms).unref())]);
@@ -84,7 +85,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     audit(user, "Automatic investigation failed", "investigation", id, { error: message.slice(0, 300) });
   }
 
-  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null }) {
+  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null, supplied = null }) {
     text = String(text || "").replace(/\r\n/g, "\n").trim(); url = String(url || "").trim();
     if (!url && /^https?:\/\/\S+$/i.test(text)) { url = text; text = ""; }
     if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "Links must start with http:// or https://.");
@@ -93,7 +94,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     if (files.length > 5) throw new HttpError(400, "Add at most 5 files to one investigation.");
     const now = new Date(), ymd = new Date(now.getTime() + 3 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
     const id = nextId(db, "investigation", n => `INV-${String(n).padStart(6, "0")}`), reportId = nextId(db, `inv-${ymd}`, n => `AIVS-${ymd}-${String(n).padStart(3, "0")}`);
-    const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}) };
+    const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}), ...(supplied ? { supplied } : {}) };
     db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at,origin) VALUES (?,?,?,?,?,?,?,?,?)")
       .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString(), origin);
     audit(user, "Automatic investigation submitted", "investigation", id, { report_id: reportId, link: url || null, files: input.files.map(f => f.name), text_chars: text.length, training: !!isTraining });
@@ -119,8 +120,10 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   // no readable content: every later step is marked "skipped", no AI or evidence search runs, and the report says why
   function finishBlocked(id, user, inv, input, src, content, verdict) {
     const why = verdict === "extraction_blocked" ? String(src.notes.slice().reverse().find(n => n) || "No readable content could be extracted.") : `Only ${content.replace(/\s+/g, " ").trim().length} characters of readable content were extracted, too little to identify a claim.`;
-    setStage(id, "extract", verdict === "extraction_blocked" ? "failed" : "warning", `${AUTO_VERDICTS[verdict]}: ${why}`.slice(0, 300));
-    for (const k of ["analyse", "search", "compare", "media", "assess"]) setStage(id, k, "skipped", "not run: no readable content was extracted");
+    // a platform that does not allow automatic extraction is a limitation, not a failure of AIVS: the investigation waits for the
+    // analyst to supply the content (screenshot, text, image or video, or the original source's link) and then continues
+    setStage(id, "extract", "warning", `${verdict === "extraction_blocked" ? "Content not available automatically" : AUTO_VERDICTS[verdict]}: ${why}`.slice(0, 300));
+    for (const k of ["analyse", "search", "compare", "media", "assess"]) setStage(id, k, "skipped", "waiting for the content: add a screenshot, the text, image or video evidence, or the original source's link");
     setStage(id, "report", "running");
     const fallback = src.fallback || "Upload a screenshot of the content or paste its text (if you are permitted to see it), then verify again.";
     setPreview(id, { platform: src.platform, url: input.url || null, title: src.title, text: content.slice(0, 3000), author: src.author, published_at: src.published_at, access: src.access === "full" ? "partial" : src.access, fallback, notes: src.notes.slice(0, 6), claims: [], images: [], blocked: verdict });
@@ -129,7 +132,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       subject: String(src.title || content.slice(0, 120) || input.url || "Submission").replace(/\s+/g, " ").slice(0, 200), source: { ...src, fallback, method: src.method.join("; ") || "none" }, content: content.slice(0, 2000),
       claims: [], assessments: [], overall: ov, io: ioIndicators({ flags: [], injection: [], compared: [], hashtags: [], ioContext: null }), media: { images: [], reuse: [], services: mediacheck.status(), note: "No image was checked." },
       entities: {}, hashtags: [], evidence: [], top: {}, search: [], methods: {}, ai: { used: false, model: null, reason: "not used: there was no readable content to analyse", notes: [] },
-      review: { status: "not reviewed", by: null, at: null }, blocked: { verdict, reason: why, fallback } };
+      review: { status: "not reviewed", by: null, at: null }, blocked: { verdict, reason: why, fallback, can_continue: true, options: ["screenshot", "media", "text", "source_url"] } };
     r.sections = writeSections(r); r.written_by = "rules"; r.completed_at = nowISO(); r.limitations = limitations(r); r.priority = "routine";
     r.io_assessment = buildAssessment(r, { priority: "routine" });
     const fin = db.prepare("UPDATE investigations SET status = 'done', completed_at = ?, subject = ?, overall = ?, source_published_at = ?, result_json = ?, error = NULL, stages_json = ? WHERE id = ? AND status = 'running'")
@@ -158,7 +161,11 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     // Facebook links go first to the live monitoring service: the post from the database when it was collected, a share
     // link resolved by Facebook's redirect, or a post of an authorised Page read with that Page's token. Nothing else is requested.
     let fb = null;
-    if (input.url && facebook && /(^|\.)facebook\.com$|^fb\.watch$/i.test((() => { try { return new URL(input.url).hostname; } catch { return ""; } })())) {
+    const S = input.supplied || null;
+    if (S) { src.provenance = { original_link: input.url || null, platform: null, supplied_by: S.by, supplied_at: S.at, items: S.items, continues: S.continues, earlier_reason: S.earlier_reason || null };
+      if (S.skip_link) src.notes.push(`Automatic extraction was not tried again: it was restricted in report ${S.continues}${S.earlier_reason ? ` (${String(S.earlier_reason).slice(0, 200)})` : ""}. The original link is kept.`); }
+    if (S?.skip_link && input.url) { const L = parseSourceLink(input.url); src.platform = L?.platform?.replace(/ \(website\)$/, "") || (/facebook\.com|fb\.watch/i.test(input.url) ? "Facebook" : /instagram\.com/i.test(input.url) ? "Instagram" : null); src.account = L?.account || null; src.access = "restricted"; src.method.push("original link kept; content not retrievable automatically"); }
+    else if (input.url && facebook && /(^|\.)facebook\.com$|^fb\.watch$/i.test((() => { try { return new URL(input.url).hostname; } catch { return ""; } })())) {
       fb = await withTimeout(facebook(input.url), 120000, "Facebook lookup").catch(e => ({ status: "failed", attempts: [], message: e.message }));
       src.facebook = { status: fb.status, from: fb.from || null, attempts: fb.attempts || [], resolved_url: fb.resolved_url || null };
       if (fb.post) {
@@ -172,7 +179,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         else if (p.image_url) linkImages.push({ url: p.image_url, source: "Facebook post image (Graph API)" });
       } else { src.platform = "Facebook"; src.notes.push(fb.message || "The Facebook post could not be retrieved."); }
     }
-    if (input.url && !fb?.post) {
+    if (input.url && !fb?.post && !S?.skip_link) {
       const L = parseSourceLink(input.url); src.platform = L?.platform?.replace(/ \(website\)$/, "") || null; src.account = L?.account || null;
       if (L?.published_at) Object.assign(src, { published_at: L.published_at, published_basis: L.published_basis });
       if (L && SOCIAL.includes(L.platform)) {
@@ -239,10 +246,22 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           if (d.created && !src.published_at) Object.assign(src, { published_at: d.created, published_basis: "creation date in the document's properties (may differ from publication)" });
           if (!input.url && !P) src.input_type = "document";
         } catch (e) { src.notes.push(`${f.name}: ${e.message}`); }
-      } else src.notes.push(`${f.name}: this file type is not supported here (use an image, PDF or Word .docx).`);
+      } else if (avOf(buf, f.name)) src.notes.push(`${f.name}: video or audio evidence is kept with the case; its frames and speech can be checked from the case (capture frames, transcribe). Its content is not read automatically here.`);
+      else src.notes.push(`${f.name}: this file type is not supported here (use an image, video, PDF or Word .docx).`);
     }
-    if (input.text) { parts.unshift(input.text); src.method.push(P ? "post text as returned by the platform API" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
+    if (input.text) { parts.unshift(input.text); src.method.push(P ? "post text as returned by the platform API" : S ? "post text pasted by the analyst (not retrieved automatically)" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
     if (!input.url && !input.files.length && !P) src.input_type = "text";
+    // the original source named by the analyst (for example the article a post shares): retrieved and kept; its text is analysed
+    // only when nothing else was supplied
+    if (S?.source_url) {
+      try {
+        const pg = await withTimeout(fetchPage(S.source_url, { allowPrivate: !!config.allowPrivateFetch, allowPdf: true }), 45000, "Original source retrieval"), t = String(pg.text || "").trim();
+        src.original_source = { url: S.source_url, final_url: pg.finalUrl || S.source_url, title: pg.title || null, publisher: pg.site || null, published_at: pg.published || null, retrieved_at: nowISO(), used_as: parts.length ? "reference" : "content" };
+        if (!parts.length && t.replace(/\s/g, "").length >= 40) { parts.push(t.slice(0, 12000)); src.method.push(`text of the original source named by the analyst (${S.source_url})`); }
+        else src.notes.push(`The original source named by the analyst was retrieved and kept as a reference: ${pg.title || S.source_url}.`);
+      } catch (e) { src.original_source = { url: S.source_url, error: e.message }; src.notes.push(`The original source named by the analyst could not be retrieved (${e.message}); its link is kept.`); }
+    }
+    if (S && src.provenance) { src.provenance.platform = src.platform; src.method = src.method.map(m => /^text read from .* by OCR/.test(m) ? `${m}, from a screenshot supplied by the analyst` : m); if (parts.length) src.access = "analyst_supplied"; }
     const content = [...new Set(parts.map(p => p.trim()).filter(Boolean))].join("\n\n").slice(0, 20000);
     src.mentions = [...new Set((content.match(/(^|[^\w@])@([A-Za-z0-9_]{2,30})\b/g) || []).map(m => m.trim().replace(/^[^@]*/, "")))].slice(0, 20);
     if (!parts.length && src.access === "full") { src.access = "failed"; src.fallback = src.fallback || "Paste the text, or upload a clearer screenshot."; }
@@ -517,13 +536,18 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   const idle = () => !running.size && !queue.length;
   async function close() { if (worker) { await worker.terminate().catch(() => {}); worker = null; } }
-  // optional correction when extraction was incomplete: the same link again, plus text or files from the analyst; the earlier investigation is kept
-  function rerun(user, id, { text = "", files = [] }) {
+  // continue an investigation whose content could not be read automatically (or was incomplete): the same link, plus what the
+  // analyst supplies (pasted text, a screenshot, image or video evidence, the original source's link). The earlier investigation is
+  // kept; the new one records that its content was supplied by the analyst, not retrieved.
+  function rerun(user, id, { text = "", files = [], source_url = "" }) {
     const r = row(id); if (!r) throw new HttpError(404, "No such investigation.");
-    const old = JSON.parse(r.input_json);
-    if (!String(text || "").trim() && !files.length) throw new HttpError(400, "Add the missing text or a screenshot or file.");
-    const inv = start(user, { text: String(text || "").trim() || old.text, url: old.url, files, isTraining: old.is_training, corrects: r.report_id });
-    audit(user, "Automatic investigation corrected and run again", "investigation", r.id, { new: inv.id });
+    const old = JSON.parse(r.input_json), res = r.result_json ? JSON.parse(r.result_json) : null, t = String(text || "").trim(), su = String(source_url || "").trim();
+    if (su && !/^https?:\/\/[^\s]+$/i.test(su)) throw new HttpError(400, "The original source must be a web address starting with http:// or https://.");
+    if (!t && !files.length && !su) throw new HttpError(400, "Add the post's text, a screenshot, image or video evidence, or the original source's link.");
+    const items = [t && "pasted text", ...files.map(f => `${/\.(mp4|mov|webm|3gp|m4a|mp3|wav|ogg|opus)$/i.test(f.originalname || "") ? "video or audio file" : /\.(png|jpe?g|webp|gif|heic|bmp)$/i.test(f.originalname || "") ? "screenshot or image" : "file"} “${String(f.originalname || "file").slice(0, 80)}”`), su && `the original source's link (${su})`].filter(Boolean);
+    const supplied = { by: user.display_name || user.username, user_id: user.id, at: nowISO(), items, continues: r.report_id, earlier_reason: res?.blocked?.reason || null, skip_link: !!res?.blocked || ["restricted", "failed"].includes(res?.source?.access), source_url: su || null };
+    const inv = start(user, { text: t || old.text, url: old.url, files, isTraining: old.is_training, corrects: r.report_id, supplied });
+    audit(user, "Investigation continued with analyst-supplied content", "investigation", r.id, { new: inv.id, items });
     return inv;
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });

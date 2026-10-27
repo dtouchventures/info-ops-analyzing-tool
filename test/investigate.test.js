@@ -104,6 +104,8 @@ before(async () => {
     if (u.pathname === "/w/api.php") return json(200, { query: { search: /marsabit/i.test(q.srsearch) ? [{ title: "Marsabit County", snippet: "Marsabit County is a county in northern Kenya. Its capital is <span>Marsabit</span>.", timestamp: "2026-08-01T00:00:00Z" }] : [] } });
     if (u.pathname === "/x/oembed") return (q.url || "").endsWith(XID) ? json(200, { author_name: "Practice Desk", author_url: "https://twitter.com/practice_desk", html: `<blockquote class="twitter-tweet"><p lang="en" dir="ltr">PRACTICE: KDF soldiers have been deployed to Lamu County today, according to the Ministry of Defence.</p>&mdash; Practice Desk</blockquote>` }) : json(404, {});
     if (u.pathname === "/api/tags") return json(200, { models: ollama.models.map(name => ({ name })) });
+    // Ollama's model details: the vision model can read images, the text model cannot (as with qwen3:4b-instruct)
+    if (u.pathname === "/api/show") { let b = ""; req.on("data", d => (b += d)); req.on("end", () => { const m = JSON.parse(b || "{}").model || ""; json(200, { capabilities: /vl|llava|vision/i.test(m) ? ["completion", "vision"] : ["completion"] }); }); return; }
     if (u.pathname === "/api/chat") {
       let b = ""; req.on("data", d => (b += d)); req.on("end", () => {
         const msg = JSON.parse(b).messages.at(-1), p = msg.content;
@@ -146,8 +148,43 @@ test("2. Facebook link: restricted, nothing invented, qualified report asks for 
   assert.equal(r.source.platform, "Facebook"); assert.equal(r.source.access, "restricted"); assert.equal(inv.case_id, null);
   // nothing readable: the investigation stops, says "Extraction blocked", and no later step claims to have run
   assert.equal(r.overall.verdict, "extraction_blocked"); assert.equal(r.overall.label, "Extraction blocked"); assert.ok(r.sections.recommendations.some(s => /screenshot/i.test(s)));
-  assert.equal(inv.stages.find(s => s.key === "extract").status, "failed"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
+  assert.equal(inv.stages.find(s => s.key === "extract").status, "warning", "a platform restriction is not a system failure"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
   assert.equal(r.ai.used, false); assert.match((await ana.get(`/api/investigations/${inv.id}/report.html`)).body, /Extraction blocked/);
+});
+// 2a ---- 1.30: a Facebook post the Meta API cannot read; the analyst continues with pasted text or a screenshot
+async function continueWith(client, id, fields, files = []) {
+  const r = await client.post(`/api/investigations/${id}/rerun`, undefined, { form: form(fields, files) }); assert.equal(r.status, 202, JSON.stringify(r.body));
+  for (let i = 0; i < 600; i++) { const g = await client.get(`/api/investigations/${r.body.id}`); if (["done", "failed"].includes(g.body.status)) return g.body; await new Promise(ok => setTimeout(ok, 100)); }
+  throw new Error("continued investigation did not finish");
+}
+test("2a. Facebook post that cannot be read: the analyst pastes the text and the investigation continues, marked analyst-supplied", async () => {
+  const url = "https://www.facebook.com/KenyaDefenceForces/posts/2222222222", first = await investigate(ana, { url });
+  assert.equal(first.result.blocked.can_continue, true); assert.deepEqual(first.result.blocked.options, ["screenshot", "media", "text", "source_url"]);
+  assert.equal((await ana.post(`/api/investigations/${first.id}/rerun`, undefined, { form: form({}) })).status, 400, "something must be supplied");
+  const inv = await continueWith(ana, first.id, { text: "The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026." }), r = await common(ana, inv);
+  assert.ok(!r.blocked, "it continued"); assert.ok(["extract", "analyse", "search", "compare", "assess", "report"].every(k => ["done", "warning"].includes(inv.stages.find(s => s.key === k).status)), JSON.stringify(inv.stages));
+  assert.equal(r.source.url, url, "the original link is kept"); assert.equal(r.source.platform, "Facebook"); assert.equal(r.source.access, "analyst_supplied");
+  assert.equal(r.source.provenance.original_link, url); assert.equal(r.source.provenance.continues, first.report_id); assert.deepEqual(r.source.provenance.items, ["pasted text"]); assert.equal(r.source.provenance.supplied_by, "ANA");
+  assert.match(r.source.method, /pasted by the analyst \(not retrieved automatically\)/); assert.match(r.source.notes.join(" "), /not tried again/);
+  assert.equal(r.overall.verdict, "supported"); assert.ok(r.claims.length >= 1); assert.ok(r.evidence.length >= 1, "evidence was searched");
+  assert.match(r.sections.background.join(" "), /did not allow automatic extraction.*supplied by ANA.*not retrieved automatically/);
+  assert.ok(r.limitations.some(l => /Analyst-supplied content/.test(l)));
+  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.match(html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "), /supplied by an analyst, not retrieved automatically/); assert.match(html, /Confirm the analyst-supplied content/);
+});
+test("2b. Facebook post that cannot be read: a screenshot is read by OCR and the investigation continues; the text model is not asked to interpret images", async () => {
+  const first = await investigate(ana, { url: "https://www.facebook.com/KenyaDefenceForces/posts/3333333333" });
+  const img = await png(["Kenya Defence Forces Recruitment", "KDF recruitment is open. Applicants must pay KSh 2,000", "to register through WhatsApp before Friday."]);
+  const inv = await continueWith(ana, first.id, {}, [["post-screenshot.png", img, "image/png"]]), r = await common(ana, inv);
+  assert.match(r.content, /KSh 2,?000/); assert.match(r.source.method, /OCR.*from a screenshot supplied by the analyst/); assert.ok(r.source.provenance.items[0].startsWith("screenshot or image"));
+  assert.equal(r.overall.verdict, "contradicted"); assert.ok(inv.case_id); assert.equal((await ana.get(`/api/cases/${inv.case_id}`)).body.media.length, 1, "the screenshot is kept with the case");
+});
+test("2c. image understanding is used only when Ollama reports that the model can read images", async () => {
+  const { makeMediaCheck } = await import("../server/lib/mediacheck.js");
+  const text = makeMediaCheck(null, { config: { ai: { provider: "ollama", model: "qwen3:4b-instruct", baseUrl: F } } }), v1 = await text.visionCheck();
+  assert.equal(v1.supported, false); assert.match(v1.reason, /qwen3:4b-instruct does not support image understanding \(Ollama reports its capabilities as: completion\)/);
+  assert.equal(text.status().ai_vision.configured, false);
+  const vis = makeMediaCheck(null, { config: { ai: { provider: "ollama", model: "qwen3:4b-instruct", baseUrl: F }, investigate: { visionModel: "qwen2.5vl" } } }), v2 = await vis.visionCheck();
+  assert.equal(v2.supported, true); assert.equal(vis.status().ai_vision.configured, true);
 });
 // 2b ---- 1.25: the 5G / coronavirus scenario (PRACTICE fixtures on .example sites) and the read-only preview script
 test("5G claim: contradicted; one-page assessment cites only sources that address the claim; preview leaves the database unchanged", async () => {

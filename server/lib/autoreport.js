@@ -20,6 +20,8 @@ export function writeSections(r) {
   const x = r.source, o = r.overall;
   const kind = { url: "a link", text: "pasted text", image: "an image or screenshot", document: "a document" }[x.input_type] || "a submission";
   const bg = [`The submission was ${kind}${x.platform ? ` from ${x.platform}` : ""}${x.title ? `, titled “${x.title}”` : ""}.`];
+  // content the platform did not let AIVS read, supplied by an analyst instead (1.30): said first, because everything rests on it
+  if (x.provenance) bg.push(`${x.provenance.platform || "The platform"} did not allow automatic extraction of the original post${x.provenance.original_link ? ` (${x.provenance.original_link})` : ""}. The content analysed here was supplied by ${x.provenance.supplied_by} on ${eat(x.provenance.supplied_at)} as ${x.provenance.items.join(", ")}, not retrieved automatically.`);
   const who = [x.author && `attributed to ${x.author} (${x.author_basis || "basis not stated"})`, x.published_at && `dated ${eat(x.published_at)} (${x.published_basis || "basis not stated"})`].filter(Boolean);
   bg.push(who.length ? `It is ${who.join(" and ")}.` : "No author or publication date could be established from the submission.");
   const chk = r.claims.filter((c, i) => r.assessments[i].verdict !== "not_verifiable" || c.claim_type === "factual");
@@ -67,6 +69,7 @@ export function limitations(r) {
     "Strength labels are qualitative; no calibrated confidence percentage is given because none has been evaluated."];
   out.push(r.ai.used ? `Parts of the text were drafted by the AI model ${r.ai.model} from the listed evidence and checked automatically; verdicts were set by fixed rules, not by the model.`
     : `AI model not used: ${r.ai.reason || "not available"} The text was written by AIVS's rule-based writer.`);
+  if (r.source.provenance) out.push(`Analyst-supplied content: the text analysed came from ${r.source.provenance.items.join(", ")} supplied by ${r.source.provenance.supplied_by}. AIVS could not compare it with the live post, which ${r.source.provenance.platform || "the platform"} did not let it read; a screenshot or pasted text can be incomplete, edited or out of date. Confirm the post itself before relying on this report.`);
   for (const n of r.source.notes || []) out.push(n);
   const failed = r.search.filter(s => s.status === "error" || s.status === "partial");
   if (failed.length) out.push(`Searches that failed: ${failed.map(s => `${s.label} (${String(s.errors?.[0] || "error").slice(0, 80)})`).join("; ")}.`);

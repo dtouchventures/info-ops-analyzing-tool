@@ -141,7 +141,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.29.1";
+export const CLIENT_VERSION = "1.30.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

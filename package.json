@@ -1,6 +1,6 @@
 {
   "name": "aivs",
-  "version": "1.29.1",
+  "version": "1.30.0",
   "private": true,
   "description": "AIVS \u2014 Information Verification and Evidence Assistant (KDF Information Operations pilot)",
   "type": "module",

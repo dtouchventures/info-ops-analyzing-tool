@@ -60,10 +60,11 @@ export function buildAssessment(r, { priority = null, approval = null } = {}) {
   const who = [x.author && `attributed to ${x.author}`, x.platform && `on ${x.platform}`].filter(Boolean).join(" ");
   const bg = [
     main ? `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} claims that ${lc(short(main.text.replace(/[.!]+$/, ""), 32))}.` : `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} was submitted, but no checkable claim could be identified.`,
+    x.provenance ? `${x.provenance.platform || "The platform"} did not allow automatic extraction; the content was supplied by an analyst, not retrieved automatically.` : null,
     pub ? `It was published on ${pub}${x.published_basis ? "" : ""} and received by AIVS on ${recv}.` : `Its publication date could not be established; AIVS received it on ${recv}.`,
     places.length || orgs.length ? `It refers to ${[places.length && places.join(", "), orgs.length && orgs.join(", ")].filter(Boolean).join(" and ")}.` : null,
     `It merits analysis because it ${topic ? `concerns ${topic}` : "makes a checkable public claim"}${content.length ? " and shows features common in misleading messages" : ""}, and could affect public understanding if repeated.`,
-    ["restricted", "failed"].includes(x.access) ? "The original content could not be fully retrieved." : null,
+    ["restricted", "failed"].includes(x.access) && !x.provenance ? "The original content could not be fully retrieved." : null,
     x.input_type !== "url" ? `It was submitted ${{ text: "as text", image: "as an image", document: "as a document" }[x.input_type] || "directly"} without a link to the original, so where it first appeared is not known.` : null];
   let background = fit(bg, LIMITS.background[1]);
 
@@ -109,6 +110,7 @@ export function buildAssessment(r, { priority = null, approval = null } = {}) {
 
   // 4. RECOMMENDATIONS (2–4, 50–70 words)
   const rec = [];
+  if (x.provenance) rec.push("Confirm the analyst-supplied content against the live post before relying on this assessment.");
   if (["contradicted", "misleading"].includes(o.verdict)) rec.push(`Prepare a factual clarification citing ${refs.length ? `[1]` : "authoritative sources"}, for authorised use only.`);
   if (["insufficient", "mixed"].includes(o.verdict) || !ok.length) rec.push("Seek corroboration from the responsible authority or an established fact-checker before drawing conclusions.");
   if (!x.author && !pub) rec.push("Trace the earliest available version of the content to establish its origin and date.");

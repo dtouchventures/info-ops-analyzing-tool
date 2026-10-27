@@ -836,6 +836,19 @@ let watchDead = [], watchSeen = 0;
   await p.click('[data-scope="real"]');
   await ctx.close(); await SL.ctx.investigations.close(); await SL.close(); fg.close();
 }
+// ---- 1.30: a Facebook post AIVS may not read: the investigation waits for the analyst, then continues with pasted text
+{ await a.goto(S.base + "/#/investigate"); await a.waitForSelector("#igo");
+  await a.fill("#iv", "https://www.facebook.com/KenyaDefenceForces/posts/4444444444"); await a.click("#igo");
+  await a.waitForSelector("#icont", { timeout: 120000 });
+  const blockedText = await a.textContent("#ires"), stagesText = await a.$$eval("#istages li", x => x.map(e => `${e.className}:${e.textContent.trim().slice(0, 40)}`));
+  check("a Facebook post that cannot be read is explained as a platform limitation, with the four ways to continue", /not available automatically/.test(blockedText) && /not an error in AIVS/.test(blockedText) && !!(await a.$("#ctShot")) && !!(await a.$("#ctMedia")) && !!(await a.$("#ctText")) && !!(await a.$("#ctSrc")) && !(await a.$("#istages li.failed")), JSON.stringify(stagesText));
+  await shot(a, "47a-facebook-blocked-continue");
+  await a.fill("#ctText", "PRACTICE: The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026."); await a.click("#ctGo");
+  await a.waitForSelector("#iprov", { timeout: 120000 });
+  const prov = await a.textContent("#iprov");
+  check("pasting the text continues the investigation, keeps the link and says the content was supplied by the analyst", /supplied by ANA, not retrieved automatically/.test(prov) && /facebook\.com\/KenyaDefenceForces\/posts\/4444444444/.test(prov) && (await a.$$("#istages li.done")).length >= 4, prov.slice(0, 200));
+  await shot(a, "47b-facebook-continued");
+}
 // ---- 1.22: one-click automatic investigation (no evidence service is configured in this test server, so the
 // report must say the evidence is insufficient and why), on a desktop and on a phone-sized screen
 { await a.goto(S.base + "/#/investigate"); await a.waitForSelector("#igo");

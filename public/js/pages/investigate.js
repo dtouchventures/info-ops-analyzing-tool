@@ -8,7 +8,7 @@ import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
 
 const STAGES = [["extract", "Extracting the content"], ["analyse", "Detecting claims"], ["search", "Searching for evidence"], ["compare", "Cross-checking sources"], ["media", "Checking images and media"], ["assess", "AI assessment"], ["report", "Generating the report"]];
-const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "con", insufficient_content: "warn" };
+const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "warn", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
 const httpLink = (u, t) => /^https?:\/\//i.test(String(u || "")) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t || u)}</a>` : esc(t || u || "");
@@ -90,9 +90,24 @@ function preview(p) {
     ${(p.claims || []).length ? `<div style="margin-top:8px"><b class="small">Detected claims</b><ol class="small" style="margin:4px 0 0 18px">${p.claims.map(c => `<li>${esc(c.text)}${c.claim_type && c.claim_type !== "factual" ? ` <span class="chip grey">${esc(c.claim_type)}</span>` : ""}</li>`).join("")}</ol></div>` : ""}
     ${(p.notes || []).length ? `<div class="callout warn" style="margin-top:8px"><div class="small">${p.notes.map(esc).join("<br>")}</div></div>` : ""}`;
 }
+// the content could not be read automatically: the analyst supplies it and the same investigation continues (1.30)
+function continueForm(inv, b) {
+  const plat = inv.result?.source?.platform || "The platform";
+  return `<div class="card" style="margin-top:12px;border-left:6px solid var(--warn)" id="icont"><div class="hd"><h3>Continue the investigation</h3></div><div class="bd">
+    <p class="small" style="margin-top:0">${esc(plat)} did not allow AIVS to read this ${/Facebook|Instagram/.test(plat) ? "post" : "content"} automatically. This is a limitation of the platform's access, not an error in AIVS. Add what you can see, and AIVS continues with claim detection, evidence search, cross-checking, image checks and AI analysis. The original link is kept, and the report will say the content was supplied by you.</p>
+    <div class="grid g2" style="gap:12px">
+      <div><label class="f" for="ctShot">Screenshot of the post</label><input id="ctShot" type="file" accept="image/*" multiple><div class="tiny sub">Its text is read by OCR.</div></div>
+      <div><label class="f" for="ctMedia">Image or video evidence</label><input id="ctMedia" type="file" accept="image/*,video/*,audio/*,.pdf,.docx" multiple><div class="tiny sub">Kept with the case; images are checked.</div></div>
+    </div>
+    <label class="f" for="ctText" style="margin-top:10px">The post's text</label><textarea id="ctText" rows="4" style="width:100%" placeholder="Paste the text exactly as it appears in the post"></textarea>
+    <label class="f" for="ctSrc">Original source link (optional)</label><input id="ctSrc" style="width:100%" placeholder="https://… the article or page the post comes from">
+    <div class="row" style="gap:10px;margin-top:10px;align-items:center"><button class="btn primary" id="ctGo">Continue the investigation</button><span class="tiny sub">Up to 5 files.</span></div>
+    <div id="ctErr" class="callout bad" style="margin-top:8px" hidden></div>
+    <details class="tiny sub" style="margin-top:8px"><summary>Why it could not be read</summary>${esc(b.reason)}</details></div></div>`;
+}
 function fixForm(inv) {
   const p = inv.preview || {}, x = inv.result?.source || {};
-  if (!["restricted", "failed", "partial"].includes(x.access || p.access)) return "";
+  if (inv.result?.blocked || x.provenance || !["restricted", "failed", "partial"].includes(x.access || p.access)) return "";
   return `<div class="card" style="margin-top:12px"><div class="hd"><h3>Extraction was incomplete</h3></div><div class="bd">
     <p class="small">${esc(x.fallback || p.fallback || "Add what is missing and AIVS will analyse the link again.")}</p>
     <textarea id="fxText" rows="3" placeholder="Paste the text of the post or article"></textarea>
@@ -102,10 +117,11 @@ function fixForm(inv) {
 function results(inv) {
   // nothing readable was extracted: no analysis ran, and the page says what happened and what to do instead
   if (inv.result?.blocked) { const b = inv.result.blocked, f = inv.result.source?.facebook;
-    return `<div class="callout ${b.verdict === "extraction_blocked" ? "bad" : "warn"}" style="margin-top:12px" id="iblocked"><div><b>${b.verdict === "extraction_blocked" ? "Extraction blocked" : "Insufficient content"}.</b> ${esc(b.reason)}
-      <p style="margin:6px 0 0"><b>What to do:</b> ${esc(b.fallback)} No claim extraction, evidence search or AI analysis was run, because there was nothing to analyse.</p>
-      ${f?.attempts?.length ? `<p class="tiny sub" style="margin:6px 0 0">Facebook: ${esc(f.attempts.map(a => `${a.method}: ${a.result}${a.detail ? ` (${a.detail})` : ""}`).join("; "))}</p>` : ""}</div></div>`; }
+    return `<div class="callout warn" style="margin-top:12px" id="iblocked"><div><b>${b.verdict === "extraction_blocked" ? "Content not available automatically" : "Insufficient content"}.</b> ${esc(b.reason)}
+      <p style="margin:6px 0 0">No claim extraction, evidence search or AI analysis has run yet, because there is nothing to analyse. Nothing was guessed.</p>
+      ${f?.attempts?.length ? `<p class="tiny sub" style="margin:6px 0 0">Facebook: ${esc(f.attempts.map(a => `${a.method}: ${a.result}${a.detail ? ` (${a.detail})` : ""}`).join("; "))}</p>` : ""}</div></div>${b.can_continue ? continueForm(inv, b) : ""}`; }
   const r = inv.result, o = r.overall, by = Object.fromEntries(r.evidence.map(e => [e.id, e]));
+  const pv = r.source.provenance ? `<div class="callout info" style="margin-top:12px" id="iprov"><div><b>Content supplied by ${esc(r.source.provenance.supplied_by)}, not retrieved automatically.</b> ${esc(r.source.provenance.platform || "The platform")} did not allow automatic extraction${r.source.provenance.continues ? ` (report ${esc(r.source.provenance.continues)})` : ""}. Analysed: ${esc(r.source.provenance.items.join(", "))}. Original link kept: ${httpLink(r.source.provenance.original_link, r.source.provenance.original_link)}.</div></div>` : "";
   const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span></li>`;
   const claims = r.claims.map((c, i) => { const a = r.assessments[i], top = (r.top[c.id] || []).map(id => by[id]).filter(Boolean);
     const sup = top.filter(e => e.stance === "supports"), con = top.filter(e => e.stance === "contradicts" || e.stance === "misleading"), rel = top.filter(e => e.stance === "related");
@@ -117,7 +133,7 @@ function results(inv) {
   const imgs = (r.media?.images || []).map(i => `<div class="row" style="gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap"><img src="/api/media/${encodeURIComponent(i.media_id)}/thumb" alt="${esc(i.name)}" style="max-width:160px;max-height:120px;border:1px solid var(--line);border-radius:6px">
     <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul></div>`).join("");
   const cred = Object.entries(r.evidence.filter(e => !e.repeat_of).reduce((m, e) => (m[e.tier_label] = (m[e.tier_label] || 0) + 1, m), {}));
-  return `<div class="card" style="margin-top:12px;border-left:6px solid var(--${VC[o.verdict] === "grey" ? "line" : VC[o.verdict]})"><div class="bd">
+  return `${pv}<div class="card" style="margin-top:12px;border-left:6px solid var(--${VC[o.verdict] === "grey" ? "line" : VC[o.verdict]})"><div class="bd">
       <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><div><div class="tiny sub">Overall preliminary verdict</div><h2 style="margin:2px 0">${esc(o.label)}</h2></div><span class="chip ${VC[o.verdict]}" style="font-size:13px">Strength of the evidence: ${esc(o.strength_label)}</span></div>
       ${o.note ? `<p class="small" style="margin:6px 0">${esc(o.note)}</p>` : ""}
       <p class="small" style="margin:6px 0">${esc(r.sections.assessment.slice(0, 2).join(" "))}</p>
@@ -148,6 +164,14 @@ async function follow(el, id) {
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();
     $("#invOut").hidden = false;
     const rb = $("#irev"); if (rb) rb.onclick = async () => { const note = prompt("What did you check? (recorded with your name)"); if (!note) return; try { await api.post(`/api/investigations/${encodeURIComponent(inv.id)}/review`, { note }); follow(el, id); } catch (e) { alert(errMsg(e)); } };
+    const ct = $("#ctGo");
+    if (ct) ct.onclick = async () => {
+      const fd = new FormData(), t = $("#ctText").value.trim(), su = $("#ctSrc").value.trim(), files = [...$("#ctShot").files, ...$("#ctMedia").files];
+      if (!t && !files.length && !su) { $("#ctErr").innerHTML = "<div>Add a screenshot, image or video, the post's text, or the original source's link.</div>"; $("#ctErr").hidden = false; return; }
+      if (files.length > 5) { $("#ctErr").innerHTML = "<div>Add at most 5 files.</div>"; $("#ctErr").hidden = false; return; }
+      if (t) fd.append("text", t); if (su) fd.append("source_url", su); for (const f of files) fd.append("files", f);
+      ct.disabled = true; ct.textContent = "Continuing…";
+      try { const n = await api.upload(`/api/investigations/${encodeURIComponent(inv.id)}/rerun`, fd); location.hash = `#/investigate/${n.id}`; } catch (e) { $("#ctErr").innerHTML = `<div>${esc(errMsg(e))}</div>`; $("#ctErr").hidden = false; ct.disabled = false; ct.textContent = "Continue the investigation"; } };
     const fx = $("#fxGo");
     if (fx) {
       $("#fxFile").onchange = () => { $("#fxNames").textContent = [...$("#fxFile").files].map(f => f.name).join(", "); };
