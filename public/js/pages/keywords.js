@@ -114,17 +114,68 @@ export async function discoveredView(body) {
   wireVerify(body, () => discoveredView(body));
 }
 
-// ---------------------------------------------------------------- saved watchlists (recurring searches)
+// ---------------------------------------------------------------- saved watchlists (recurring searches): create, edit, activate, pause, delete
+const KENYA_SITES = ["https://nation.africa", "https://www.standardmedia.co.ke", "https://www.the-star.co.ke", "https://www.capitalfm.co.ke/news", "https://www.kbc.co.ke", "https://www.citizen.digital", "https://www.kenyans.co.ke", "https://www.pd.co.ke"];
+const qt = t => (/[\s,]/.test(t) && !t.startsWith("#") ? `"${t}"` : t);
+export const queryOf = d => [d.terms.map(qt).join(" OR "), ...(d.require_groups || []).map(g => `AND ${g.map(qt).join(" OR ")}`), ...d.exclude.map(x => `-${qt(x)}`)].join(" ");
+// why a watchlist is not running, in plain words
+function whyNot(w, ready) {
+  if (w.status === "active") { const off = w.definition.sources.filter(k => !ready.has(k)); return off.length === w.definition.sources.length ? "Active, but none of its sources is connected, so nothing is collected." : off.length ? `Running. Not connected: ${off.join(", ")}.` : "Running on schedule."; }
+  if (w.status === "paused") return "Paused by a reviewer: not collecting.";
+  const live = w.definition.sources.filter(k => ready.has(k));
+  if (!live.length) return `Not running: none of its sources (${w.definition.sources.join(", ") || "none"}) is connected. Edit it and choose connected sources.`;
+  return w.previewed_current ? "Not running: checked but not activated yet." : "Not running: never activated, or changed since it was last checked.";
+}
+async function editor(w, srcs) {
+  const { modal } = await import("../ui.js");
+  const d = w?.definition || { terms: [], exclude: [], sources: srcs.filter(x => x.state === "ready" && x.key !== "fb_live").map(x => x.key), feeds: [], alert_mode: "every_post", intervals: {} };
+  const iv = Object.values(d.intervals || {})[0] || 30;
+  const usable = srcs;
+  const body = `<label class="f" for="we_n">Name</label><input id="we_n" style="width:100%" value="${esc(w?.name || "")}" placeholder="for example: Lamu security">
+    <label class="f" for="we_q">Keywords</label><textarea id="we_q" rows="2" style="width:100%" placeholder='"Kenya Army" OR KDF AND Lamu -recruitment'>${esc(w ? queryOf(d) : "")}</textarea>
+    <div class="tiny sub" id="we_p">OR (or a comma) for alternatives, AND for words that must also appear, -word to exclude, "quotes" for exact phrases, #tags.</div>
+    <label class="f">Sources</label><div class="ksrc">${usable.map(x => `<label class="ksource ${x.state === "ready" ? "" : "off"}"><input type="checkbox" class="we_s" value="${x.key}" ${d.sources.includes(x.key) ? "checked" : ""}> <b>${esc(x.platform)}</b> ${chip(x.category, CAT[x.category] || "grey")}${x.state !== "ready" ? `<span class="tiny sub">${esc(x.needs || "")}</span>` : ""}</label>`).join("")}</div>
+    <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:8px"><div><label class="f" for="we_i">Search every</label><select id="we_i">${[[15, "15 minutes"], [30, "30 minutes"], [60, "hour"], [180, "3 hours"], [720, "12 hours"], [1440, "day"]].map(([v, l]) => `<option value="${v}" ${+iv === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div><label class="f" for="we_a">Alerts</label><select id="we_a"><option value="every_post" ${d.alert_mode === "every_post" ? "selected" : ""}>For every new item</option><option value="threshold" ${d.alert_mode !== "every_post" ? "selected" : ""}>Only for unusual activity (spikes, repetition)</option></select></div></div>
+    <label class="f" for="we_f">News sites or RSS feeds (one per line; used by the News websites source)</label><textarea id="we_f" rows="3" style="width:100%">${esc((d.feeds?.length ? d.feeds : KENYA_SITES).join("\n"))}</textarea>
+    <label class="f" for="we_b">Basis for collecting (required to activate)</label><input id="we_b" style="width:100%" value="${esc(w?.authorisation || "Public content through each platform's official API, under the platform's terms and the organisation's monitoring policy.")}">`;
+  return modal(w ? `Edit watchlist: ${w.name}` : "New watchlist", body, [{ label: "Cancel", value: null }, { label: "Save as draft", value: el => ({ el, activate: false }), validate: el => check(el) }, { label: "Save and activate", kind: "primary", value: el => ({ el, activate: true }), validate: el => check(el) }], { wide: true,
+    onOpen: el => { const q = $("#we_q", el), p = $("#we_p", el), base = p.textContent; let t; q.oninput = () => { clearTimeout(t); t = setTimeout(async () => { const r = await api.post("/api/monitor/parse", { query: q.value }).catch(() => null); p.textContent = !q.value.trim() ? base : r?.ok ? `Looks for ${[r.parsed.terms.map(x => `“${x}”`).join(" or "), ...r.parsed.require_groups.map(g => `and ${g.map(x => `“${x}”`).join(" or ")}`), r.parsed.exclude.length ? `without ${r.parsed.exclude.map(x => `“${x}”`).join(", ")}` : ""].filter(Boolean).join(" ")}.` : r?.error || base; }, 300); }; } });
+  async function check(el) { if (!$("#we_n", el).value.trim()) return "Give the watchlist a name."; if (!$$(".we_s:checked", el).length) return "Choose at least one source."; const r = await api.post("/api/monitor/parse", { query: $("#we_q", el).value }).catch(e => ({ ok: false, error: e.message })); return r.ok ? null : r.error; }
+}
+async function saveWatchlist(w, out) {
+  const el = out.el, parsed = (await api.post("/api/monitor/parse", { query: $("#we_q", el).value })).parsed, sources = $$(".we_s:checked", el).map(i => i.value), iv = +$("#we_i", el).value;
+  const definition = { ...(w?.definition || {}), terms: parsed.terms, require_groups: parsed.require_groups, exclude: parsed.exclude, sources, feeds: $("#we_f", el).value.split(/\s+/).filter(x => /^https?:\/\//.test(x)),
+    intervals: Object.fromEntries(sources.map(k => [k, iv])), alert_mode: $("#we_a", el).value, lookback_minutes: Math.max(60, iv * 2) };
+  const b = { name: $("#we_n", el).value.trim(), definition, authorisation: $("#we_b", el).value.trim() };
+  const id = w ? (await api.patch(`/api/watch/lists/${w.id}`, b), w.id) : (await api.post("/api/watch/lists", b)).id;
+  if (out.activate) await activate(id);
+  return id;
+}
+// activation needs a check of the current terms first; the check here uses the records already stored (no paid request)
+async function activate(id) { await api.post(`/api/watch/lists/${id}/preview`, { live_sources: [] }); return api.post(`/api/watch/lists/${id}/status`, { status: "active" }); }
 export async function watchlistsView(body) {
-  const ov = await api.get("/api/watch/overview"), wls = ov.watchlists;
-  const st = { active: "sup", draft: "grey", paused: "warn" };
-  body.innerHTML = `<div class="callout info" style="margin-bottom:12px"><div>A watchlist is a saved search that AIVS repeats automatically on each source's schedule. Create one from any search (<a href="#/live/search">Search</a> → Save as recurring watchlist), or in <a href="#/watch/lists">AI Watchlist</a>, where terms, exclusions, sources and schedules can be edited.</div></div>
-    ${wls.length ? `<table class="t"><thead><tr><th>Watchlist</th><th>Status</th><th>Keywords</th><th>Sources</th><th>Items</th><th>Last match</th><th></th></tr></thead><tbody>${wls.map(w => `<tr><td><a href="#/watch/list/${w.id}"><b>${esc(w.name)}</b></a></td><td>${chip(w.status, st[w.status] || "grey")}</td>
-      <td class="small">${esc(w.definition.terms.slice(0, 6).join(", "))}${w.definition.terms.length > 6 ? "…" : ""}${(w.definition.require_groups || []).length ? ` <span class="sub">AND ${esc(w.definition.require_groups.map(g => g.join("/")).join(" AND "))}</span>` : ""}${w.definition.exclude.length ? ` <span class="sub">without ${esc(w.definition.exclude.slice(0, 3).join(", "))}</span>` : ""}</td>
-      <td class="tiny">${esc(w.definition.sources.join(", "))}</td><td>${w.matches}</td><td class="small">${w.last_match_at ? ago(w.last_match_at) : "—"}</td>
-      <td><div class="row" style="gap:6px"><a class="btn sm ghost" href="#/live/discovered?watchlist=${w.id}">Items</a>${App.can("watch.triage") ? `<button class="btn sm" data-rep="${w.id}">Report (24 h)</button>` : ""}</div></td></tr>`).join("")}</tbody></table>`
-      : empty("No watchlists", "Run a search and save it as a recurring watchlist.")}`;
-  for (const b of $$("[data-rep]", body)) b.onclick = async () => { b.disabled = true; try { const r = await api.post(`/api/monitor/watchlists/${b.dataset.rep}/report`, { hours: 24 }); toast(`Report ${r.report_id} drafted.`); window.open(`/api/monitor/reports/${r.id}/file.html`, "_blank", "noopener"); } catch (e) { fail(e); } b.disabled = false; };
+  const [ov, sx] = await Promise.all([api.get("/api/watch/overview"), api.get("/api/monitor/sources")]), wls = ov.watchlists, ready = new Set(sx.sources.filter(x => x.state === "ready").map(x => x.key));
+  const st = { active: "sup", draft: "grey", paused: "warn" }, manage = App.can("watch.manage");
+  body.innerHTML = `<div class="row" style="gap:8px;margin-bottom:10px;align-items:center">${manage ? `<button class="btn primary sm" id="wNew">New watchlist</button>` : ""}<span class="small sub">A watchlist is a saved search that AIVS repeats automatically on its schedule and alerts on. ${manage ? "" : "Reviewers and administrators create, edit and activate watchlists."}</span></div>
+    ${wls.length ? `<table class="t"><thead><tr><th>Watchlist</th><th>Status</th><th>Keywords</th><th>Sources</th><th>Items</th><th>Last match</th><th></th></tr></thead><tbody>${wls.map(w => `<tr data-w="${w.id}"><td><b>${esc(w.name)}</b></td><td>${chip(w.status, st[w.status] || "grey")}<div class="tiny sub" style="max-width:220px">${esc(whyNot(w, ready))}</div></td>
+      <td class="small">${esc(queryOf(w.definition)).slice(0, 220)}</td>
+      <td class="tiny">${w.definition.sources.map(k => `<span class="${ready.has(k) ? "" : "sub"}">${esc(k)}${ready.has(k) ? "" : " (not connected)"}</span>`).join(", ")}</td><td>${w.matches}</td><td class="small">${w.last_match_at ? ago(w.last_match_at) : "—"}</td>
+      <td><div class="row" style="gap:6px;flex-wrap:wrap">${manage ? `<button class="btn sm" data-act="edit">Edit</button>${w.status === "active" ? `<button class="btn sm ghost" data-act="pause">Pause</button>` : `<button class="btn sm primary" data-act="activate">Activate</button>`}` : ""}
+        <a class="btn sm ghost" href="#/live/discovered?watchlist=${w.id}">Items</a>${App.can("watch.triage") ? `<button class="btn sm ghost" data-act="report">Report (24 h)</button>` : ""}${manage ? `<button class="btn sm ghost" data-act="delete">Delete</button>` : ""}</div></td></tr>`).join("")}</tbody></table>`
+      : empty("No watchlists", "Create one with New watchlist, or run a search and save it as a recurring watchlist.")}`;
+  $("#wNew", body)?.addEventListener("click", async () => { const r = await editor(null, sx.sources); if (!r.value) return; try { await saveWatchlist(null, r.value); toast(r.value.activate ? "Watchlist saved and activated." : "Watchlist saved as a draft."); } catch (e) { fail(e); } watchlistsView(body); });
+  for (const b of $$("[data-act]", body)) b.onclick = async () => {
+    const id = +b.closest("[data-w]").dataset.w, w = wls.find(x => x.id === id), act = b.dataset.act;
+    try {
+      if (act === "edit") { const r = await editor(w, sx.sources); if (!r.value) return; await saveWatchlist(w, r.value); toast(r.value.activate ? "Saved and activated." : "Saved. It stays a draft until activated."); }
+      if (act === "activate") { await activate(id); toast("Activated: it now runs on its schedule."); }
+      if (act === "pause") { await api.post(`/api/watch/lists/${id}/status`, { status: "paused" }); toast("Paused."); }
+      if (act === "delete") { const { confirmBox } = await import("../ui.js"); if (!(await confirmBox("Delete watchlist", `Delete “${w.name}”? Its collected items and alert history are kept; it stops running and is hidden.`, "Delete", "danger"))) return; await api.del(`/api/watch/lists/${id}`); toast("Deleted."); }
+      if (act === "report") { b.disabled = true; const r = await api.post(`/api/monitor/watchlists/${id}/report`, { hours: 24 }); toast(`Report ${r.report_id} drafted.`); window.open(`/api/monitor/reports/${r.id}/file.html`, "_blank", "noopener"); }
+    } catch (e) { fail(e); }
+    watchlistsView(body);
+  };
 }
 
 // ---------------------------------------------------------------- monitoring reports

@@ -806,6 +806,21 @@ let watchDead = [], watchSeen = 0;
   await shot(p, "46e-keyword-search");
   await p.click("#krep"); await p.waitForSelector('.toast:has-text("drafted")'); check("the results can be analysed into a draft monitoring report", true);
   await p.click("#kwl"); await p.waitForSelector('.toast:has-text("Saved as a watchlist")'); check("a search can be saved as a recurring watchlist", /\(active\)/.test(await p.textContent('.toast:has-text("Saved as a watchlist")')), await p.textContent('.toast:has-text("Saved as a watchlist")'));
+  // watchlists: create, edit, activate, pause and delete from Live Monitoring
+  await p.goto(SL.base + "/#/live/watchlists"); await p.waitForSelector("#wNew"); await p.click("#wNew"); await p.waitForSelector("#we_q");
+  await p.fill("#we_n", "TEST Isiolo projects"); await p.fill("#we_q", 'Isiolo AND "water project" -football');
+  for (const c of await p.$$(".we_s")) { const v = await c.getAttribute("value"); if ((v === "gdelt") !== (await c.isChecked())) await c.click(); }
+  await p.click('.modal .btn.primary'); await p.waitForSelector('.toast:has-text("saved and activated")');
+  let wrow = await p.textContent('tr:has-text("TEST Isiolo projects")');
+  check("a new watchlist can be created with any keywords and activated from Live Monitoring", /active/.test(wrow) && /Running on schedule/.test(wrow) && /Isiolo AND "water project"/.test(wrow), wrow.replace(/\s+/g, " ").slice(0, 200));
+  await p.click('tr:has-text("TEST Isiolo projects") [data-act="edit"]'); await p.waitForSelector("#we_q"); await p.fill("#we_q", "Isiolo OR Marsabit"); await p.click('.modal .btn.primary'); await p.waitForSelector('.toast:has-text("Saved and activated")');
+  await p.waitForFunction(() => /Marsabit/.test(document.querySelector("#lb").textContent), null, { timeout: 10000 }).catch(() => {});
+  wrow = await p.textContent('tr:has-text("TEST Isiolo projects")'); check("a watchlist's keywords can be edited and it is re-activated", /Isiolo OR Marsabit/.test(wrow) && /active/.test(wrow), wrow.replace(/\s+/g, " ").slice(0, 200));
+  const kdfRow = await p.$('tr:has-text("draft")'); check("a draft explains why it is not running", !kdfRow || /Not running/.test(await kdfRow.textContent()));
+  await p.click('tr:has-text("TEST Isiolo projects") [data-act="pause"]'); await p.waitForSelector('.toast:has-text("Paused")');
+  check("a watchlist can be paused", /paused/.test(await p.textContent('tr:has-text("TEST Isiolo projects")')));
+  await p.click('tr:has-text("TEST Isiolo projects") [data-act="delete"]'); await p.click('.modal .btn.danger'); await p.waitForSelector('.toast:has-text("Deleted")');
+  check("a watchlist can be deleted", !(await p.$('tr:has-text("TEST Isiolo projects")')));
   await p.goto(SL.base + "/#/live/sources"); await p.waitForSelector("#ksrc table");
   check("the sources tab separates connected, restricted, unavailable and not-configured sources and names the access limits", /Connected/.test(await p.textContent("#ksrc")) && /Not configured/.test(await p.textContent("#ksrc")) && /cannot search all public Facebook posts/.test(await p.textContent("#ksrc")));
   await p.goto(SL.base + "/#/live"); await p.waitForSelector(".kpi");
