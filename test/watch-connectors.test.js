@@ -78,7 +78,7 @@ test("WhatsApp Business webhook: verification, signature, pseudonymised senders,
       messages: [{ from: "254700000001", id: "wamid.1", timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body: "Is this message about KDF recruitment fees real?" } },
         { from: "254700000002", id: "wamid.2", timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body: "Hello, what time do you open?" } }] } }] }] });
     const sig = "sha256=" + crypto.createHmac("sha256", "app-secret").update(payload).digest("hex");
-    assert.equal((await fetch(`${S.base}/webhooks/whatsapp`, { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=bad" + sig.slice(10) }, body: payload })).status, 401);
+    assert.equal((await fetch(`${S.base}/webhooks/whatsapp`, { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": sig.slice(0, -1) + (sig.endsWith("0") ? "1" : "0") }, body: payload })).status, 401);
     assert.equal((await fetch(`${S.base}/webhooks/whatsapp`, { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": sig }, body: payload })).status, 200);
     const rows = S.ctx.db.prepare("SELECT * FROM watch_posts").all(); assert.equal(rows.length, 1, "the unrelated message is not stored");
     assert.match(rows[0].account, /^sender [0-9a-f]{10}$/); assert.ok(!JSON.stringify(rows).includes("254700000001") && !JSON.stringify(rows).includes("A Citizen"), "no phone number or name is stored");
