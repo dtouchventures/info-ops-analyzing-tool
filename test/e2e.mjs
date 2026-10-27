@@ -855,7 +855,7 @@ let watchDead = [], watchSeen = 0;
   await a.click("#igo"); await a.waitForSelector("#ierr:not([hidden])"); check("Analyze Information without input explains what is missing", (await a.textContent("#ierr")).includes("Paste a link or some text"));
   await a.fill("#iv", "PRACTICE: The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026. Share this before it is deleted!");
   await a.click("#igo"); await a.waitForSelector("#istages li", { timeout: 10000 });
-  check("the eight processing stages are shown, from source detection to the report, including the image checks", (await a.$$("#istages li")).length === 8 && (await a.textContent("#istages")).includes("Detecting the source") && (await a.textContent("#istages")).includes("Extracting the content") && (await a.textContent("#istages")).includes("Checking images and media"));
+  check("the ten automated stages and the HOD decision are shown, from source detection to the approval queue, including the image checks", (await a.$$("#istages li")).length >= 10 && (await a.textContent("#istages")).includes("Source detection") && (await a.textContent("#istages")).includes("Content extraction") && (await a.textContent("#istages")).includes("Image and media checks"), await a.textContent("#istages"));
   await a.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
   const rep = a.frameLocator("#irep"), body = await rep.locator("body").innerText(), body0 = await a.textContent("#ires");
   check("the one-page KDF Information Operations Assessment appears automatically with exactly four sections", body.toUpperCase().includes("KDF INFORMATION OPERATIONS ASSESSMENT") && ["1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS"].every(h => body.toUpperCase().includes(h)) && !["KEY REFERENCES", "LIMITATIONS", "REPORT STATUS"].some(h => body.toUpperCase().includes(h)), body.slice(0, 200));
@@ -870,6 +870,9 @@ let watchDead = [], watchSeen = 0;
   check("PDF and Word downloads are offered", !!(await a.$('#iacts a[href$="report.pdf"]')) && !!(await a.$('#iacts a[href$="report.docx"]')));
   const pdf = await a.evaluate(async () => { const h = document.querySelector('#iacts a[href$="report.pdf"]').getAttribute("href"); const r = await fetch(h); return [r.status, (await r.text()).slice(0, 4)]; });
   check("the PDF report downloads", pdf[0] === 200 && pdf[1] === "%PDF", JSON.stringify(pdf));
+  { const auto = await a.textContent("#iauto").catch(() => ""), stg = await a.textContent("#istages");
+    check("1.33: the conclusion, its reasoning, confidence and the remaining uncertainties are generated automatically (no manual field)", /Automatic conclusion/.test(auto) && /Determined automatically from/.test(auto) && /Remaining uncertainties/.test(auto), auto.slice(0, 200));
+    check("1.33: the progress list shows every automated stage, through report generation and submission to the HOD queue", ["Content extraction", "Claim identification", "Evidence collection", "Evidence verification", "AI analysis", "Conclusion generation", "Report generation", "Submission to the HOD approval queue"].every(t => stg.includes(t)), stg.slice(0, 300)); }
   // 1.32: Head of Department approval in the browser: the analyst submits, the assigned HOD approves from the approval dashboard
   { const { hashPassword } = await import("../server/lib/auth.js"), { nowISO } = await import("../server/lib/db.js");
     S.ctx.db.prepare("INSERT INTO users(username,display_name,role,designation,password_hash,created_at) VALUES ('hode2e','HOD E2E','hod','Head of Department, Information Operations',?,?)").run(hashPassword(PW), nowISO());

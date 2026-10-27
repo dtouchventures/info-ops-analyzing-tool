@@ -147,7 +147,10 @@ test("1. news article link: page read with author and date, claims supported by 
   const c1 = r.claims.findIndex(c => /12 new cholera/.test(c.text)); assert.equal(r.assessments[c1].verdict, "supported");
   const top = r.top[r.claims[c1].id]; assert.ok(top.length >= 3 && top.length <= 6);
   const cs = (await ana.get(`/api/cases/${inv.case_id}`)).body; assert.ok(cs.case.source_snapshot_sha256, "page archived with the case");
-  assert.ok(cs.claims.every(c => !c.assessment || c.assessment === "unassessed"), "the analyst's own verdicts are left untouched");
+  // 1.33: AIVS completes the case itself; a supported claim always has accepted supporting evidence linked
+  const act = cs.claims.filter(c => !c.removed); assert.ok(act.length <= 2 && act.every(c => c.assessment && c.assessment !== "unassessed" && /^Observed:/.test(c.rationale)), "claims assessed automatically");
+  for (const c of act.filter(c => c.assessment === "supported")) assert.ok(cs.evidence.some(e => e.status === "accepted" && (e.links || []).some(l => l.claim_id === c.id && l.stance === "supports")), "supported only with accepted supporting evidence");
+  assert.equal(inv.stages.find(s => s.key === "submit").status, "warning", "no Head of Department is set up in this test: administrators are told, nothing is approved");
 });
 // 2 ---- Facebook link with restricted content
 test("2. Facebook link: restricted, nothing invented, qualified report asks for a screenshot", async () => {

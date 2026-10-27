@@ -22,7 +22,7 @@ export const contentOf = a => ({ background: a.background, analysis: a.analysis,
 export const contentHash = a => sha(JSON.stringify(contentOf(a)));
 const eat = iso => { const d = new Date(Date.parse(iso) + 3 * 3600e3), M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], p = n => String(n).padStart(2, "0"); return `${p(d.getUTCDate())} ${M[d.getUTCMonth()]} ${d.getUTCFullYear()} ${p(d.getUTCHours())}${p(d.getUTCMinutes())}hrs EAT`; };
 
-export function makeApprovals(db, { audit, storage, config }) {
+export function makeApprovals(db, { audit, storage, config, notify = null }) {
   // the secret behind verification codes: AIVS_REPORT_SECRET, or one generated once and kept in the database
   const secret = () => { if (config.reportSecret) return config.reportSecret; let r = db.prepare("SELECT value FROM settings WHERE key = 'report_verification_secret'").get();
     if (!r) { db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('report_verification_secret', ?)").run(crypto.randomBytes(32).toString("hex")); r = db.prepare("SELECT value FROM settings WHERE key = 'report_verification_secret'").get(); } return r.value; };
@@ -30,6 +30,7 @@ export function makeApprovals(db, { audit, storage, config }) {
   const getRow = (kind, refId) => db.prepare("SELECT * FROM report_approvals WHERE kind = ? AND ref_id = ?").get(kind, String(refId));
   const userName = id => id ? db.prepare("SELECT display_name, designation FROM users WHERE id = ?").get(id) : null;
 
+  const linkOf = r => r.kind === "investigation" ? `#/investigate/${r.ref_id}` : "#/reports";
   function event(row, action, user, { from, to, note = null, hash = null } = {}) {
     const prev = db.prepare("SELECT hash FROM report_approval_events WHERE approval_id = ? ORDER BY id DESC LIMIT 1").get(row.id)?.hash || "GENESIS", at = nowISO();
     const rec = { approval_id: row.id, action, from_status: from ?? row.status, to_status: to ?? row.status, version: row.version, content_sha256: hash ?? row.content_sha256, by_user: user?.id ?? null, by_name: user?.display_name || "system", at, note };
@@ -58,19 +59,23 @@ export function makeApprovals(db, { audit, storage, config }) {
   }
 
   // the analyst submits the report (as it stands now) to a Head of Department
-  function submit(user, kind, refId, a, { reportRef, createdBy, hodId, note = "", ready = true }) {
+  function submit(user, kind, refId, a, { reportRef, createdBy, hodId, note = "", ready = true, auto = false }) {
     if (!can(user, "report.submit")) throw new HttpError(403, "Your role cannot submit reports for approval.");
     if (!ready) throw new HttpError(409, "There is no report to submit yet: the investigation has no content or has not finished.");
     const row = ensure(kind, refId, reportRef, createdBy);
     if (!["draft", "returned"].includes(row.status)) throw new HttpError(409, row.status === "pending" ? "The report is already waiting for HOD approval." : row.status === "approved" ? "The report is approved. Revise it first if it must be submitted again." : "A rejected report cannot be submitted again; start a new investigation.");
-    const list = hods([user.id, createdBy].filter(Boolean)), hod = hodId ? list.find(u => u.id === +hodId) : list.length === 1 ? list[0] : null;
+    const list = hods([user.id, createdBy].filter(Boolean));
+    // automatic submission (1.33): the active Head of Department with the fewest reports waiting is assigned
+    const load = id => db.prepare("SELECT COUNT(*) n FROM report_approvals WHERE status = 'pending' AND assigned_hod = ?").get(id).n;
+    const hod = hodId ? list.find(u => u.id === +hodId) : list.length === 1 ? list[0] : auto && list.length ? list.map(u => [u, load(u.id)]).sort((x, y) => x[1] - y[1] || x[0].id - y[0].id)[0][0] : null;
     if (!list.length) throw new HttpError(409, "No Head of Department approver is set up. An administrator assigns the Head of Department role to the approver in Settings › Users.");
     if (!hod) throw new HttpError(400, hodId ? "Choose an active Head of Department other than yourself." : "Choose the Head of Department who should approve this report.");
     const h = contentHash(a), now = nowISO();
     db.prepare("UPDATE report_approvals SET status = 'pending', content_sha256 = ?, submitted_by = ?, submitted_at = ?, submit_note = ?, assigned_hod = ?, decided_by = NULL, decided_at = NULL, decision_note = NULL, updated_at = ? WHERE id = ?")
       .run(h, user.id, now, String(note || "").slice(0, 1000) || null, hod.id, now, row.id);
     const cur = getRow(kind, refId); snapshot(cur, a, user, "submitted for HOD approval");
-    event(cur, "submitted for HOD approval", user, { from: row.status, to: "pending", note: `assigned to ${hod.display_name}${note ? `: ${note}` : ""}`, hash: h });
+    event(cur, auto ? "submitted automatically for HOD approval" : "submitted for HOD approval", user, { from: row.status, to: "pending", note: `assigned to ${hod.display_name}${auto ? " (automatic assignment)" : ""}${note ? `: ${note}` : ""}`, hash: h });
+    notify?.send(hod.id, { kind: "approval_pending", title: `Report ${cur.report_ref} is waiting for your approval`, body: `${auto ? "Submitted automatically by AIVS" : `Submitted by ${user.display_name}`} for Head of Department approval.`, link: linkOf(cur), ref: cur.report_ref });
     return state(kind, refId);
   }
   // the Head of Department decides; approval also produces the final PDF (render(approvalInfo) → Buffer) and stores it
@@ -87,6 +92,7 @@ export function makeApprovals(db, { audit, storage, config }) {
       const to = action === "return" ? "returned" : "rejected";
       db.prepare("UPDATE report_approvals SET status = ?, decided_by = ?, decided_at = ?, decision_note = ?, updated_at = ? WHERE id = ?").run(to, user.id, now, note, now, row.id);
       event(row, action === "return" ? "returned for revision" : "rejected", user, { from: "pending", to, note });
+      notify?.send([row.submitted_by, row.created_by], { kind: `approval_${to}`, title: `Report ${row.report_ref} was ${action === "return" ? "returned for revision" : "rejected"} by the Head of Department`, body: note, link: linkOf(row), ref: row.report_ref });
       return state(kind, refId);
     }
     if (action !== "approve") throw new HttpError(400, "Choose approve, return or reject.");
@@ -99,6 +105,7 @@ export function makeApprovals(db, { audit, storage, config }) {
     db.prepare("UPDATE report_approvals SET status = 'approved', decided_by = ?, decided_at = ?, decision_note = ?, approval_ref = ?, approved_sha256 = ?, pdf_sha256 = ?, verify_code = ?, approver_name = ?, approver_designation = ?, updated_at = ? WHERE id = ?")
       .run(user.id, now, note || null, ref, row.content_sha256, stored.sha256, code, ap.name, ap.designation, now, row.id);
     event(getRow(kind, refId), "approved by the Head of Department", user, { from: "pending", to: "approved", note: `${ref}${note ? `: ${note}` : ""}` });
+    notify?.send([row.submitted_by, row.created_by], { kind: "approval_approved", title: `Report ${row.report_ref} was approved by ${u.display_name}`, body: `Approval reference ${ref}. The final approved PDF is available.`, link: linkOf(row), ref: row.report_ref });
     return state(kind, refId);
   }
   // a material change (the analyst edits the report, or the investigation is re-run): back to draft; an approval stops counting

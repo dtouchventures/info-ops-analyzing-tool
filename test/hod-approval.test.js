@@ -23,6 +23,9 @@ before(async () => {
     if (u.pathname === "/api/chat") { let b = ""; req.on("data", d => (b += d)); req.on("end", () => {
       const p = JSON.parse(b).messages.at(-1).content, say = o => j(200, { model: "qwen3:4b-instruct", message: { content: typeof o === "string" ? o : JSON.stringify(o) } });
       if (/single word OK/.test(p)) return say("OK");
+      if (/why the stated verdict follows/.test(p)) { AI.calls.push("explain"); const ns = [...p.matchAll(/"n":(\d+)/g)].map(m => +m[1]);
+        return say({ claims: [{ n: ns[0], explanation: "The accepted fact-check and its article both describe recruitment as free of charge, the opposite of what the post states." }, ...(ns[1] ? [{ n: ns[1], explanation: "This claim is false, see https://example.invalid/proof" }] : [])],
+          conclusion: "The principal claim is contradicted by accepted evidence, while what remains uncertain is stated separately." }); }
       if (/PRINCIPAL claims/.test(p)) { AI.calls.push("rank"); const lines = p.split("\n").filter(l => /^\d+\. /.test(l)); const pick = lines.filter(l => /KSh|WhatsApp/.test(l)).map(l => +l.split(".")[0]); return say({ principal: pick.slice(0, 3), reason: "fixture" }); }
       if (/KDF \(Kenya Defence Forces\) Information Operations Assessment/.test(p)) { AI.calls.push("draft");
         return say({ background: "A Facebook post claims that KDF recruitment is open and that applicants must pay KSh 2,000 to register through WhatsApp. The content is significant to KDF because recruitment fraud targets young applicants and could damage confidence in official recruitment.",
@@ -80,16 +83,43 @@ test("AI recommendations that ask for manual verification are refused; the rule-
   assert.ok(inv.result.ai.notes.some(n => /recommendations: .*not within the rules/.test(n)), JSON.stringify(inv.result.ai.notes));
 });
 
-test("HOD approval: submission, permissions, return for revision, revision rules, approval, final PDF with genuine approval details, verification", async () => {
-  // an analyst cannot approve, an administrator has no approval authority, and nothing can be decided before submission
+test("automatic completion and submission: the case is completed by AIVS (no manual fields), the draft goes to the HOD queue by itself, the HOD is notified", async () => {
+  const inv = (await ana.get(`/api/investigations/${invId}`)).body, r = inv.result, db = S.ctx.db;
+  assert.deepEqual(inv.stages.map(s => s.key), ["source", "extract", "analyse", "search", "compare", "media", "assess", "conclude", "report", "submit"]);
+  assert.equal(inv.stages.find(s => s.key === "conclude").status, "done"); assert.match(inv.stages.find(s => s.key === "submit").detail, /submitted automatically · pending HOD approval · HOD/);
+  // the case: claims assessed with an evidence-based rationale, evidence validated and linked, conclusion, reasoning, uncertainties
+  const c = db.prepare("SELECT * FROM cases WHERE id = ?").get(inv.case_id), cls = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0").all(c.id);
+  assert.equal(c.status, "awaiting_approval"); assert.equal(c.approval_route, "hod"); assert.ok(c.auto_completed_at);
+  assert.equal(c.conclusion, "contradicted", JSON.stringify({ c: c.conclusion, cls: S.ctx.db.prepare("SELECT seq, assessment, removed, rationale FROM claims WHERE case_id = ?").all(c.id), st: c.status })); assert.match(c.conclusion_rationale, /Determined automatically from/); assert.match(c.conclusion_rationale, /Confidence: (High|Medium|Low)/); assert.ok(c.uncertainties.trim().length > 10);
+  assert.ok(cls.length >= 1 && cls.length <= 2, "at most two principal claims stay in the case");
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id = ? AND removed = 1 AND rationale LIKE 'Recorded but not prioritised%'").get(c.id).n >= 1, "the other statements are kept, not deleted");
+  for (const cl of cls) { assert.equal(cl.assessed_auto, 1); assert.notEqual(cl.assessment, "unassessed"); assert.match(cl.rationale, /^Observed: .*Interpretation \(AIVS rules\)/); assert.doesNotMatch(cl.rationale, /^ok$/i); }
+  const ev = db.prepare("SELECT * FROM evidence WHERE case_id = ?").all(c.id);
+  assert.equal(ev.filter(e => e.status === "suggested").length, 0, "every suggestion was decided by the rules");
+  for (const e of ev.filter(e => e.origin === "retrieval")) { const v = JSON.parse(e.validation); assert.equal(v.by, "AIVS rules"); assert.equal(v.accepted, e.status === "accepted"); }
+  for (const cl of cls) assert.ok(db.prepare("SELECT COUNT(*) n FROM evidence_links l JOIN evidence e ON e.id = l.evidence_id WHERE l.claim_id = ? AND e.status = 'accepted'").get(cl.id).n <= 2, "at most two evidence items per claim");
+  const fc = ev.find(e => e.connector === "factcheck" && e.status === "accepted"); assert.ok(fc, "the fact-check was accepted"); assert.ok(fc.source_url && fc.retrieved_at, "original address and time kept");
+  assert.equal(db.prepare("SELECT stance FROM evidence_links WHERE evidence_id = ?").get(fc.id).stance, "contradicts");
+  assert.equal((await ana.get(`/api/cases/${c.id}/readiness`)).body.ok, true, "no manual completion is needed");
+  assert.equal(r.automation.conclusion, "contradicted", JSON.stringify(r.automation).slice(0, 600)); assert.ok(r.automation.uncertainties.length >= 1); assert.ok(r.automation.ai && AI.calls.includes("explain"), "the AI explained the decided verdicts"); assert.ok(!cls.some(x => /example\.invalid/.test(x.rationale)), "an AI sentence with a link or a truth claim is not used");
+  assert.match(cls[0].rationale + c.conclusion_rationale, /AI interpretation \(qwen3:4b-instruct, checked; not evidence\)/);
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM case_gaps WHERE case_id = ? AND origin = 'rules' AND rule_code LIKE 'auto_%'").get(c.id).n >= 1, "uncertainties appear in evidence coverage");
+  // nothing is ever "supported" without accepted supporting evidence (whole database)
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM claims c WHERE c.assessment = 'supported' AND c.removed = 0 AND NOT EXISTS (SELECT 1 FROM evidence_links l JOIN evidence e ON e.id = l.evidence_id WHERE l.claim_id = c.id AND l.stance = 'supports' AND e.status = 'accepted')").get().n, 0);
+  // the approval record and the HOD's notification
+  const st0 = (await ana.get(`/api/investigations/${invId}/approval`)).body; assert.equal(st0.status, "pending"); assert.equal(st0.assigned_hod_name, "HOD", "the least-loaded HOD is assigned");
+  assert.equal(st0.events[0].action, "submitted automatically for HOD approval");
+  const nt = (await hod.get("/api/notifications")).body; assert.ok(nt.unread >= 1 && nt.items.some(n => n.kind === "approval_pending" && n.ref === inv.report_id), JSON.stringify(nt));
+  assert.equal((await rev.post(`/api/cases/${c.id}/decision`, { decision: "approve" })).status, 409, "a reviewer does not decide a case that goes to the HOD");
+  assert.equal((await ana.post(`/api/cases/${c.id}/submit`, {})).status, 409);
+});
+
+test("HOD approval: permissions, return for revision, revision rules, approval, final PDF with genuine approval details, verification; the case follows", async () => {
+  // an analyst cannot approve, an administrator has no approval authority, another HOD cannot decide
   assert.equal((await ana.post(`/api/investigations/${invId}/decision`, { action: "approve" })).status, 403);
   assert.equal((await admin.post(`/api/investigations/${invId}/decision`, { action: "approve" })).status, 403);
-  assert.equal((await hod.post(`/api/investigations/${invId}/decision`, { action: "approve" })).status, 409, "not submitted yet");
-  const st0 = (await ana.get(`/api/investigations/${invId}/approval`)).body; assert.equal(st0.status, "draft"); assert.ok(st0.hods.length === 2);
-  assert.equal((await ana.post(`/api/investigations/${invId}/submit`, {})).status, 400, "the HOD must be chosen when there are several");
-  assert.equal((await ana2.post(`/api/investigations/${invId}/submit`, { hod_id: st0.hods[0].id })).status, 403, "only the analyst who ran it (or a reviewer) submits it");
-  const hodId = st0.hods.find(h => h.name === "HOD").id;
-  const sub = await ana.post(`/api/investigations/${invId}/submit`, { hod_id: hodId, note: "Fact-check and article read." }); assert.equal(sub.status, 200, JSON.stringify(sub.body)); assert.equal(sub.body.status, "pending"); assert.equal(sub.body.assigned_hod_name, "HOD");
+  const caseId = S.ctx.db.prepare("SELECT case_id FROM investigations WHERE id = ?").get(invId).case_id, cstat = () => S.ctx.db.prepare("SELECT status FROM cases WHERE id = ?").get(caseId).status;
+  const hodId = (await ana.get(`/api/investigations/${invId}/approval`)).body.hods.find(h => h.name === "HOD").id;
   assert.equal((await hod2.post(`/api/investigations/${invId}/decision`, { action: "approve" })).status, 403, "only the assigned HOD decides");
   // the dashboard
   assert.ok((await hod.get("/api/approvals?status=pending")).body.reports.some(x => x.ref_id === invId && x.can_decide));
@@ -98,13 +128,15 @@ test("HOD approval: submission, permissions, return for revision, revision rules
   // returned for revision, with a reason
   assert.equal((await hod.post(`/api/investigations/${invId}/decision`, { action: "return" })).status, 400, "a return needs a reason");
   assert.equal((await hod.post(`/api/investigations/${invId}/decision`, { action: "return", note: "Shorten recommendation 3." })).body.status, "returned");
+  assert.equal(cstat(), "needs_evidence", "the case is returned with the report"); assert.ok((await ana.get("/api/notifications")).body.items.some(n => n.kind === "approval_returned"));
   const cur = (await ana.get(`/api/investigations/${invId}/report.json`)).body;
   const bad = await ana.put(`/api/investigations/${invId}/assessment`, { recommendations: [...cur.recommendations.slice(0, 2), "Visit the KDF website to verify the information manually."] }); assert.equal(bad.status, 400); assert.match(bad.body.error, /There is a need to|verification work/);
   const ok = await ana.put(`/api/investigations/${invId}/assessment`, { recommendations: [...cur.recommendations.slice(0, 2), "There is a need to monitor recruitment narratives through the AIVS watchlist."] }); assert.equal(ok.status, 200, JSON.stringify(ok.body)); assert.equal(ok.body.status, "returned"); assert.equal(ok.body.version, 2);
-  assert.equal((await ana.post(`/api/investigations/${invId}/submit`, { hod_id: hodId })).body.status, "pending");
+  assert.equal((await ana.post(`/api/investigations/${invId}/submit`, { hod_id: hodId })).body.status, "pending"); assert.equal(cstat(), "awaiting_approval");
   // approval: the final PDF is generated, stored and served; it carries the HOD's name, designation, date, reference and code
   const ap = await hod.post(`/api/investigations/${invId}/decision`, { action: "approve", note: "Approved for release." }); assert.equal(ap.status, 200, JSON.stringify(ap.body));
   assert.equal(ap.body.status, "approved"); assert.match(ap.body.approval_ref, /^APR-\d{8}-\d{3}$/);
+  assert.equal(cstat(), "approved", "the HOD's approval is the case approval"); assert.ok(S.ctx.db.prepare("SELECT 1 FROM reports WHERE case_id = ?").get(caseId), "the case report is frozen");
   const html = (await ana.get(`/api/investigations/${invId}/report.html`)).body; assert.match(html, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(html, /Head of Department, Information Operations/); assert.doesNotMatch(html, /DRAFT — NOT APPROVED/);
   const p1 = await pdfText(ana, `/api/investigations/${invId}/report.pdf`), p2 = await pdfText(rev, `/api/investigations/${invId}/report.pdf`);
   assert.equal(p1.pages, 1); assert.ok(p1.buf.equals(p2.buf), "the stored approved PDF is served unchanged");
@@ -120,21 +152,22 @@ test("HOD approval: submission, permissions, return for revision, revision rules
   assert.equal((await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=${code}`).then(r => r.json())).valid, false, "the old approval no longer verifies");
   // the record: events, versions, audit and an intact hash chain
   const st = (await ana.get(`/api/investigations/${invId}/approval`)).body;
-  assert.deepEqual(st.events.map(e => e.action), ["submitted for HOD approval", "returned for revision", "revised", "submitted for HOD approval", "approved by the Head of Department", "approval invalidated by a material change"]);
+  assert.deepEqual(st.events.map(e => e.action), ["submitted automatically for HOD approval", "returned for revision", "revised", "submitted for HOD approval", "approved by the Head of Department", "approval invalidated by a material change"]);
   assert.ok(st.versions.length >= 4); assert.ok(S.ctx.approvals.chainIntact("investigation", invId));
   const audit = S.ctx.db.prepare("SELECT action FROM audit_log WHERE entity = 'investigation' AND entity_id = ?").all(invId).map(x => x.action);
-  for (const x of ["Report submitted for HOD approval", "Report returned for revision", "Report approved by the Head of Department", "Report approval invalidated by a material change"]) assert.ok(audit.includes(x), x);
+  for (const x of ["Report submitted automatically for HOD approval", "Report submitted for HOD approval", "Report returned for revision", "Report approved by the Head of Department", "Report approval invalidated by a material change"]) assert.ok(audit.includes(x), x);
   S.ctx.db.prepare("UPDATE report_approval_events SET note = 'tampered' WHERE id = (SELECT MIN(id) FROM report_approval_events)").run();
   assert.equal(S.ctx.approvals.chainIntact("investigation", invId), false, "a changed event breaks the chain");
 });
 
 test("rejection needs a reason and is final; the HOD cannot decide on a report they prepared", async () => {
-  const hodId = (await ana2.get(`/api/investigations/${inv2Id}/approval`)).body.hods.find(h => h.name === "HOD2").id;
-  assert.equal((await ana2.post(`/api/investigations/${inv2Id}/submit`, { hod_id: hodId })).status, 200);
+  const hodId = (await ana2.get(`/api/investigations/${inv2Id}/approval`)).body.hods.find(h => h.name === "HOD2").id, st = (await ana2.get(`/api/investigations/${inv2Id}/approval`)).body;
+  assert.equal(st.status, "pending", "submitted automatically"); assert.equal(st.assigned_hod_name, "HOD2", "the HOD with fewer reports waiting");
   assert.equal((await hod2.post(`/api/investigations/${inv2Id}/decision`, { action: "reject" })).status, 400);
   const rj = await hod2.post(`/api/investigations/${inv2Id}/decision`, { action: "reject", note: "Insufficient evidence for release." }); assert.equal(rj.body.status, "rejected");
   assert.equal((await ana2.post(`/api/investigations/${inv2Id}/submit`, { hod_id: hodId })).status, 409); assert.equal((await ana2.put(`/api/investigations/${inv2Id}/assessment`, {})).status, 409);
   assert.match((await ana2.get(`/api/investigations/${inv2Id}/report.html`)).body, /DRAFT — NOT APPROVED \(Rejected\)/);
+  assert.equal(S.ctx.db.prepare("SELECT c.status FROM cases c JOIN investigations i ON i.case_id = c.id WHERE i.id = ?").get(inv2Id).status, "rejected");
   // a HOD who submitted a report cannot approve it (a HOD given the reviewer's submit right is still refused)
   const row = S.ctx.db.prepare("SELECT id FROM report_approvals WHERE ref_id = ?").get(inv2Id);
   S.ctx.db.prepare("UPDATE report_approvals SET status = 'pending', submitted_by = (SELECT id FROM users WHERE username = 'hod2'), assigned_hod = (SELECT id FROM users WHERE username = 'hod2') WHERE id = ?").run(row.id);

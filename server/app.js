@@ -45,6 +45,8 @@ import { makeLimiter } from "./lib/ratelimit.js";
 import { makeLiveMonitor } from "./lib/livemonitor.js";
 import { makeKeywordSearch } from "./lib/keywordsearch.js";
 import { makeApprovals } from "./lib/approvals.js";
+import { makeNotify } from "./lib/notify.js";
+import { makeAutoComplete, ACCEPT_RULES } from "./lib/autocomplete.js";
 import { submissionHashes, ham, levelOf } from "./lib/hashing.js";
 import { sniff } from "./lib/sniff.js";
 import { THRESH } from "./lib/hashing.js";
@@ -94,12 +96,15 @@ export function createApp(config) {
   }
   const VERSION0 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
-  const approvals = makeApprovals(db, { audit, storage, config });
-  const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0, approvals });
+  const notify = makeNotify(db);
+  const approvals = makeApprovals(db, { audit, storage, config, notify });
+  const autocomplete = makeAutoComplete(db, { cases });
+  const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0, approvals, autocomplete, notify });
+  investigations.useCaseReports(id => reports.render(id));
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
-  const ctx = { approvals, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const ctx = { approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -1206,6 +1211,21 @@ export function createApp(config) {
   api.get("/investigations/services", (req, res) => { const s = investigations.services(); res.json({ reverse_search: s.reverse_search, ai_vision: s.ai_vision, evidence: s.evidence, ai: { configured: s.ai.configured, model: s.ai.model || null, local: !!s.ai.local, reason: s.ai.reason || null } }); });
   // ---------------------------------------------------------------- Head of Department approval (1.32)
   api.get("/approvals", (req, res) => res.json(approvals.list(req.user, req.query)));
+  // 1.33: in-app notifications, the technical-review queue and the documented evidence-acceptance rules
+  api.get("/notifications", (req, res) => res.json(notify.list(req.user, { all: req.query.all === "1", limit: req.query.limit })));
+  api.post("/notifications/:id/read", h((req, res) => { notify.read(req.user, req.params.id); res.json({ ok: true }); }));
+  api.get("/technical-reviews", requirePerm("case.read"), (req, res) => {
+    const rows = db.prepare(`SELECT t.*, u.display_name AS by_name, v.display_name AS resolved_by_name FROM technical_reviews t LEFT JOIN users u ON u.id = t.created_by LEFT JOIN users v ON v.id = t.resolved_by
+      ${req.query.status === "all" ? "" : "WHERE t.status = 'open'"} ORDER BY t.id DESC LIMIT 200`).all();
+    res.json({ open: db.prepare("SELECT COUNT(*) n FROM technical_reviews WHERE status = 'open'").get().n, items: rows });
+  });
+  api.post("/technical-reviews/:id/resolve", requirePerm("users.manage"), h((req, res) => {
+    const note = String(req.body?.resolution || "").trim(); if (!note) throw new HttpError(400, "Say how the failure was resolved.");
+    const r = db.prepare("UPDATE technical_reviews SET status = 'resolved', resolved_by = ?, resolved_at = ?, resolution = ? WHERE id = ? AND status = 'open'").run(req.user.id, nowISO(), note.slice(0, 1000), +req.params.id);
+    if (!r.changes) throw new HttpError(404, "No open technical review with that number.");
+    audit(req.user, "Technical review resolved", "technical_review", String(req.params.id), { resolution: note.slice(0, 300) }); res.json({ ok: true });
+  }));
+  api.get("/evidence-rules", (req, res) => res.json({ rules: ACCEPT_RULES }));
   api.get("/approvals/hods", (req, res) => res.json({ hods: approvals.hods([req.user.id]).map(u => ({ id: u.id, name: u.display_name, designation: u.designation })) }));
   api.get("/investigations/:id/approval", (req, res) => res.json(investigations.approvalState(req.params.id)));
   api.post("/investigations/:id/submit", requirePerm("report.submit"), h((req, res) => res.json(investigations.submitReport(req.user, req.params.id, req.body || {}))));

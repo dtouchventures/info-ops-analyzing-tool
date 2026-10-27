@@ -13,6 +13,14 @@ import { LOCATION_SOURCES } from "/shared/account-location.js";
 import { renderSteps, currentStep, STEP_NAMES, moreTools } from "./steps.js";
 import { renderAutomatic } from "./automatic.js";
 
+// cases of automatic investigations (1.33): completed by AIVS, decided by the Head of Department in the report approval queue
+const hodRoute = c => c.approval_route === "hod" || !!c.auto_completed_at;
+function autoNote(c) {
+  if (!hodRoute(c)) return "";
+  const inv = c.investigation, link = inv ? `<a href="#/investigate/${esc(inv.id)}">${esc(inv.report_id)}</a>` : "its investigation";
+  return `<div class="callout info" id="autoNote"><div>${c.auto_completed_at ? `<b>Completed automatically by AIVS</b> on ${fmtDT(c.auto_completed_at)}: claims assessed from accepted evidence, rationales, the conclusion${c.confidence ? ` (confidence ${esc(c.confidence)})` : ""} and the remaining uncertainties were written by the investigation pipeline. ` : ""}
+    Approval is by the Head of Department through the report approval panel of ${link}${c.status === "awaiting_approval" ? " (pending HOD approval)" : ""}. Manual changes here are for exceptional review, corrections or a returned report.</div></div>`;
+}
 const TABS = [["overview", "Overview"], ["media", "Media & matches"], ["claims", "Claims"], ["evidence", "Evidence"], ["coverage", "Evidence coverage"], ["assistant", "Assistant"], ["ai", "AI assistance"], ["report", "Conclusion & report"], ["notes", "Notes"], ["history", "History"]];
 const STYPE = { appeal: "call to action", opinion: "opinion", prediction: "prediction", satire: "satire or humour", question: "question" };
 const STYPE_HELP = { opinion: "Looks like an opinion or value judgement, which cannot be shown true or false. If so, remove it (it stays on record), or assess it as insufficient evidence and say why. Check any facts it relies on as separate claims.",
@@ -680,10 +688,11 @@ export async function render(el, [id, tabArg], { isCurrent }) {
         <textarea id="cb" rows="7" ${ed ? "" : "disabled"} style="margin-top:6px;font-family:var(--mono);font-size:12.5px" placeholder="Plain-text summary for briefs and corrections">${esc(c.brief || "")}</textarea>
         ${ed ? `<div class="row" style="margin-top:12px"><button class="btn primary" id="saveC">Save</button></div>` : ""}</div></div>
     </div><div class="stack">
-      ${["analyst_review", "needs_evidence"].includes(c.status) ? `<div class="card"><div class="hd"><h3>Submit for approval</h3></div><div class="bd">
+      ${autoNote(c)}
+      ${["analyst_review", "needs_evidence"].includes(c.status) && !hodRoute(c) ? `<div class="card"><div class="hd"><h3>Submit for approval</h3></div><div class="bd">
         ${ready?.ok ? `<div class="callout good"><div><b>Ready.</b> Every claim is assessed with a rationale and backed by evidence, all suggestions are reviewed, and the conclusion matches the claims.</div></div>` : `<div class="callout warn"><div><b>Not ready yet:</b><ul class="problems">${(ready?.problems || []).map(p => `<li>${esc(p)}</li>`).join("")}</ul><a class="btn sm" href="#/case/${esc(c.id)}/coverage">See each claim’s evidence coverage</a></div></div>`}
         ${P.edit ? `<button class="btn primary" id="submitA" style="margin-top:12px" ${ready?.ok ? "" : "disabled"}>Submit for approval</button><div class="hint">The case locks while a reviewer decides. A different person must approve it.</div>` : ""}</div></div>` : ""}
-      ${c.status === "awaiting_approval" ? `<div class="card"><div class="hd"><h3>Reviewer decision</h3></div><div class="bd">
+      ${c.status === "awaiting_approval" && !hodRoute(c) ? `<div class="card"><div class="hd"><h3>Reviewer decision</h3></div><div class="bd">
         <p class="small">Submitted by <b>${esc(c.submitter?.name || "—")}</b> ${fmtDT(c.submitted_at)}.</p>
         ${P.approve ? `<p class="small muted">Read the draft report, check the claims and evidence, then decide. Approval freezes the report with a fingerprint.</p>
           <label class="f" for="rc">Comment</label><textarea id="rc" rows="3" placeholder="Required for “Needs additional evidence” and “Reject”; optional when approving"></textarea>

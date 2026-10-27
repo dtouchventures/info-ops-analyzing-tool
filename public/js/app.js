@@ -58,7 +58,7 @@ function shell() {
   $("#root").innerHTML = `<div class="shell">
     <aside class="side" aria-label="Main navigation">
       <div class="brand"><div class="brand-mark">AIVS</div><div><b>AIVS</b><span>Information verification</span></div></div>
-      <nav class="nav">${nav.map(([k, h, l, ic]) => `<a href="${h}" data-nav="${k}">${icon(ic)}<span>${l}</span>${k === "verify" ? `<span class="count" id="navReview" hidden title="Cases awaiting approval"></span>` : k === "watch" ? `<span class="count" id="navWatch" hidden></span>` : k === "live" ? `<span class="count" id="navLive" hidden></span>` : ""}</a>`).join("")}
+      <nav class="nav">${nav.map(([k, h, l, ic]) => `<a href="${h}" data-nav="${k}">${icon(ic)}<span>${l}</span>${k === "verify" ? `<span class="count" id="navReview" hidden title="Cases awaiting approval"></span>` : k === "watch" ? `<span class="count" id="navWatch" hidden></span>` : k === "live" ? `<span class="count" id="navLive" hidden></span>` : k === "reports" ? `<span class="count" id="navNotif" hidden title="New notifications for you"></span>` : ""}</a>`).join("")}
         ${more.length ? `<details class="navmore" id="navMore" open><summary>${icon("cases")}<span>Other tools</span></summary>${more.map(([k, h, l, ic]) => `<a href="${h}" data-nav="x-${k}">${icon(ic)}<span>${l}</span></a>`).join("")}</details>` : ""}</nav>
       <div class="side-foot"><b>${esc(App.me.display_name)}</b>${esc(App.meta.roles[App.me.role])} · <a href="#" id="pwLink" style="color:#9fd8d5">Password</a> · <a href="#/privacy" style="color:#9fd8d5">Privacy</a> · <a href="#" id="logout" style="color:#9fd8d5">Sign out</a></div>
     </aside>
@@ -101,6 +101,7 @@ async function route() {
 }
 export async function refreshNavCounts() {
   try { const d = await api.get(`/api/dashboard?${App.q()}`); const n = d.counts.awaiting_approval, el = $("#navReview"); if (el) { el.hidden = !n; el.textContent = n; } } catch {}
+  try { const nt = await api.get("/api/notifications?limit=1"), el = $("#navNotif"); if (el) { el.hidden = !nt.unread; el.textContent = nt.unread; } } catch {}
   try { const o = await api.get(`/api/live/alerts?status=new&scope=watchlists&limit=500&${App.q()}`), el = $("#navLive"); if (el) { el.hidden = !o.alerts.length; el.textContent = o.alerts.length; el.title = "New live monitoring alerts"; } } catch {}
   try { const w = await api.get("/api/watch/alerts?status=new&limit=1"), el = $("#navWatch"); if (el) { el.hidden = !w.total; el.textContent = w.total; el.title = "New mention alerts"; } } catch {}
 }
@@ -141,7 +142,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.32.0";
+export const CLIENT_VERSION = "1.33.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

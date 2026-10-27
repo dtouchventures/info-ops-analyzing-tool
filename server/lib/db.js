@@ -281,7 +281,23 @@ function mig20(db) {
     content_sha256 TEXT, by_user INTEGER REFERENCES users(id), by_name TEXT, at TEXT NOT NULL, note TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS report_approvals_status ON report_approvals(status, assigned_hod);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// 1.33: automatic completion of investigations: which records AIVS completed itself, how each evidence item was validated,
+// the approval route of a case, in-app notifications and the technical-review queue
+function mig21(db) {
+  const add = (t, c, def) => { if (!db.prepare(`PRAGMA table_info(${t})`).all().some(x => x.name === c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
+  add("claims", "assessed_auto", "INTEGER NOT NULL DEFAULT 0");
+  add("evidence", "validation", "TEXT");
+  add("cases", "approval_route", "TEXT");
+  add("cases", "auto_completed_at", "TEXT");
+  add("cases", "confidence", "TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, link TEXT,
+    ref TEXT, created_at TEXT NOT NULL, read_at TEXT);
+  CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at);
+  CREATE TABLE IF NOT EXISTS technical_reviews (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, ref_id TEXT NOT NULL, case_id TEXT, report_ref TEXT, stage TEXT, error TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')), created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL, resolved_by INTEGER REFERENCES users(id), resolved_at TEXT, resolution TEXT);
+  CREATE INDEX IF NOT EXISTS technical_reviews_status ON technical_reviews(status);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

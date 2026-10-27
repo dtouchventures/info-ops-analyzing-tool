@@ -7,7 +7,8 @@ import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
 
-const STAGES = [["source", "Detecting the source"], ["extract", "Extracting the content (authorised methods)"], ["analyse", "Detecting claims (AI)"], ["search", "Collecting evidence"], ["compare", "Cross-checking sources"], ["media", "Checking images and media"], ["assess", "Assessment"], ["report", "Generating the report"]];
+// the automated workflow (1.33): each stage runs by itself; the list a saved investigation recorded is shown as it was
+const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (at most two principal claims)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
 const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "warn", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
@@ -94,7 +95,8 @@ const bookmarklet = () => `javascript:(()=>{const s=String(getSelection()||'').t
 
 function stages(list) {
   const by = Object.fromEntries((list || []).map(s => [s.key, s]));
-  $("#istages").innerHTML = STAGES.map(([k, l], i) => { const s = by[k] || { status: "pending" };
+  const order = list?.length ? list.map(s => [s.key, s.label || (STAGES.find(x => x[0] === s.key) || [])[1] || s.key]) : STAGES;
+  $("#istages").innerHTML = order.map(([k, l], i) => { const s = by[k] || { status: "pending" };
     return `<li class="${esc(s.status)}"><span class="dot">${s.status === "done" ? "✓" : s.status === "warning" ? "!" : s.status === "failed" ? "×" : s.status === "skipped" ? "–" : ""}</span><span>${i + 1}. ${esc(l)}${s.detail ? `<span class="tiny sub" style="display:block">${esc(s.detail)}</span>` : ""}</span></li>`; }).join("");
 }
 function preview(p) {
@@ -151,9 +153,12 @@ async function approvalPanel(inv, base, refresh) {
   const mine = inv.created_by === me || App.can("case.approve"), canEdit = App.can("report.submit") && mine && ["draft", "returned", "approved", "pending"].includes(st.status);
   const canSubmit = App.can("report.submit") && mine && ["draft", "returned"].includes(st.status);
   const canDecide = App.can("report.hod") && st.status === "pending" && st.assigned_hod === me && st.submitted_by_id !== me && inv.created_by !== me;
+  // the last step of the progress list: the Head of Department's decision (only a person makes it)
+  const fin = { pending: ["running", "Pending HOD approval", `assigned to ${st.assigned_hod_name || "the Head of Department"}`], approved: ["done", "Approved", `${st.approval_ref || ""} · ${st.approver_name || ""}`], returned: ["warning", "Returned for revision", st.decision_note || ""], rejected: ["failed", "Rejected", st.decision_note || ""] }[st.status];
+  const ol = $("#istages"); if (ol && !$("#istHod", ol)) ol.insertAdjacentHTML("beforeend", `<li id="istHod" class="${fin ? fin[0] : "pending"}"><span class="dot">${fin?.[0] === "done" ? "✓" : fin?.[0] === "warning" ? "!" : fin?.[0] === "failed" ? "×" : ""}</span><span>${ol.children.length + 1}. Head of Department decision: ${esc(fin ? fin[1] : "not yet submitted")}${fin?.[2] ? `<span class="tiny sub" style="display:block">${esc(fin[2])}</span>` : ""}</span></li>`);
   const [lab, cls] = ASTATUS[st.status] || ASTATUS.draft;
   $("#iappr").innerHTML = `<div class="card" style="margin:0 0 12px" id="apprCard"><div class="hd"><h3>Report approval</h3><span class="chip ${cls}" id="apprStatus">${esc(lab)}</span></div><div class="bd small">
-    <div>AI Draft → Analyst review → Pending HOD approval → HOD review → Approved → Final approved PDF. ${st.status === "approved" ? `<b>Approval ${esc(st.approval_ref)}</b> by ${esc(st.approver_name)}${st.approver_designation ? `, ${esc(st.approver_designation)}` : ""} on ${esc(eat(st.decided_at))}. <a href="${base}.pdf" download>Final approved PDF</a>` : "The PDF is marked “DRAFT — NOT APPROVED” until the Head of Department approves it."}</div>
+    <div>AI draft (completed automatically) → submitted automatically → Pending HOD approval → HOD review → Approved, Returned or Rejected → Final approved PDF. ${st.status === "approved" ? `<b>Approval ${esc(st.approval_ref)}</b> by ${esc(st.approver_name)}${st.approver_designation ? `, ${esc(st.approver_designation)}` : ""} on ${esc(eat(st.decided_at))}. <a href="${base}.pdf" download>Final approved PDF</a>` : "The PDF is marked “DRAFT — NOT APPROVED” until the Head of Department approves it."}</div>
     ${st.assigned_hod_name ? `<div>Assigned Head of Department: <b>${esc(st.assigned_hod_name)}</b>${st.submitted_at ? ` · submitted by ${esc(st.submitted_by || "")} on ${esc(eat(st.submitted_at))}` : ""}</div>` : ""}
     ${st.decision_note && ["returned", "rejected"].includes(st.status) ? `<div class="callout ${st.status === "rejected" ? "bad" : "warn"}" style="margin-top:6px"><div><b>${st.status === "rejected" ? "Reason for rejection" : "What to revise"}:</b> ${esc(st.decision_note)}</div></div>` : ""}
     ${canSubmit || canEdit ? `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:flex-end">${canEdit ? `<button class="btn sm" id="apEdit">Revise the report</button>` : ""}
@@ -192,6 +197,15 @@ function aiFindings(a) {
     ${a.gaps.length ? `<div style="margin-top:6px"><b>Information gaps</b><ul style="margin:2px 0 0 18px">${a.gaps.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
     <p class="tiny sub" style="margin:6px 0 0">${esc(a.note)}</p></div></div>`;
 }
+// the conclusion AIVS generated itself (1.33): overall finding, reasoning, confidence, evidence base and remaining uncertainties
+function autoCard(m) {
+  if (!m) return "";
+  if (m.error) return `<div class="callout bad" style="margin-top:12px" id="iauto"><div><b>Automatic completion failed:</b> ${esc(m.error)}. The investigation was routed for technical review; nothing was concluded.</div></div>`;
+  return `<div class="card" style="margin-top:12px" id="iauto"><div class="hd"><h3>Automatic conclusion</h3><span class="chip info">${esc(m.conclusion_label || "")} · confidence ${esc(m.confidence || "Low")}</span></div><div class="bd small">
+    <p style="margin:0 0 6px">${esc(m.reasoning || "")}</p>
+    <div><b>Remaining uncertainties and evidence limitations</b>${m.uncertainties?.length ? `<ul style="margin:4px 0 6px 18px">${m.uncertainties.map(u => `<li>${esc(u)}</li>`).join("")}</ul>` : `<p class="sub" style="margin:4px 0">None identified.</p>`}</div>
+    <p class="tiny sub" style="margin:4px 0 0">${m.accepted} evidence item(s) accepted from ${m.independent} independent source(s) under the documented AIVS evidence rules (at most two per claim); verdicts are decided from accepted evidence only${m.corrected?.length ? `; ${m.corrected.length} preliminary verdict(s) corrected` : ""}${m.ai ? `; explanations by ${esc(m.ai.model)} (checked, not evidence)` : ""}. ${m.submission ? `Approval: ${esc(m.submission.detail)}.` : ""}</p></div></div>`;
+}
 function results(inv) {
   // nothing readable was extracted: no analysis ran, and the page says what happened and what to do instead
   if (inv.result?.blocked) { const b = inv.result.blocked, f = inv.result.source?.facebook;
@@ -200,16 +214,22 @@ function results(inv) {
       ${f?.attempts?.length ? `<p class="tiny sub" style="margin:6px 0 0">Facebook: ${esc(f.attempts.map(a => `${a.method}: ${a.result}${a.detail ? ` (${a.detail})` : ""}`).join("; "))}</p>` : ""}</div></div>${b.can_continue ? continueForm(inv, b) : ""}`; }
   const r = inv.result, o = r.overall, by = Object.fromEntries(r.evidence.map(e => [e.id, e]));
   const pv = r.source.provenance ? `<div class="callout info" style="margin-top:12px" id="iprov"><div><b>Content supplied by ${esc(r.source.provenance.supplied_by)}, not retrieved automatically.</b> ${esc(r.source.provenance.platform || "The platform")} did not allow automatic extraction${r.source.provenance.continues ? ` (report ${esc(r.source.provenance.continues)})` : ""}. Analysed: ${esc(r.source.provenance.items.join(", "))}. Original link kept: ${httpLink(r.source.provenance.original_link, r.source.provenance.original_link)}.</div></div>` : "";
-  const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.page_read ? " · full text read" : e.read_error ? " · page could not be read" : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span></li>`;
+  const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.page_read ? " · full text read" : e.read_error ? " · page could not be read" : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span>${e.validation ? ` <span class="chip ${e.validation.ok ? "sup" : "grey"}" title="${esc([...(e.validation.failed || []).map(f => RULE_TXT[f] || f), ...(e.validation.notes || [])].join("; "))}">${e.validation.ok ? `accepted · ${esc(e.validation.stance)}` : `not accepted: ${esc((e.validation.failed || []).map(f => RULE_TXT[f] || f).join(", "))}`}</span>` : ""}</li>`;
+  const RULE_TXT = { principal: "not about a principal claim", retrievable: "no original address", reliable: "source type not accepted", relevant: "not relevant enough", independent: "duplicate", stance: "stance not established", limit: "beyond the two strongest" };
   const IOV = { supported: "True", contradicted: "False", misleading: "Misleading", not_verifiable: "Unverified", insufficient: "Insufficient Evidence", mixed: "Insufficient Evidence" }, CONF = { strong: "High", moderate: "Moderate", weak: "Low", none: "Low" };
   const claims = r.claims.map((c, i) => { const a = r.assessments[i], top = (r.top[c.id] || []).map(id => by[id]).filter(Boolean);
-    const sup = top.filter(e => e.stance === "supports"), con = top.filter(e => e.stance === "contradicts" || e.stance === "misleading"), rel = top.filter(e => e.stance === "related");
+    // 1.33: the evidence AIVS accepted under its rules (at most two per claim) is shown first; everything else it found is listed apart
+    const valid = r.evidence.some(e => e.validation), acc = valid ? r.evidence.filter(e => e.claim_id === c.id && e.validation?.ok) : null;
+    const sup = valid ? acc.filter(e => e.validation.stance === "supports") : top.filter(e => e.stance === "supports"), con = valid ? acc.filter(e => e.validation.stance === "contradicts") : top.filter(e => e.stance === "contradicts" || e.stance === "misleading");
+    const rel = valid ? r.evidence.filter(e => e.claim_id === c.id && !e.validation?.ok || (e.claim_id === c.id && e.validation?.ok && e.validation.stance === "context")) : top.filter(e => e.stance === "related");
     return `<div class="card" style="margin-top:10px"><div class="bd"><div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><b>Principal claim ${i + 1}${r.claims.length > 1 ? ` of ${r.claims.length}` : ""}</b><span class="chip ${VC[a.verdict]}">${esc(IOV[a.verdict] || "")} · confidence ${esc(CONF[a.strength] || "Low")}</span><span class="chip grey">${esc({ supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: a.conflicting ? "Insufficient evidence (sources disagree)" : "Insufficient evidence", not_verifiable: "Unverifiable", mixed: "Insufficient evidence (sources disagree)" }[a.verdict])} · ${esc({ strong: "strong", moderate: "moderate", weak: "weak", none: "no" }[a.strength])} evidence</span></div>
       <p style="margin:6px 0">${esc(c.text)}</p><p class="small sub" style="margin:0 0 6px">${esc(a.reason)}</p>
       <p class="tiny sub" style="margin:0 0 6px">Original source: ${esc(r.source.platform || r.source.input_type || "submission")}${r.source.published_at ? ` · published ${esc(eat(r.source.published_at.slice(0, 10)))}` : " · publication date not established"}${a.verdict === "insufficient" ? " · Gap: no independent reliable source settles it" : ""}</p>
       ${sup.length ? `<div class="small"><b>Supporting evidence</b><ul style="margin:4px 0 6px 18px">${sup.map(evRow).join("")}</ul></div>` : ""}
       ${con.length ? `<div class="small"><b>Contradicting evidence</b><ul style="margin:4px 0 6px 18px">${con.map(evRow).join("")}</ul></div>` : ""}
-      ${rel.length ? `<details class="small"><summary>Related sources (${rel.length})</summary><ul style="margin:4px 0 6px 18px">${rel.map(evRow).join("")}</ul></details>` : ""}</div></div>`; }).join("");
+      ${valid && !sup.length && !con.length ? `<p class="small sub" style="margin:0 0 6px">No supporting or contradicting evidence passed the AIVS evidence rules for this claim.</p>` : ""}
+      ${a.corrected_from ? `<p class="tiny" style="margin:0 0 6px"><span class="chip warn">verdict corrected automatically</span> The preliminary reading was not carried by the accepted evidence.</p>` : ""}
+      ${rel.length ? `<details class="small"><summary>${valid ? "Context and other sources found" : "Related sources"} (${rel.length})</summary><ul style="margin:4px 0 6px 18px">${rel.map(evRow).join("")}</ul></details>` : ""}</div></div>`; }).join("");
   const imgs = (r.media?.images || []).map(i => `<div class="row" style="gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap"><img src="/api/media/${encodeURIComponent(i.media_id)}/thumb" alt="${esc(i.name)}" style="max-width:160px;max-height:120px;border:1px solid var(--line);border-radius:6px">
     <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul></div>`).join("");
   const cred = Object.entries(r.evidence.filter(e => !e.repeat_of).reduce((m, e) => (m[e.tier_label] = (m[e.tier_label] || 0) + 1, m), {}));
@@ -218,6 +238,7 @@ function results(inv) {
       ${o.note ? `<p class="small" style="margin:6px 0">${esc(o.note)}</p>` : ""}
       <p class="small" style="margin:6px 0">${esc(r.sections.assessment.slice(0, 2).join(" "))}</p>
       <p class="tiny sub" style="margin:4px 0 0">AI-generated preliminary assessment · ${esc(r.review?.status === "reviewed" ? `reviewed by ${r.review.by}` : "not reviewed by an analyst")}. The strength label describes the evidence found, not the probability that the claim is true.${r.ai.used ? ` AI model: ${esc(r.ai.model)}.` : ` AI not used: ${esc(r.ai.reason || "")}`}</p></div></div>
+    ${autoCard(r.automation)}
     ${aiFindings(r.ai?.content)}
     <h3 style="margin:16px 0 4px">Principal claims and evidence <span class="tiny sub">(at most two; checked automatically)</span></h3>${claims || '<p class="small sub">No claim could be checked.</p>'}
     ${r.other_claims?.length ? `<details class="small" style="margin-top:6px"><summary>Further statements recorded but not prioritised (${r.other_claims.length})</summary><ul style="margin:4px 0 0 18px">${r.other_claims.map(c => `<li>${esc(c.text)}</li>`).join("")}</ul></details>` : ""}

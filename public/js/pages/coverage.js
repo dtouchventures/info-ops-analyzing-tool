@@ -33,7 +33,7 @@ const W = {
   open: ["open", "wazi"], resolved: ["resolved", "imetatuliwa"], dropped: ["dropped", "imeondolewa"],
   oAnalyst: ["analyst", "mchambuzi"], oRules: ["accepted rule-based suggestion", "pendekezo la sheria lililokubaliwa"], oAi: ["accepted AI suggestion", "pendekezo la AI lililokubaliwa"],
   sRules: ["rule-based suggestion", "pendekezo la sheria"], sAi: ["AI suggestion", "pendekezo la AI"], basedOn: ["based on", "kwa msingi wa"],
-  aiBtn: ["Suggest with AI (optional)", "Pendekeza kwa AI (hiari)"], aiOff: ["AI suggestions are not available", "Mapendekezo ya AI hayapatikani"],
+  aiBtn: ["Extra AI suggestions (exceptional review)", "Mapendekezo ya ziada ya AI (mapitio maalum)"], aiOff: ["AI suggestions are not available", "Mapendekezo ya AI hayapatikani"],
   aiNote: ["AI suggestions use only this case’s records, must cite them, and are never recorded until you accept them.", "Mapendekezo ya AI yanatumia rekodi za kesi hii tu, lazima yazitaje, na hayarekodiwi hadi uyakubali."],
   aiFail: ["AI suggestions failed; the rule-based suggestions below still apply.", "Mapendekezo ya AI yameshindwa; mapendekezo ya sheria hapa chini bado yanafaa."],
   aiRemoved: ["Removed by AIVS checks", "Yaliyoondolewa na ukaguzi wa AIVS"], aiDone: ["AI suggestions added to the claims below.", "Mapendekezo ya AI yameongezwa kwenye madai hapa chini."],

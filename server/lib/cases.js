@@ -73,7 +73,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
       archive: can(forUser, "case.archive") && ["approved", "rejected"].includes(c.status), ownWork: isOwnWork(forUser, c), note: can(forUser, "note.write")
     } : undefined;
     return {
-      case: { ...c, hashtags: JSON.parse(c.hashtags || "[]"), status_label: STATES[c.status], conclusion_label: CONCLUSIONS[c.conclusion] || null, assigned: u(c.assigned_to), creator: u(c.created_by), submitter: u(c.submitted_by), decider: u(c.decided_by) },
+      case: { ...c, hashtags: JSON.parse(c.hashtags || "[]"), status_label: STATES[c.status], conclusion_label: CONCLUSIONS[c.conclusion] || null, assigned: u(c.assigned_to), creator: u(c.created_by), submitter: u(c.submitted_by), decider: u(c.decided_by), investigation: db.prepare("SELECT id, report_id FROM investigations WHERE case_id = ? ORDER BY created_at DESC LIMIT 1").get(id) || null },
       media, matches, claims, evidence, notes, ocr, transcripts, checklist, related, retrievals, aiRuns, reports, versions, users: Object.fromEntries(Object.entries(users).map(([k, v]) => [k, v.display_name])),
       expectedConclusion: expectedConclusion(claims), perms, thresholds: THRESH
     };
@@ -535,6 +535,8 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
   }
   function submit(user, id) {
     const c = mustCase(id); requireEdit(user, c, { states: new Set(["analyst_review", "needs_evidence"]) });
+    if (c.approval_route === "hod" || db.prepare("SELECT 1 FROM investigations i JOIN report_approvals a ON a.kind = 'investigation' AND a.ref_id = i.id WHERE i.case_id = ?").get(id))
+      throw new HttpError(409, "This case belongs to an automatic investigation: its report goes to the Head of Department from the investigation's approval panel.");
     const r = readiness(id); if (!r.ok) throw new HttpError(422, "This case is not ready for approval.", r.problems);
     change(user, id, "Submitted for approval", () => db.prepare("UPDATE cases SET status = 'awaiting_approval', submitted_by = ?, submitted_at = ?, reviewer_comment = NULL WHERE id = ?").run(user.id, nowISO(), id));
   }
@@ -542,6 +544,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     const c = mustCase(id);
     if (!can(user, "case.approve")) throw new HttpError(403, "Only reviewers and administrators can approve or return assessments.");
     if (c.status !== "awaiting_approval") throw new HttpError(409, "This case is not awaiting approval.");
+    if (c.approval_route === "hod") throw new HttpError(409, "This case is decided by the Head of Department in the report approval queue (Reports › Report approval), not by a reviewer.");
     if (isOwnWork(user, c) && !allowSelfApproval) throw new HttpError(403, "You analysed or submitted this case. A different reviewer must decide it (separation of duties).");
     if (decision === "return" || decision === "reject") {
       if (!String(comment || "").trim()) throw new HttpError(400, decision === "return" ? "Say what additional evidence or changes are needed." : "Say why the proposed conclusion is rejected.");
