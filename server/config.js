@@ -8,7 +8,9 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 // minimal .env loader (no dependency): KEY=value lines, # comments
 const envFile = path.join(ROOT, ".env");
 if (fs.existsSync(envFile) && !process.env.AIVS_SKIP_DOTENV) {
-  for (const line of fs.readFileSync(envFile, "utf8").split(/\r?\n/)) {
+  // the file may have been saved by Notepad or PowerShell as UTF-16 ("Unicode") or with a byte-order mark; both are read correctly
+  const raw = fs.readFileSync(envFile), text = raw[0] === 0xff && raw[1] === 0xfe ? raw.subarray(2).toString("utf16le") : raw[0] === 0xfe && raw[1] === 0xff ? Buffer.from(raw.subarray(2)).swap16().toString("utf16le") : raw.toString("utf8").replace(/^\uFEFF/, "");
+  for (const line of text.split(/\r?\n/)) {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
     const v = m ? m[2].replace(/^["']|["']$/g, "") : "";
     // an empty line (KEY=) does not hide a later line that gives the same key a value

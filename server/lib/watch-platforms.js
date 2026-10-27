@@ -323,7 +323,9 @@ export function makePlatforms({ request, withRetry, usage, config, W, svc, versi
         if (i) await sleep(W.gdeltPauseMs ?? 5500);
         const u = new URL(`${S.gdeltBase.replace(/\/$/, "")}/api/v2/doc/doc`);
         for (const [k, v] of Object.entries({ query: q, mode: "artlist", format: "json", maxrecords: "100", sort: "datedesc", startdatetime: gdeltTime(from || new Date(Date.now() - 864e5).toISOString()) })) u.searchParams.set(k, v);
-        const r = await withRetry(() => request(u)); out.requests++; out.pages++; usage.add("gdelt", "doc artlist", 1, "request", "ok");
+        // GDELT allows one request every 5 seconds per address (shared by everyone on the same office connection): a refusal is retried twice after a pause
+        let r; for (let t = 0; ; t++) { try { r = await withRetry(() => request(u)); break; } catch (e) { if (t >= 2 || !/limit requests|rate limit/i.test(e.message)) throw e; await sleep(W.gdeltPauseMs ?? 6000 * (t + 1)); } }
+        out.requests++; out.pages++; usage.add("gdelt", "doc artlist", 1, "request", "ok");
         for (const a of r.json.articles || []) {
           if (!/^https?:\/\//.test(a.url || "")) continue;
           rows.push({ platform: "News (GDELT)", post_id: a.url, account: a.domain || null, text: String(a.title || "").trim(), url: a.url, posted_at: fromGdelt(a.seendate), language: a.language ? String(a.language).slice(0, 2).toLowerCase() : null,
