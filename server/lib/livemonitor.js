@@ -636,9 +636,68 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
   function syncs({ source = null, limit = 50 } = {}) { return db.prepare(`SELECT y.*, s.name source_name FROM social_syncs y JOIN social_sources s ON s.id = y.source_id ${+source ? "WHERE y.source_id = ?" : ""} ORDER BY y.id DESC LIMIT ?`).all(...(+source ? [+source] : []), Math.min(500, +limit || 50)); }
   function errors(limit = 50) { return db.prepare("SELECT e.*, s.name source_name FROM social_api_errors e LEFT JOIN social_sources s ON s.id = e.source_id ORDER BY e.id DESC LIMIT ?").all(Math.min(500, +limit || 50)); }
   // a post already collected, found by its link (Verify Information uses the stored record instead of fetching it again)
+  // ---------------------------------------------------------------- Facebook links for Verify Information (the same token and Graph service as collection)
+  const normFb = u => { try { const x = new URL(u); x.hash = ""; for (const k of [...x.searchParams.keys()]) if (!["story_fbid", "id", "fbid", "v"].includes(k)) x.searchParams.delete(k); return `${x.hostname.replace(/^(www|m|mbasic|web|touch)\./, "")}${x.pathname.replace(/\/+$/, "")}${x.search}`.toLowerCase(); } catch { return null; } };
+  const fbIds = link => { let u; try { u = new URL(link); } catch { return {}; } const p = u.pathname.split("/").filter(Boolean), q = k => u.searchParams.get(k);
+    if (/^(permalink|story)\.php$/.test(p[0] || "")) return { kind: "post", owner: q("id"), post: q("story_fbid") };
+    if (p[0] === "share" || u.hostname === "fb.watch") return { kind: "share" };
+    if (p[0] && p[1] === "posts" && p[2]) return { kind: "post", page: p[0], post: p[2], owner: /^\d{5,}$/.test(p[0]) ? p[0] : null };
+    if (/^\d{5,}_\d{5,}$/.test(p[0] || "")) { const [o, x] = p[0].split("_"); return { kind: "post", owner: o, post: x }; }
+    if (/^photo(\.php)?$/.test(p[0] || "")) return { kind: "photo", post: q("fbid") };
+    if (p[0] && p[1] === "photos") return { kind: "photo", page: p[0], post: p.at(-1) };
+    if (p[0] === "groups") return { kind: "group" }; if (p[0] === "profile.php") return { kind: "profile" };
+    return { kind: p.length === 1 ? "page" : "unknown", page: p[0] }; };
+  // a post already collected: by its post ID (any of the link forms), or by its exact address
   function findByUrl(url) {
-    const u = String(url || "").trim().replace(/[?#].*$/, ""); if (!/^https?:\/\//.test(u)) return null;
-    return db.prepare("SELECT p.*, s.name source_name, s.external_id FROM social_posts p JOIN social_sources s ON s.id = p.source_id WHERE p.is_training = 0 AND (p.permalink_url = ? OR p.permalink_url LIKE ?) LIMIT 1").get(u, `${u}?%`) || null;
+    const ids = fbIds(url), key = normFb(url), sel = "SELECT p.*, s.name source_name, s.external_id FROM social_posts p JOIN social_sources s ON s.id = p.source_id WHERE p.is_training = 0";
+    if (ids.post && /^\d+$/.test(ids.post)) { const r = db.prepare(`${sel} AND (p.post_id = ? OR (? IS NULL AND p.post_id LIKE ? ESCAPE '\\'))`).get(`${ids.owner || "x"}_${ids.post}`, ids.owner || null, `%\\_${ids.post}`) || db.prepare(`${sel} AND p.permalink_url IS NOT NULL`).all().find(p => fbIds(p.permalink_url).post === ids.post); if (r) return r; }
+    if (!key) return null;
+    return db.prepare(`${sel} AND p.permalink_url IS NOT NULL`).all().find(p => normFb(p.permalink_url) === key) || null;
+  }
+  const authorisedPages = () => db.prepare("SELECT * FROM social_sources WHERE platform = 'facebook' AND enabled = 1 AND is_training = 0").all();
+  // what Verify Information can obtain for a Facebook link, through permitted means only:
+  //   1 a share link is resolved by Facebook's own redirect;  2 a post already collected is read from the database;
+  //   3 a post of an authorised Page is read with that Page's token (and stored, as live monitoring would);
+  //   4 anything else is not requested: a Page token gives no access to other Pages' or people's posts
+  async function facebookForVerification(url, { resolveShare } = {}) {
+    const attempts = []; let link = url, ids = fbIds(url);
+    if (ids.kind === "share") {
+      const r = resolveShare ? await resolveShare(url) : { url: null, attempts: [] }; attempts.push(...r.attempts);
+      if (!r.url) return { status: "share_unresolved", attempts, message: "Facebook did not reveal where this share link leads. Open it in a browser, copy the post's address from the address bar and paste that instead." };
+      link = r.url; ids = fbIds(link); attempts.push({ method: "share link", result: "ok", detail: `leads to ${link}` });
+    }
+    if (["group", "profile"].includes(ids.kind)) return { status: "restricted", resolved_url: link, attempts, message: `This is a Facebook ${ids.kind === "group" ? "group post" : "personal profile"}. Meta's API gives no access to it, and AIVS does not try. Upload a screenshot of the post if you are permitted to see it.` };
+    let p = findByUrl(link);
+    if (p) { attempts.push({ method: "Live Monitoring database", result: "ok", detail: `post ${p.post_id} collected ${p.collected_at}` }); return { status: "ok", from: "database", post: p, resolved_url: link, attempts }; }
+    attempts.push({ method: "Live Monitoring database", result: "not found" });
+    const pages = authorisedPages();
+    if (!graph.configured() || !pages.length) return { status: "not_configured", resolved_url: link, attempts, message: "No Facebook Page is connected for monitoring (META_PAGE_ACCESS_TOKEN and META_PAGE_IDS), so AIVS cannot read Facebook posts through the Graph API." };
+    // whose post is it? A numeric owner in the link, or the Page's username resolved to its ID
+    let owner = ids.owner || null;
+    if (!owner && ids.page) { const known = pages.find(s => s.external_id === ids.page || (s.url && normFb(s.url) === normFb(`https://facebook.com/${ids.page}`))); if (known) owner = known.external_id;
+      else { try { owner = (await graph.get(encodeURIComponent(ids.page), { fields: "id" })).id; usage("page id lookup", "ok"); } catch (e) { usage("page id lookup", "error"); attempts.push({ method: "Graph API page lookup", result: "failed", detail: graph.redact(e.message).slice(0, 200) }); } } }
+    const src = owner && pages.find(s => s.external_id === owner);
+    if (owner && !src) return { status: "restricted", resolved_url: link, attempts, message: `This post belongs to a Facebook Page (${ids.page || owner}) that is not one of the Pages this server is authorised to read. A Page access token reads only its own Page; reading other Pages needs a Meta app approved for Page Public Content Access. Upload a screenshot or paste the text instead.` };
+    if (!src) {
+      // a link AIVS cannot map to a Page (for example the newer pfbid… form): refresh the authorised Pages and look again
+      for (const s0 of pages) { try { await sync(s0.id, { kind: "verify" }); } catch {} }
+      p = findByUrl(link); if (p) { attempts.push({ method: "authorised Pages refreshed", result: "ok" }); return { status: "ok", from: "refreshed", post: p, resolved_url: link, attempts }; }
+      return { status: "not_found", resolved_url: link, attempts, message: "The post is not among the posts of the authorised Pages, and its link does not name a Page AIVS may read. A Page token cannot read other people's or other Pages' posts. Upload a screenshot or paste the text instead." };
+    }
+    if (!/^\d+$/.test(ids.post || "")) {
+      for (const s0 of [src]) { try { await sync(s0.id, { kind: "verify" }); } catch {} }
+      p = findByUrl(link); if (p) return { status: "ok", from: "refreshed", post: p, resolved_url: link, attempts };
+      return { status: "not_found", resolved_url: link, attempts, message: "This link form cannot be looked up through the Graph API, and the post was not found among the Page's recent posts." };
+    }
+    try {
+      const g = await graphForPage(src.external_id), j = await g.get(`${src.external_id}_${ids.post}`, { fields: "id,message,created_time,updated_time,permalink_url,full_picture,status_type" }); usage("post lookup (verify)", "ok");
+      const row = postRow(j), res = store({ ...src, platform: "facebook" }, [row]);
+      for (const f of res.fresh) await storeImage(f);
+      p = findByUrl(row.permalink_url || link) || db.prepare("SELECT p.*, s.name source_name, s.external_id FROM social_posts p JOIN social_sources s ON s.id = p.source_id WHERE p.post_id = ? AND p.is_training = 0").get(row.post_id);
+      attempts.push({ method: "Facebook Graph API (authorised Page token)", result: "ok" });
+      return { status: "ok", from: "graph", post: p, resolved_url: link, attempts };
+    } catch (e) { usage("post lookup (verify)", "error"); attempts.push({ method: "Facebook Graph API (authorised Page token)", result: e.kind || "failed", detail: graph.redact(e.message).slice(0, 300) });
+      return { status: e.kind === "token" ? "token_refused" : e.kind === "permission" ? "restricted" : "failed", resolved_url: link, attempts, message: `Meta did not return the post: ${graph.redact(e.message).slice(0, 300)}` }; }
   }
   function prefetchedFor(p) {
     const plat = p.platform === "instagram" ? "Instagram" : "Facebook";
@@ -666,6 +725,6 @@ export function makeLiveMonitor(db, { config, investigations, watch, storage, au
     return { source_id: src.id, new_posts: res.new_posts };
   }
 
-  return { start, stop, tick, sync, work, refreshEngagement, checkToken, addSource, setEnabled, ensureSources, overview, posts, post, image, alerts, alert, act, syncs, errors, findByUrl, prefetchedFor,
+  return { facebookForVerification, start, stop, tick, sync, work, refreshEngagement, checkToken, addSource, setEnabled, ensureSources, overview, posts, post, image, alerts, alert, act, syncs, errors, findByUrl, prefetchedFor,
     loadPractice, testInstagram, instagramStatus, checks: id => { const src = getSource(id); return { frequency: frequencyCheck(src), topics: emergingTopics(src.is_training) }; }, configured: () => graph.configured(), ready: () => graph.configured() && svc.get("meta_token")?.state !== "invalid", systemUser, raise, PRIORITY_RULES };
 }

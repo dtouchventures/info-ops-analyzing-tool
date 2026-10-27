@@ -9,7 +9,7 @@
 import { ratingToVerdict, activeVerdict } from "../../shared/verdict.js";
 import { OFFICIAL_SOURCES } from "./retrieval.js";
 
-export const AUTO_VERDICTS = { supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable",
+export const AUTO_VERDICTS = { extraction_blocked: "Extraction blocked", insufficient_content: "Insufficient content", supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable",
   mixed: "Insufficient evidence (sources disagree)" };   // "mixed" is kept only to read reports saved by 1.23
 export const STRENGTH = { strong: "Strong", moderate: "Moderate", weak: "Weak", none: "None found" };
 

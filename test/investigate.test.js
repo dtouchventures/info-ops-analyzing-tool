@@ -58,10 +58,10 @@ async function investigate(client, fields, files) {
 }
 async function common(client, inv) {
   assert.equal(inv.status, "done", inv.error);
-  assert.ok(inv.stages.every(s => s.status === "done" || s.status === "warning"), JSON.stringify(inv.stages));
+  assert.ok(inv.stages.every(s => ["done", "warning", "skipped"].includes(s.status) || (s.status === "failed" && s.key === "extract" && inv.result.blocked)), JSON.stringify(inv.stages));
   const r = inv.result;
   for (const k of ["background", "analysis", "assessment", "recommendations"]) assert.ok(r.sections[k].length, `section ${k}`);
-  assert.ok(["supported", "contradicted", "mixed", "insufficient", "not_verifiable"].includes(r.overall.verdict));
+  assert.ok(["supported", "contradicted", "mixed", "misleading", "insufficient", "not_verifiable", "extraction_blocked", "insufficient_content"].includes(r.overall.verdict));
   assert.match(r.limitations.join(" "), /not been reviewed/);
   const base = client === ana ? S.base : client === anaNS ? NS.base : AI.base;
   for (const kind of ["report", "details"]) for (const [fmt, sig] of [["html", "<!doctype html>"], ["pdf", "%PDF"], ["docx", "PK"]]) {
@@ -144,7 +144,10 @@ test("1. news article link: page read with author and date, claims supported by 
 test("2. Facebook link: restricted, nothing invented, qualified report asks for a screenshot", async () => {
   const inv = await investigate(ana, { url: "https://www.facebook.com/KenyaDefenceForces/posts/1234567890" }), r = await common(ana, inv);
   assert.equal(r.source.platform, "Facebook"); assert.equal(r.source.access, "restricted"); assert.equal(inv.case_id, null);
-  assert.equal(r.overall.verdict, "not_verifiable"); assert.ok(r.sections.recommendations.some(s => /screenshot/i.test(s)));
+  // nothing readable: the investigation stops, says "Extraction blocked", and no later step claims to have run
+  assert.equal(r.overall.verdict, "extraction_blocked"); assert.equal(r.overall.label, "Extraction blocked"); assert.ok(r.sections.recommendations.some(s => /screenshot/i.test(s)));
+  assert.equal(inv.stages.find(s => s.key === "extract").status, "failed"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
+  assert.equal(r.ai.used, false); assert.match((await ana.get(`/api/investigations/${inv.id}/report.html`)).body, /Extraction blocked/);
 });
 // 2b ---- 1.25: the 5G / coronavirus scenario (PRACTICE fixtures on .example sites) and the read-only preview script
 test("5G claim: contradicted; one-page assessment cites only sources that address the claim; preview leaves the database unchanged", async () => {
@@ -259,7 +262,7 @@ test("no evidence service reachable: insufficient, with the failed searches list
 });
 test("unreadable page and blank image: qualified reports, nothing invented", async () => {
   const a = await common(ana, await investigate(ana, { url: `${F}/news/empty` })); assert.equal(a.source.access, "failed"); assert.ok(a.source.fallback);
-  const b = await common(ana, await investigate(ana, {}, [["blank.png", await png([]), "image/png"]])); assert.equal(b.overall.verdict, "not_verifiable");
+  const b = await common(ana, await investigate(ana, {}, [["blank.png", await png([]), "image/png"]])); assert.equal(b.overall.verdict, "extraction_blocked"); assert.equal(a.overall.verdict, "extraction_blocked");
 });
 
 // ---- security, roles and records

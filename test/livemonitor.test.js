@@ -40,6 +40,8 @@ before(async () => {
     if (p === "me") return json(res, 200, { id: PAGE, name: "Test Fixture Page" });
     if (p === "") return json(res, 200, Object.fromEntries(String(q.ids || "").split(",").map(id => [id, { id, shares: { count: 400 }, reactions: { summary: { total_count: 900 } }, comments: { summary: { total_count: 50 } } }])));
     if (p === PAGE) return json(res, 200, { id: PAGE, name: "Test Fixture Page", link: `https://www.facebook.com/${PAGE}` });
+    if (p === `${PAGE}_9`) return json(res, 200, { id: `${PAGE}_9`, message: "TEST FIXTURE: The county opened a new borehole in Garissa town on Monday, officials said.", created_time: H(6), permalink_url: `https://www.facebook.com/${PAGE}/posts/9`, full_picture: `${F}/img/p9.jpg` });
+    if (p === "SomeOtherPage") return json(res, 200, { id: "900000000000777" });
     if (p === `${PAGE}/posts`) {
       if (G.mode === "nofields" && /reactions/.test(q.fields || "")) return json(res, 400, { error: { message: "(#10) This endpoint requires the 'pages_read_engagement' permission", code: 10 } });
       const all = (G.posts || fixturePosts()).filter(x => !q.since || Date.parse(x.created_time.replace("+0000", "Z")) >= +q.since * 1000);
@@ -250,4 +252,33 @@ test("a token of a person who manages the Page: AIVS obtains the Page's own toke
     const dump = JSON.stringify([v, S2.ctx.db.prepare("SELECT * FROM social_syncs").all(), S2.ctx.db.prepare("SELECT * FROM social_api_errors").all(), S2.ctx.db.prepare("SELECT * FROM audit_log").all()]);
     assert.ok(!dump.includes(TOKEN) && !dump.includes(USER));
   } finally { await S2.ctx.investigations.close(); await S2.close(); }
+});
+
+test("Verify Information reuses the live monitoring service for Facebook links: database, share link, authorised Page; never other Pages", async () => {
+  G.mode = "ok";
+  const verify = async url => { const r = await ana.post("/api/investigations", undefined, { form: (() => { const f = new FormData(); f.append("url", url); return f; })() }); assert.equal(r.status, 202, JSON.stringify(r.body));
+    for (let i = 0; i < 400; i++) { const g = (await ana.get(`/api/investigations/${r.body.id}`)).body; if (["done", "failed"].includes(g.status)) return g; await new Promise(ok => setTimeout(ok, 100)); } throw new Error("not finished"); };
+  // 1 a post already collected, given in another link form (mobile story.php): read from the database, image included, no Graph request
+  G.calls = [];
+  let inv = await verify(`https://m.facebook.com/story.php?story_fbid=3&id=${PAGE}`);
+  assert.equal(inv.status, "done"); assert.match(inv.result.content, /KSh 2,000/); assert.equal(inv.result.source.facebook.from, "database"); assert.match(inv.result.source.method, /already collected by Live Monitoring/);
+  assert.equal(inv.result.source.published_at, S.ctx.db.prepare("SELECT created_time t FROM social_posts WHERE post_id = ?").get(`${PAGE}_3`).t);
+  assert.ok(!G.calls.some(c => c.path.startsWith("/v26.0/")), "no Graph request"); assert.ok(inv.result.media.images.length >= 1, "the stored image was checked");
+  assert.equal(inv.stages.find(s => s.key === "extract").status, "done");
+  // 2 a share link, resolved by Facebook's redirect (stand-in here), then found in the database
+  S.ctx.investigations.useFacebook(url => S.ctx.live.facebookForVerification(url, { resolveShare: async () => ({ url: `https://www.facebook.com/${PAGE}/posts/2`, attempts: [{ method: "share link redirect", result: "ok" }] }) }));
+  inv = await verify("https://www.facebook.com/share/p/TestFixture1/");
+  assert.match(inv.result.content, /water points/); assert.equal(inv.result.source.facebook.resolved_url, `https://www.facebook.com/${PAGE}/posts/2`);
+  // 3 a post of the authorised Page that was not collected yet: read with the Page's token, and stored like a collected post
+  G.calls = []; inv = await verify(`https://www.facebook.com/${PAGE}/posts/9`);
+  assert.match(inv.result.content, /new borehole in Garissa/); assert.equal(inv.result.source.facebook.from, "graph"); assert.ok(G.calls.some(c => c.path === `/v26.0/${PAGE}_9`));
+  assert.ok(S.ctx.db.prepare("SELECT 1 FROM social_posts WHERE post_id = ?").get(`${PAGE}_9`), "stored with the Page's posts");
+  // 4 another Page: its ID is looked up, but its post is never requested; extraction is blocked and says why
+  G.calls = []; inv = await verify("https://www.facebook.com/SomeOtherPage/posts/777");
+  assert.equal(inv.result.overall.verdict, "extraction_blocked"); assert.match(inv.result.overall.note, /not one of the Pages this server is authorised to read/);
+  assert.ok(!G.calls.some(c => /777/.test(c.path)), "the other Page's post is not requested"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
+  assert.equal(inv.result.ai.used, false);
+  // 5 a group post is refused without any request
+  G.calls = []; inv = await verify("https://www.facebook.com/groups/12345/posts/678");
+  assert.equal(inv.result.overall.verdict, "extraction_blocked"); assert.match(inv.result.overall.note, /group post/); assert.ok(!G.calls.some(c => c.path.startsWith("/v26.0/")));
 });

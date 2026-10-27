@@ -8,7 +8,7 @@ import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
 
 const STAGES = [["extract", "Extracting the content"], ["analyse", "Detecting claims"], ["search", "Searching for evidence"], ["compare", "Cross-checking sources"], ["media", "Checking images and media"], ["assess", "AI assessment"], ["report", "Generating the report"]];
-const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey" };
+const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "con", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
 const httpLink = (u, t) => /^https?:\/\//i.test(String(u || "")) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t || u)}</a>` : esc(t || u || "");
@@ -72,7 +72,7 @@ export async function render(el, params = []) {
 function stages(list) {
   const by = Object.fromEntries((list || []).map(s => [s.key, s]));
   $("#istages").innerHTML = STAGES.map(([k, l], i) => { const s = by[k] || { status: "pending" };
-    return `<li class="${esc(s.status)}"><span class="dot">${s.status === "done" ? "✓" : s.status === "warning" ? "!" : s.status === "failed" ? "×" : ""}</span><span>${i + 1}. ${esc(l)}${s.detail ? `<span class="tiny sub" style="display:block">${esc(s.detail)}</span>` : ""}</span></li>`; }).join("");
+    return `<li class="${esc(s.status)}"><span class="dot">${s.status === "done" ? "✓" : s.status === "warning" ? "!" : s.status === "failed" ? "×" : s.status === "skipped" ? "–" : ""}</span><span>${i + 1}. ${esc(l)}${s.detail ? `<span class="tiny sub" style="display:block">${esc(s.detail)}</span>` : ""}</span></li>`; }).join("");
 }
 function preview(p) {
   if (!p) return;
@@ -100,6 +100,11 @@ function fixForm(inv) {
       <button class="btn primary sm" id="fxGo">Analyse again with this</button></div><div id="fxErr" class="callout bad" style="margin-top:8px" hidden></div></div></div>`;
 }
 function results(inv) {
+  // nothing readable was extracted: no analysis ran, and the page says what happened and what to do instead
+  if (inv.result?.blocked) { const b = inv.result.blocked, f = inv.result.source?.facebook;
+    return `<div class="callout ${b.verdict === "extraction_blocked" ? "bad" : "warn"}" style="margin-top:12px" id="iblocked"><div><b>${b.verdict === "extraction_blocked" ? "Extraction blocked" : "Insufficient content"}.</b> ${esc(b.reason)}
+      <p style="margin:6px 0 0"><b>What to do:</b> ${esc(b.fallback)} No claim extraction, evidence search or AI analysis was run, because there was nothing to analyse.</p>
+      ${f?.attempts?.length ? `<p class="tiny sub" style="margin:6px 0 0">Facebook: ${esc(f.attempts.map(a => `${a.method}: ${a.result}${a.detail ? ` (${a.detail})` : ""}`).join("; "))}</p>` : ""}</div></div>`; }
   const r = inv.result, o = r.overall, by = Object.fromEntries(r.evidence.map(e => [e.id, e]));
   const evRow = e => `<li class="small" style="margin-bottom:4px"><span class="chip ${STANCE[e.stance][1]}">${STANCE[e.stance][0]}</span> ${httpLink(e.source_url, e.source_title || e.reference)} <span class="tiny sub">${esc(e.publisher || "")} · ${esc(e.tier_label)} · ${e.source_published_at ? esc(eat(e.source_published_at.slice(0, 10))) : "date not known"}${e.rating ? ` · rating “${esc(e.rating)}”` : ""}${e.ai_disagrees ? " · AI read this differently: check it" : ""}</span></li>`;
   const claims = r.claims.map((c, i) => { const a = r.assessments[i], top = (r.top[c.id] || []).map(id => by[id]).filter(Boolean);
@@ -156,7 +161,7 @@ async function follow(el, id) {
 // list of automatic reports by date, used by the Reports page
 export function listHtml(list) {
   if (!list.length) return `<p class="small sub" style="margin:0">No automatic reports for these dates.</p>`;
-  const L = { supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable", mixed: "Insufficient evidence (sources disagree)" };
+  const L = { extraction_blocked: "Extraction blocked", insufficient_content: "Insufficient content", supported: "Supported", contradicted: "Contradicted", misleading: "Misleading or missing context", insufficient: "Insufficient evidence", not_verifiable: "Unverifiable", mixed: "Insufficient evidence (sources disagree)" };
   return `<div class="tablewrap"><table class="t"><thead><tr><th>Investigation date</th><th>Report</th><th>Subject</th><th>Source published</th><th>Assessment</th><th>Review</th><th>Export</th></tr></thead><tbody>${list.map(x => `<tr>
     <td class="small">${esc(eat(x.created_at))}</td><td class="mono small"><a href="#/investigate/${esc(x.id)}">${esc(x.report_id)}</a></td><td class="small">${esc((x.subject || (x.status === "failed" ? "Stopped: " + (x.error || "") : x.status)).slice(0, 90))}${x.case_id ? ` <a class="tiny" href="#/case/${esc(x.case_id)}">${esc(x.case_id)}</a>` : ""}</td>
     <td class="small">${x.source_published_at ? esc(eat(x.source_published_at)) : "Not known"}</td><td>${x.overall ? `<span class="chip ${VC[x.overall] || "grey"}">${esc(L[x.overall] || x.overall)}</span>` : `<span class="chip grey">${esc(x.status)}</span>`}</td>

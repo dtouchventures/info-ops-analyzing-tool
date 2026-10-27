@@ -98,7 +98,8 @@ export function buildAssessment(r, { priority = null, approval = null } = {}) {
     contradicted: o.strength === "strong" ? "Available evidence indicates that the claim is false as stated." : "Current reporting suggests that the claim is inaccurate; further corroboration is required.",
     misleading: "Available evidence indicates that the content is misleading or lacks essential context.",
     insufficient: /disagree/.test(o.note || "") || ma?.conflicting ? "Reliable sources disagree, so the claim remains unresolved." : "There is insufficient evidence to establish whether the claim is accurate.",
-    not_verifiable: "The content contains no factual claim that can be checked against evidence.", mixed: "Reliable sources disagree, so the claim remains unresolved." }[o.verdict];
+    not_verifiable: "The content contains no factual claim that can be checked against evidence.",
+    extraction_blocked: "The content could not be extracted, so nothing was assessed. No claim about it can be made.", insufficient_content: "Too little readable content was extracted to identify or assess a claim.", mixed: "Reliable sources disagree, so the claim remains unresolved." }[o.verdict];
   const coord = amplification.length ? "The observed repetition is consistent with organised amplification, but does not prove coordination." : "There are no indicators of coordinated information activity in the available data; account and timing data were not assessed.";
   const impl = { contradicted: "Continued circulation could reduce public confidence in accurate information.", misleading: "Continued circulation could distort public understanding of the event.", supported: "No adverse effect on the information environment is indicated.", insufficient: "Its effect on the information environment cannot yet be judged.", not_verifiable: null, mixed: "Its effect on the information environment cannot yet be judged." }[o.verdict];
   const unc = ["restricted", "failed"].includes(x.access) ? "the original content could not be fully read" : !ok.length ? "no outside source could be searched" : !x.author && !pub ? "the origin and date of the content are unknown" : r.evidence.filter(e => !e.repeat_of).length < 2 ? "few independent sources were found" : !r.ai.used ? "the analysis relied on rule-based comparison without AI" : "sources may not cover later developments";
@@ -113,6 +114,7 @@ export function buildAssessment(r, { priority = null, approval = null } = {}) {
   if (!x.author && !pub) rec.push("Trace the earliest available version of the content to establish its origin and date.");
   if (["contradicted", "misleading"].includes(o.verdict) || amplification.length || content.length) rec.push(`Monitor related public narratives${r.hashtags?.length ? ` (${r.hashtags.slice(0, 2).join(" ")})` : ""} in AI Watchlist.`);
   if (o.verdict === "supported") rec.push("Retain the cited sources with the record; no further action is indicated.");
+  if (["extraction_blocked", "insufficient_content"].includes(o.verdict)) rec.push("Obtain the content by permitted means (a screenshot or the pasted text) and run the verification again.");
   if (o.verdict === "not_verifiable") rec.push("Assess the content's purpose and spread rather than its accuracy.");
   rec.push("Refer this AI-generated assessment for authorised human review before any operational use.");
   const recommendations = [...new Set(rec)].slice(0, 4);

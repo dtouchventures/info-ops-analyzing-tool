@@ -91,7 +91,7 @@ export function completion(r) {
 }
 
 // ---------------------------------------------------------------- HTML
-const VC = { supported: "#0f7a4a", contradicted: "#b42318", misleading: "#b54708", mixed: "#475467", insufficient: "#475467", not_verifiable: "#475467" };
+const VC = { extraction_blocked: "#b42318", insufficient_content: "#b54708", supported: "#0f7a4a", contradicted: "#b42318", misleading: "#b54708", mixed: "#475467", insufficient: "#475467", not_verifiable: "#475467" };
 const CSS = `:root{--ink:#101828;--muted:#475467;--line:#d0d5dd;--navy:#0b1f3a}*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .rep{max-width:880px;margin:0 auto;padding:24px 20px}.top{border-bottom:3px solid var(--navy);padding-bottom:10px;margin-bottom:12px}.top h1{font-size:20px;margin:0 0 6px}
 .lab{display:inline-block;background:#fef0c7;color:#7a2e0e;border:1px solid #fedf89;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600}.lab.ok{background:#d1fadf;color:#05603a;border-color:#a6f4c5}.lab.tr{background:#ece6ff;color:#3e1c96;border-color:#d9ccff}

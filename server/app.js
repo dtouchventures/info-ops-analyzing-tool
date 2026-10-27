@@ -95,6 +95,7 @@ export function createApp(config) {
   const watchCollector = makeWatchCollector(db, { watch, collectors, config, audit, version: VERSION0 });
   const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0 });
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
+  investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live });
   const ctx = { db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
@@ -1149,10 +1150,6 @@ export function createApp(config) {
   // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
   api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     const b = req.body || {};
-    // a Facebook post that live monitoring has already collected is analysed from its stored record (text, time, image)
-    const known = !(req.files || []).length && !String(b.text || "").trim().includes(" ") ? live.findByUrl(b.url || b.text) : null;
-    if (known) { const files = []; if (known.image_sha256) { const tmp = path.join(storage.tmpDir, `live-${known.id}-${Date.now()}.${known.image_mime === "image/png" ? "png" : "jpg"}`); fs.writeFileSync(tmp, storage.read(known.image_sha256)); files.push({ originalname: path.basename(tmp), size: fs.statSync(tmp).size, path: tmp }); }
-      return res.status(202).json(investigations.start(req.user, { text: known.message || "", files, prefetched: live.prefetchedFor(known), origin: "verify" })); }
     try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));

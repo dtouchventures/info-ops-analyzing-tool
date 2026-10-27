@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.27.1 — Verify Information uses the working Facebook connection; honest progress (27 October 2026)
+
+- **One Facebook service:** Verify Information now uses the same Graph API service and token as Live Monitoring (`META_PAGE_ACCESS_TOKEN`; `FACEBOOK_ACCESS_TOKEN` remains an older name for the same setting). For a Facebook link it:
+  1. **Share links:** resolves `/share/…` and `fb.watch` links through Facebook's own redirect;
+  2. **Collected posts:** reads a post already collected by Live Monitoring from the database. That includes its text, publication time, link, Page and stored image. Every link form is recognised: `/posts/`, `story.php`, `permalink.php` and `PAGEID_POSTID`;
+  3. **Other posts of the authorised Pages:** reads them with that Page's token and stores them with the Page's posts;
+  4. **Everything else is refused:** posts of other Pages, groups and personal profiles are never requested, and the reason is shown. A Page token gives no access to them.
+- **Extraction blocked / Insufficient content:**
+  - **When it applies:** fewer than 25 readable characters were extracted.
+  - **What happens:** the investigation stops. The extraction step shows the reason, every later step is marked "skipped", and no claim extraction, evidence search or AI runs.
+  - **The report:** says "Extraction blocked" or "Insufficient content" and how to provide the content instead.
+- **Honest progress:** a step shows ✓ only when it really did its work.
+  - **Skipped:** comparison without evidence, image checks without an image, and assessment without a checkable claim are now "skipped".
+  - **Failed:** a failed analysis, evidence search or image check is shown as failed.
+- **Ollama claim extraction:** the organisation's AI model (Ollama) also extracts checkable claims from the content. Only sentences found word for word in the content are added to the case, marked as AI-proposed.
+- **New `npm run check:verify-facebook -- [share link]`:** checks against the real Graph API that:
+  1. a collected post is read from the database;
+  2. another link form of the same post is matched;
+  3. a share link is resolved;
+  4. another Page's post is refused.
+
 ## 1.27.0 — Keyword search and monitoring of public information (27 October 2026)
 
 - **Search any keyword now** (Live Monitoring → Search):

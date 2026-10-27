@@ -475,6 +475,7 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .istages li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; font-size: 14px; }
 .istages .dot { flex: 0 0 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line, #d0d5dd); display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
 .istages .running { background: var(--teal-50, #e8f5f4); } .istages .running .dot { border-color: var(--teal-500, #13948f); border-top-color: transparent; animation: ispin 1s linear infinite; }
+.istages .skipped { color: var(--muted); } .istages .skipped .dot { border-style: dashed; color: var(--muted); } .istages .failed .dot { background: #b42318; border-color: #b42318; }
 .istages .done .dot { background: var(--teal-500, #13948f); border-color: var(--teal-500, #13948f); } .istages .warning .dot { background: #b54708; border-color: #b54708; }
 @keyframes ispin { to { transform: rotate(360deg); } }
 /* Live Monitoring (1.26) */

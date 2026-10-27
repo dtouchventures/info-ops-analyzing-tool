@@ -230,7 +230,7 @@ export function makeSocial(db, { config }) {
     if ([10, 200].includes(code) || (code === 100 && /permission|does not exist|cannot be loaded|missing/i.test(msg))) throw Object.assign(new Error(`Facebook does not let this token read that post (${msg}). A Page token reads only its own Page; other Pages need an app approved for Page Public Content Access.`), { kind: "refused" });
     throw Object.assign(new Error(msg), { kind: "http" });
   }
-  async function facebookAdapter(out, L, A) {
+  async function facebookAdapter(out, L, A, opts = {}) {
     out.service = "meta"; let link = L.url;
     const host = new URL(link).hostname;
     if (host === "fb.watch" || /^\/share\//.test(new URL(link).pathname)) {
@@ -241,7 +241,8 @@ export function makeSocial(db, { config }) {
     if (ids.kind === "group") return { status: "restricted", message: "This is a Facebook group post. AIVS does not read groups: their posts are not public through Meta's APIs. Add a screenshot of the post if you are permitted to see it." };
     if (ids.kind === "profile") return { status: "restricted", message: "This is a personal Facebook profile. AIVS does not read personal profiles. Add a screenshot of the post if you are permitted to see it." };
     // 1. Graph API (full text of Page posts and videos the token may read)
-    if (P.facebookToken && ids.kind !== "share" && ids.kind !== "unknown") {
+    // skipGraph: Verify Information has already asked the live monitoring service, which uses the Graph API only for authorised Pages
+    if (P.facebookToken && !opts.skipGraph && ids.kind !== "share" && ids.kind !== "unknown") {
       try {
         let gid = null, fields = "message,created_time,permalink_url,full_picture,from{name,username},story";
         if (ids.kind === "post" && ids.post && !ids.pfbid) gid = ids.owner ? `${ids.owner}_${ids.post}` : ids.page ? `${(await graph(encodeURIComponent(ids.page), "id")).j.id}_${ids.post}` : null;
@@ -257,7 +258,7 @@ export function makeSocial(db, { config }) {
           A.push({ method: "Facebook Graph API", result: words ? "ok" : "no text" }); if (words) return;
         }
       } catch (e) { log("Facebook", "Graph API", e.message); A.push({ method: "Facebook Graph API", result: e.kind === "rate" ? "rate limited" : e.kind === "refused" || e.kind === "auth" ? "refused" : "failed", detail: redact(e.message) }); }
-    } else if (!P.facebookToken) out.needs.push({ setting: "FACEBOOK_ACCESS_TOKEN", why: "reads the full text of posts and videos on Pages the token may read: your own Pages with a Page access token, or other public Pages once Meta approves your app for Page Public Content Access" });
+    } else if (!P.facebookToken && !opts.skipGraph) out.needs.push({ setting: "FACEBOOK_ACCESS_TOKEN", why: "reads the full text of posts and videos on Pages the token may read: your own Pages with a Page access token, or other public Pages once Meta approves your app for Page Public Content Access" });
     // 2. Meta oEmbed (author; a text that may be shortened or left out)
     if (S.metaToken && ids.kind !== "page") {
       const ep = ids.kind === "video" ? "oembed_video" : "oembed_post";
@@ -270,6 +271,7 @@ export function makeSocial(db, { config }) {
       } else A.push({ method: "Meta oEmbed", result: "failed", detail: ids.kind === "share" ? `${r.message} Share links are often not accepted: open the post and copy the address from the browser bar.` : r.message });
     } else if (!S.metaToken) out.needs.push({ setting: "META_OEMBED_TOKEN", why: "the app ID and client token (APPID|CLIENTTOKEN) of a Meta app with the oEmbed Read feature: gives the author and sometimes a shortened text of public posts" });
     if (out.text) return;
+    if (opts.skipGraph && !S.metaToken) return { status: "unavailable", message: opts.reason || "Facebook did not provide this post's text to AIVS." };
     if (!S.metaToken && !P.facebookToken) return { status: "not_configured", message: "Facebook shares the words of a post only with registered apps, and no Meta token is set on this server (META_OEMBED_TOKEN or FACEBOOK_ACCESS_TOKEN)." };
     return { status: out.author_name ? "no_text" : "unavailable", message: ids.kind === "share" && !out.resolved_url ? "Facebook did not reveal where this share link leads. Open it, copy the post's address from the browser bar and paste that instead." : "Facebook did not give AIVS the words of this post." };
   }
@@ -285,7 +287,7 @@ export function makeSocial(db, { config }) {
   }
 
   // look up one link; returns what was found with its source, every attempt, and a clear reason when nothing was retrieved
-  async function lookup(url) {
+  async function lookup(url, opts = {}) {
     const norm = normalizeLink(url), L = norm ? parseSourceLink(norm) : null;
     if (!L) return { social: false, message: "That is not a valid web address." };
     if (/\(website\)$/.test(L.platform) || !SOCIAL.includes(L.platform)) return { social: false, platform: L.platform, url: norm };
@@ -298,7 +300,7 @@ export function makeSocial(db, { config }) {
       else if (L.platform === "YouTube") fail = await youtubeAdapter(out, L, A);
       else if (L.platform === "TikTok") fail = await tiktokAdapter(out, L, A);
       else if (L.platform === "Telegram") fail = await telegramAdapter(out, L, A, parts);
-      else if (L.platform === "Facebook") fail = await facebookAdapter(out, L, A);
+      else if (L.platform === "Facebook") fail = await facebookAdapter(out, L, A, opts);
       else if (L.platform === "Instagram") fail = await instagramAdapter(out, L, A);
       else fail = { status: "unsupported", message: `${L.platform} has no public way to read a post from its link. Paste the text and add a screenshot.` };
     } catch (e) {
@@ -334,5 +336,7 @@ export function makeSocial(db, { config }) {
     }
     return out;
   }
-  return { lookup, ioContext, status: () => socialStatus({ social: S, collect: C, platforms: P }) };
+  // a Facebook share link (/share/…, fb.watch) resolved by following Facebook's own redirect; no page content is read
+  async function resolveFacebookShare(link) { const A = []; const to = await resolveShare(link, /(^|\.)facebook\.com$|^fb\.watch$/, A).catch(e => { A.push({ method: "share link redirect", result: "error", detail: e.message }); return null; }); return { url: to, attempts: A }; }
+  return { lookup, resolveFacebookShare, ioContext, status: () => socialStatus({ social: S, collect: C, platforms: P }) };
 }

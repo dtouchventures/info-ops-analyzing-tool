@@ -113,6 +113,32 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     }
   }
 
+  // the Facebook service of live monitoring (set after both are created; see app.js)
+  let facebook = null;
+  const useFacebook = f => { facebook = f; };
+  // no readable content: every later step is marked "skipped", no AI or evidence search runs, and the report says why
+  function finishBlocked(id, user, inv, input, src, content, verdict) {
+    const why = verdict === "extraction_blocked" ? String(src.notes.slice().reverse().find(n => n) || "No readable content could be extracted.") : `Only ${content.replace(/\s+/g, " ").trim().length} characters of readable content were extracted, too little to identify a claim.`;
+    setStage(id, "extract", verdict === "extraction_blocked" ? "failed" : "warning", `${AUTO_VERDICTS[verdict]}: ${why}`.slice(0, 300));
+    for (const k of ["analyse", "search", "compare", "media", "assess"]) setStage(id, k, "skipped", "not run: no readable content was extracted");
+    setStage(id, "report", "running");
+    const fallback = src.fallback || "Upload a screenshot of the content or paste its text (if you are permitted to see it), then verify again.";
+    setPreview(id, { platform: src.platform, url: input.url || null, title: src.title, text: content.slice(0, 3000), author: src.author, published_at: src.published_at, access: src.access === "full" ? "partial" : src.access, fallback, notes: src.notes.slice(0, 6), claims: [], images: [], blocked: verdict });
+    const ov = { verdict, label: AUTO_VERDICTS[verdict], strength: "none", strength_label: "None found", note: why };
+    const r = { schema: "aivs-auto-report/1", version, id, report_id: inv.report_id, case_id: null, training: !!input.is_training, created_at: inv.created_at,
+      subject: String(src.title || content.slice(0, 120) || input.url || "Submission").replace(/\s+/g, " ").slice(0, 200), source: { ...src, fallback, method: src.method.join("; ") || "none" }, content: content.slice(0, 2000),
+      claims: [], assessments: [], overall: ov, io: ioIndicators({ flags: [], injection: [], compared: [], hashtags: [], ioContext: null }), media: { images: [], reuse: [], services: mediacheck.status(), note: "No image was checked." },
+      entities: {}, hashtags: [], evidence: [], top: {}, search: [], methods: {}, ai: { used: false, model: null, reason: "not used: there was no readable content to analyse", notes: [] },
+      review: { status: "not reviewed", by: null, at: null }, blocked: { verdict, reason: why, fallback } };
+    r.sections = writeSections(r); r.written_by = "rules"; r.completed_at = nowISO(); r.limitations = limitations(r); r.priority = "routine";
+    r.io_assessment = buildAssessment(r, { priority: "routine" });
+    const fin = db.prepare("UPDATE investigations SET status = 'done', completed_at = ?, subject = ?, overall = ?, source_published_at = ?, result_json = ?, error = NULL, stages_json = ? WHERE id = ? AND status = 'running'")
+      .run(r.completed_at, r.subject, verdict, src.published_at, JSON.stringify(r), JSON.stringify(stagesWith(row(id), "report", "done", `${ov.label}: the report says what could not be read and how to provide it`)), id);
+    if (!fin.changes) throw new Cancelled();
+    audit(user, "Automatic investigation stopped: no readable content", "investigation", id, { report_id: r.report_id, verdict, reason: why.slice(0, 300) });
+    return r;
+  }
+
   // ---------------------------------------------------------------- the pipeline
   async function run(id, user, ctl = { cancelled: false }) {
     const inv = row(id), input = JSON.parse(inv.input_json), training = !!input.is_training, t0 = Date.now();
@@ -129,11 +155,28 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     if (P) { Object.assign(src, { input_type: "url", url: P.url || null, platform: P.platform || null, account: P.account || null, author: P.account || null, author_basis: P.author_basis || null, publisher: P.publisher || null,
       title: P.title || null, published_at: P.published_at || null, published_basis: P.published_basis || null, access: input.text ? "full" : "partial", metrics: P.metrics || null });
       if (P.method) src.method.push(P.method); src.notes.push(...(P.notes || []).slice(0, 4)); }
-    if (input.url) {
+    // Facebook links go first to the live monitoring service: the post from the database when it was collected, a share
+    // link resolved by Facebook's redirect, or a post of an authorised Page read with that Page's token. Nothing else is requested.
+    let fb = null;
+    if (input.url && facebook && /(^|\.)facebook\.com$|^fb\.watch$/i.test((() => { try { return new URL(input.url).hostname; } catch { return ""; } })())) {
+      fb = await withTimeout(facebook(input.url), 120000, "Facebook lookup").catch(e => ({ status: "failed", attempts: [], message: e.message }));
+      src.facebook = { status: fb.status, from: fb.from || null, attempts: fb.attempts || [], resolved_url: fb.resolved_url || null };
+      if (fb.post) {
+        const p = fb.post;
+        Object.assign(src, { platform: "Facebook", url: p.permalink_url || fb.resolved_url || input.url, account: p.source_name || p.external_id, author: p.source_name || p.external_id, author_basis: "the Facebook Page that published the post (Graph API record)",
+          publisher: p.source_name || null, published_at: p.created_time, published_basis: "publication time from the Facebook Graph API", access: p.message ? "full" : "partial",
+          metrics: p.likes == null && p.comments == null && p.shares == null ? null : { reactions: p.likes, comments: p.comments, shares: p.shares } });
+        src.method.push(fb.from === "database" ? `Facebook post already collected by Live Monitoring (Graph API record of ${p.collected_at})` : "Facebook Graph API with the authorised Page's token");
+        if (p.message) parts.push(p.message);
+        if (p.image_sha256) { const ext = p.image_mime === "image/png" ? "png" : "jpg", tmp = path.join(storage.tmpDir, `inv-${id}-fb.${ext}`); fs.writeFileSync(tmp, storage.read(p.image_sha256)); input.files.push({ name: `facebook-post-image.${ext}`, size: fs.statSync(tmp).size, path: tmp, temp: true }); }
+        else if (p.image_url) linkImages.push({ url: p.image_url, source: "Facebook post image (Graph API)" });
+      } else { src.platform = "Facebook"; src.notes.push(fb.message || "The Facebook post could not be retrieved."); }
+    }
+    if (input.url && !fb?.post) {
       const L = parseSourceLink(input.url); src.platform = L?.platform?.replace(/ \(website\)$/, "") || null; src.account = L?.account || null;
       if (L?.published_at) Object.assign(src, { published_at: L.published_at, published_basis: L.published_basis });
       if (L && SOCIAL.includes(L.platform)) {
-        const lk = await withTimeout(social.lookup(input.url), 30000, `${L.platform} lookup`).catch(e => ({ status: "error", message: e.message }));
+        const lk = await withTimeout(social.lookup(input.url, fb ? { skipGraph: true, reason: fb.message } : {}), 30000, `${L.platform} lookup`).catch(e => ({ status: "error", message: e.message }));
         linkImages.push(...thumbsOf({ ...lk, platform: L.platform }));
         Object.assign(src, { metrics: lk.metrics || null, description: lk.title && lk.title !== lk.text ? lk.title : null,
           video: ["YouTube", "TikTok"].includes(L.platform) && (lk.title || lk.duration) ? { title: lk.title || null, duration: lk.duration || null, channel: lk.author_name || null, tags: (lk.tags || []).slice(0, 10), captions: lk.transcript?.note || null } : null });
@@ -203,7 +246,13 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const content = [...new Set(parts.map(p => p.trim()).filter(Boolean))].join("\n\n").slice(0, 20000);
     src.mentions = [...new Set((content.match(/(^|[^\w@])@([A-Za-z0-9_]{2,30})\b/g) || []).map(m => m.trim().replace(/^[^@]*/, "")))].slice(0, 20);
     if (!parts.length && src.access === "full") { src.access = "failed"; src.fallback = src.fallback || "Paste the text, or upload a clearer screenshot."; }
-    setStage(id, "extract", content ? "done" : "warning", content ? `${src.method.join("; ")} · ${content.length} characters` : "no readable content");
+    // nothing readable: the investigation stops here and says so; no AI or evidence search is run on nothing
+    const readable = content.replace(/\s/g, "").length;
+    if (readable < 25) {
+      for (const f of input.files) if (f.temp) fs.rmSync(f.path, { force: true });
+      return finishBlocked(id, user, inv, input, src, content, readable ? "insufficient_content" : "extraction_blocked");
+    }
+    setStage(id, "extract", "done", `${src.method.join("; ")} · ${content.length} characters`);
 
     // create the case (only when there is content to investigate)
     check();
@@ -222,7 +271,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       for (const f of input.files) {
         if (!fs.existsSync(f.path)) continue;
         try {
-          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m);
+          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.temp) fs.rmSync(f.path, { force: true });
           const o = ocrs.find(x => x.file === f); if (o?.text && m.kind === "image") cases.addOcr(user, m.id, { text: o.text, lang: "eng+swa", confidence: o.confidence, engine: "tesseract.js (server, automatic investigation)" });
         } catch (e) { src.notes.push(`${f.name} was not kept with the case: ${e.message}`); }
       }
@@ -243,20 +292,33 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       metrics: src.metrics || null, video: src.video || null, case_id: caseId, images: imgs.map(m => ({ media_id: m.id, name: m.original_name, ...(linkByMedia[m.id] || {}) })) });
     // 2 ---- analysis (AIVS's existing case analysis)
     check(); setStage(id, "analyse", "running");
-    let claims = [], caseRow = null;
+    let claims = [], caseRow = null, analyseFailed = false, aiClaims = null;
     if (caseId) {
       try { await withTimeout(cases.startAnalysis(user, caseId), Math.max(5000, budget(180000)), "Case analysis"); }
-      catch (e) { src.notes.push(`The local case analysis did not finish (${e.message}); the claims found so far were used.`); }
+      catch (e) { analyseFailed = true; src.notes.push(`The local case analysis did not finish (${e.message}); the claims found so far were used.`); }
       check();
       caseRow = cases.mustCase(caseId);
       if (caseRow.status === "analysis_failed") src.notes.push(`Part of the local analysis failed: ${caseRow.analysis_error}`);
       claims = cases.aggregate(caseId).claims.filter(c => !c.removed).map(c => { const e = extractEntities(c.text); return { ...c, names: [...e.locations, ...e.orgs] }; });
+      // the organisation's AI model (Ollama) also lists the checkable claims; only sentences really in the content are kept
+      const aiC = injectionFlags(content).length ? { ok: false } : await aiReady(user, training);
+      if (aiC.ok && budget(config.ai.timeoutMs || 90000) >= 3000) {
+        try {
+          const out = await withTimeout(askJson(user, caseId, "claim extraction", `List the factual claims in this content that could be checked against evidence. Copy each claim word for word from the content (one sentence each, at most 6). Do not add anything.\nReply as JSON: {"claims": ["..."]}\n<content>\n${fence(content.slice(0, 6000))}\n</content>`), budget(config.ai.timeoutMs || 90000), "AI claim extraction"); check();
+          const norm = t => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(), C = norm(content), have = new Set(claims.map(c => norm(c.text)));
+          const got = (Array.isArray(out?.claims) ? out.claims : []).map(x => String(x).replace(/\s+/g, " ").trim()).filter(x => x.length >= 12 && x.length <= 400);
+          const kept = got.filter(x => C.includes(norm(x)) && ![...have].some(h => h.includes(norm(x)) || norm(x).includes(h)));
+          for (const t of kept.slice(0, 6)) cases.addClaim(user, caseId, { text: t, kind: "statement", origin: "ai" });
+          aiClaims = { model: aiC.model, proposed: got.length, kept: kept.length, rejected: got.length - kept.filter(x => C.includes(norm(x))).length };
+          if (kept.length) claims = cases.aggregate(caseId).claims.filter(c => !c.removed).map(c => { const e = extractEntities(c.text); return { ...c, names: [...e.locations, ...e.orgs] }; });
+        } catch (e) { if (e instanceof Cancelled) throw e; src.notes.push(`AI claim extraction was not used (${e.message}).`); }
+      }
     }
     const flags = content ? redFlags(content) : [], inj = content ? injectionFlags(content) : [], ent = content ? extractEntities(content) : {}, tags = content ? extractHashtags(content) : [];
     const ioCtx = caseRow ? social.ioContext({ account: caseRow.source_account, text: caseRow.claim_text, training }) : null;
     const checkable = claims.filter(c => !["media", "timing", "location"].includes(c.kind) && (!c.claim_type || c.claim_type === "factual"));
     setPreview(id, { claims: claims.map(c => ({ seq: c.seq, text: c.text, kind: c.kind, claim_type: c.claim_type })) });
-    setStage(id, "analyse", claims.length ? "done" : "warning", claims.length ? `${claims.length} claim(s), ${checkable.length} checkable${flags.length ? ` · ${flags.length} red flag(s)` : ""}` : "no claim found");
+    setStage(id, "analyse", analyseFailed && !claims.length ? "failed" : claims.length ? "done" : "warning", claims.length ? `${claims.length} claim(s), ${checkable.length} checkable${flags.length ? ` · ${flags.length} red flag(s)` : ""}` : "no claim found");
 
     // 3 ---- evidence search (every configured connector)
     check(); setStage(id, "search", "running");
@@ -269,7 +331,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     }
     const connectors = (search.connectors || []).map(c => ({ key: c.connector, label: CONNECTOR_LABEL[c.connector] || c.label, status: c.status, results: c.results, stored: c.stored, errors: c.errors || [], configured: c.configured }));
     const searched = connectors.some(c => (c.status === "ok" || c.status === "partial") && !["holdings", "kb"].includes(c.key));
-    setStage(id, "search", searched ? "done" : "warning", searched ? `${connectors.filter(c => c.status === "ok" || c.status === "partial").map(c => c.label).join(", ")}: ${search.stored || 0} item(s) kept`
+    setStage(id, "search", search.error && !searched ? "failed" : searched ? "done" : checkable.length ? "warning" : "skipped", searched ? `${connectors.filter(c => c.status === "ok" || c.status === "partial").map(c => c.label).join(", ")}: ${search.stored || 0} item(s) kept`
       : checkable.length ? "no outside evidence source could be searched" : "nothing checkable to search for");
 
     // 4 ---- comparison
@@ -288,19 +350,20 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     }
     const seqOf = Object.fromEntries(claims.map(c => [c.id, c.seq]));
     for (const e of compared) { e.claim_seq = seqOf[e.claim_id]; e.connector_label = CONNECTOR_LABEL[e.connector] || e.connector; }
-    setStage(id, "compare", "done", `${compared.length} item(s) compared, ${compared.filter(e => !e.repeat_of).length} independent`);
+    setStage(id, "compare", compared.length ? "done" : "skipped", compared.length ? `${compared.length} item(s) compared, ${compared.filter(e => !e.repeat_of).length} independent` : "no evidence was found to compare");
 
     // 5 ---- images and media
     check(); setStage(id, "media", "running");
     let mediaRes = { images: [], reuse: [], services: mediacheck.status(), note: "No image was available for this investigation." };
-    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; src.notes.push(`Image checks stopped: ${e.message}`); } }
-    setStage(id, "media", mediaRes.images.length ? "done" : "warning", mediaRes.images.length ? `${mediaRes.images.length} image(s) checked${mediaRes.reuse.length ? ` · ${mediaRes.reuse.length} possible reuse indicator(s)` : ""}` : "no image to check");
+    let mediaFailed = false;
+    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
+    setStage(id, "media", mediaFailed ? "failed" : mediaRes.images.length ? "done" : "skipped", mediaRes.images.length ? `${mediaRes.images.length} image(s) checked${mediaRes.reuse.length ? ` · ${mediaRes.reuse.length} possible reuse indicator(s)` : ""}` : "no image to check");
     // 6 ---- assessment
     check(); setStage(id, "assess", "running");
     const assessments = claims.map(c => assessClaim(c, compared, searched));
     const ov = claims.length ? overall(assessments, claims, mediaRes.reuse) : { verdict: "not_verifiable", label: AUTO_VERDICTS.not_verifiable, strength: "none", strength_label: "None found", note: null };
     const io = ioIndicators({ flags, injection: inj, compared, hashtags: tags, ioContext: ioCtx });
-    setStage(id, "assess", "done", ov.label);
+    setStage(id, "assess", checkable.length ? "done" : "skipped", checkable.length ? ov.label : `${ov.label}: no checkable claim`);
 
     // 6 ---- report
     check(); setStage(id, "report", "running");
@@ -311,6 +374,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       assessments, overall: ov, io, media: mediaRes, entities: ent, hashtags: tags, evidence: compared, top, search: connectors,
       methods: { similarity: "TF-IDF cosine over words and character trigrams", stance: compared.some(e => e.ai_stance) ? "published ratings, then wording rules; the AI's readings (with checked quotes) are shown beside them but do not decide" : "published ratings, then wording rules" },
       ai: { used: false, model: aiState.model || null, reason: aiState.ok ? "" : aiState.reason, notes: notesAI }, review: { status: "not reviewed", by: null, at: null } };
+    if (aiClaims) { r.ai.claims = aiClaims; if (aiClaims.kept) { r.ai.used = true; notesAI.push(`AI (${aiClaims.model}) proposed ${aiClaims.proposed} claim(s); ${aiClaims.kept} new one(s) found word for word in the content were added.`); } }
     r.sections = writeSections(r); r.written_by = "rules";
     if (aiState.ok && claims.length && budget(config.ai.timeoutMs || 90000) < 3000) notesAI.push("AI drafting was not used: the time limit was reached.");
     else if (aiState.ok && claims.length) {
@@ -463,5 +527,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     return inv;
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
-  return { start, rerun, get, list, review, approve, aiReady, askJson, file, assessmentOf, idle, close, services, STAGES };
+  return { start, rerun, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
 }
