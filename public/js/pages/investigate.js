@@ -44,8 +44,8 @@ export async function render(el, params = []) {
       <div id="ires"></div>
       <div id="invOut" hidden>
         <div class="row" style="margin:12px 0 8px;flex-wrap:wrap;gap:8px" id="iacts"></div>
-        <div class="card"><div class="hd"><h3>Full report</h3></div><div class="bd" style="padding:0">
-          <iframe id="irep" title="Report" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" style="width:100%;height:78vh;min-height:520px;border:0;border-radius:0 0 10px 10px;background:#fff"></iframe></div></div>
+        <div class="card"><div class="hd"><h3>Information Operations Assessment</h3><span class="small muted">One-page assessment · full evidence in Supporting evidence</span></div><div class="bd" style="padding:0">
+          <iframe id="irep" title="Information Operations Assessment" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" style="width:100%;height:78vh;min-height:520px;border:0;border-radius:0 0 10px 10px;background:#fff"></iframe></div></div>
       </div>
     </div>`;
   const files = $("#ifile"), err = $("#ierr");
@@ -137,6 +137,7 @@ async function follow(el, id) {
     $("#ifix").innerHTML = fixForm(inv); $("#ires").innerHTML = results(inv);
     $("#iacts").innerHTML = `<span class="chip ${VC[r.overall.verdict]}" style="font-size:14px">${esc(r.overall.label)} · ${esc(r.overall.strength_label)}</span>
       <a class="btn sm primary" href="${base}.pdf" download>Download Report (PDF)</a><a class="btn sm" href="${base}.docx" download>Word</a><a class="btn sm ghost" href="${base}.html?download=1">HTML</a>
+      <a class="btn sm ghost" id="idet" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Supporting evidence</a><a class="btn sm ghost" href="${base.replace(/report$/, "details")}.pdf" download>Evidence (PDF)</a>
       ${inv.case_id ? `<a class="btn sm ghost" href="#/case/${esc(inv.case_id)}">Open case ${esc(inv.case_id)}</a>` : ""}<a class="btn sm ghost" href="#/investigate">New investigation</a>
       ${App.can("case.approve") && !r.review?.at && inv.created_by !== App.me.id ? `<button class="btn sm ghost" id="irev">Record a review</button>` : ""}`;
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();

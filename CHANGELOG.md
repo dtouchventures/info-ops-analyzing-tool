@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.25.0 — One-page Information Operations Assessment (27 October 2026)
+
+- **New main report: "AIVS — INFORMATION OPERATIONS ASSESSMENT REPORT"**, one A4 portrait page, generated automatically when an investigation completes (`server/lib/ioassessment.js`).
+  - **Header:** reference, date/time of analysis (EAT), subject, source/platform, area of interest (or "Not established"), priority, status.
+  - **Sections:** 1. Background, 2. Analysis, 3. Assessment (overall verdict and an explained evidence-strength rating), 4. Recommendations (2–4), Key references (at most 3, clickable), Limitations (one sentence), Report status.
+  - **Length:** per-section limits (60–80 / 100–130 / 70–100 / 50–70 words) and about 400 words for the whole page. When the header and references take more room, whole sentences are dropped from the sections; nothing is cut mid-sentence and nothing is padded.
+  - **One page, always:** the PDF tries smaller font sizes until it fits on one page. The HTML has A4 print styles, and printed from a browser it also gives one page (checked in the end-to-end test).
+- **Only sources that address the claim are cited:** each key reference must support it, contradict it, rate it, or report the same event with different figures. Sources that only mention the subject stay in the supporting evidence. Similar statements are grouped ("A [1] and B [2] report …").
+- **Careful wording:**
+  - Observations, source statements and AIVS judgements are kept apart, in British English, with calibrated phrases.
+  - Hostile intent, coordination, foreign involvement or attribution are never stated without amplification data. AI-drafted text that does so, cites references that do not exist, gives percentages or contains links is rejected.
+  - The status shows "Approved" only when an approval was actually recorded. The page says it is an analytical support product, not an official KDF intelligence document. It carries no crest or classification marking.
+- **Supporting evidence kept separately:** the previous full report (methodology, all evidence, tables, hashes, audit) is now "AIVS — Supporting evidence and investigation details", at `/api/investigations/:id/details.(html|pdf|docx|json)`. `report.*` returns the one-page assessment in HTML, PDF, Word or JSON. Nothing stored was changed or deleted.
+- **Verify Information page:** shows the assessment, with buttons for Download Report (PDF), Word, HTML, Supporting evidence and Evidence (PDF).
+- **Search fix:** claim keywords such as "5G", "4G", "M23" and two-letter acronyms were being dropped from searches and relevance scoring. They are now kept.
+- **Evidence fix:** a source that states the opposite of the claim's own action ("5G networks do not spread …") is read as contradicting it (weak). "Did not confirm" or "could not verify" is not treated as a denial.
+- **New `npm run report:preview -- --find "5G"` (or `--id AIVS-…`):** builds the one-page assessment for an existing investigation from your real database, opened read-only. It reports the pages, the word counts and what each reference says about the claim, and checks that the database checksum is unchanged.
+
 ## 1.24.0 — Paste a link: automatic extraction of text and images, image verification, "Misleading or missing context" (27 October 2026)
 
 - **Verify Information starts with one box: "Paste a link to verify"**, and one button: **Analyse Automatically**. Text, screenshots and files remain available below it, for content without a link.

@@ -1,8 +1,8 @@
 {
   "name": "aivs",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "private": true,
-  "description": "AIVS — Information Verification and Evidence Assistant (KDF Information Operations pilot)",
+  "description": "AIVS \u2014 Information Verification and Evidence Assistant (KDF Information Operations pilot)",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -20,7 +20,8 @@
     "verify-audit": "node scripts/verify-audit.js",
     "test": "node --test test/*.test.js",
     "test:e2e": "node test/e2e.mjs",
-    "test:automatic:e2e": "node test/automatic-e2e.mjs"
+    "test:automatic:e2e": "node test/automatic-e2e.mjs",
+    "report:preview": "node scripts/preview-assessment.js"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",

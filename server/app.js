@@ -1154,8 +1154,9 @@ export function createApp(config) {
   }));
   api.get("/investigations", (req, res) => res.json({ investigations: investigations.list({ from: req.query.from, to: req.query.to, training: scopeOf(req) === 1, limit: req.query.limit }), timezone: "EAT (UTC+3)" }));
   api.get("/investigations/:id", (req, res) => res.json(investigations.get(req.params.id)));
-  api.get("/investigations/:id/report.:fmt(html|pdf|docx|json)", h(async (req, res) => {
-    const f = await investigations.file(req.params.id, req.params.fmt);
+  // report.* = the one-page Information Operations Assessment; details.* = supporting evidence and investigation details
+  api.get("/investigations/:id/:kind(report|details).:fmt(html|pdf|docx|json)", h(async (req, res) => {
+    const f = await investigations.file(req.params.id, req.params.fmt, req.params.kind);
     if (req.params.fmt === "html") res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
     if (req.params.fmt !== "html" || req.query.download) res.setHeader("Content-Disposition", `attachment; filename="${f.name}"`);
     res.type(f.type).send(f.body);

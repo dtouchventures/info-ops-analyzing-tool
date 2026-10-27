@@ -73,6 +73,16 @@ const DATES = new RegExp(`\\b\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4})?|\\b${MONTH}\\s+
 // figures stated in the text (counts, amounts), not the numbers inside dates and times
 export const figures = t => new Set((String(t || "").replace(DATES, " ").match(/\b\d[\d,]*(?:\.\d+)?\b/g) || []).map(n => n.replace(/,/g, "")));
 
+// the source negates the claim's own action ("5G networks spread the virus" / "5G networks do not spread the virus");
+// absence of confirmation ("did not confirm", "could not verify") is not treated as a denial
+const NEG = /\b(?:(?:do|does|did|can|could|will|would|is|are|was|were|has|have)\s+not|(?:do|does|did|ca|could|wo|would|is|are|was|were|has|have)n[’']t|cannot|never)\s+((?:\p{L}+\s+){0,2}?)(\p{L}{3,})/giu;
+const ABSENCE = /^(confirm|verify|verif|comment|respond|say|said|know|disclose|reveal|identify|specify)/i;
+export function negates(claimText, body) {
+  const cw = String(claimText || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 3 && !/^(that|this|with|from|have|been|they|their|there|will|would)$/.test(w)).map(w => w.slice(0, 5));
+  if (/\b(not|never|no)\b|n't/i.test(claimText)) return null; // a negative claim needs a person to compare
+  for (const m of String(body || "").matchAll(NEG)) { const w = m[2].toLowerCase(); if (!ABSENCE.test(w) && cw.includes(w.slice(0, 5))) return m[0].trim(); }
+  return null;
+}
 export function ruleStance(claim, e) {
   if (e.rating) {
     const raw = ratingToVerdict(e.rating), v = activeVerdict(raw);
@@ -86,6 +96,8 @@ export function ruleStance(claim, e) {
   if (rel < 0.18) return ["related", "none", "mentions similar topics only"];
   const ref = body.match(REFUTE);
   if (ref && rel >= 0.22) return ["contradicts", "moderate", `the source uses refuting words (“${ref[0]}”) about the same subject`];
+  const neg = negates(claim.text, body);
+  if (neg && rel >= 0.3) return ["contradicts", "weak", `the source states the opposite (“${neg}”)`];
   const fc = figures(claim.text), fe = figures(body), names = claim.names || [];
   const namesOk = names.length ? names.filter(n => body.toLowerCase().includes(n.toLowerCase())).length / names.length >= 0.5 : false;
   const figsOk = [...fc].every(n => fe.has(n));
@@ -103,7 +115,9 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
     const rel = similarities(cl.text, mine.map(e => `${e.source_title || ""}. ${e.snippet || ""}`));
     mine.forEach((e, i) => {
       e.relevance = rel[i];
-      const [tier, outlet] = classify(e); e.tier = tier; e.tier_label = TIERS[tier][1]; e.publisher = e.source_publisher || outlet || hostOf(e.source_url) || e.reference;
+      const [tier, outlet] = classify(e); e.tier = tier; e.tier_label = TIERS[tier][1];
+      // a bare domain name is replaced by the organisation's name when AIVS knows it (e.g. health.go.ke -> Ministry of Health)
+      e.publisher = outlet && (!e.source_publisher || /^[\w.-]+\.[a-z]{2,}$/i.test(e.source_publisher)) ? outlet : e.source_publisher || outlet || hostOf(e.source_url) || e.reference;
       e.domain = e.source_url ? registrable(hostOf(e.source_url)) : `${e.connector}:${e.id}`;
       const [stance, strength, basis] = ruleStance(cl, e);
       Object.assign(e, { stance, stance_strength: strength, stance_basis: basis, stance_method: e.rating ? "published rating" : "rules" });

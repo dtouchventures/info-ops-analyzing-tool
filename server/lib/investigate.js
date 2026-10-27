@@ -17,7 +17,8 @@ import { nowISO, nextId } from "./db.js";
 import { HttpError, can } from "./auth.js";
 import { parseSourceLink, suggestSource, parsePostScreenshot, extractEntities, extractHashtags, redFlags, injectionFlags } from "../../shared/text.js";
 import { compare, topFor, assessClaim, overall, ioIndicators, checkSections, AUTO_VERDICTS } from "./autoeval.js";
-import { writeSections, limitations, toHtml, toPdf, toDocx } from "./autoreport.js";
+import { writeSections, limitations, toHtml, toPdf, toDocx, docxFromBody } from "./autoreport.js";
+import { buildAssessment, checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml } from "./ioassessment.js";
 import { providers } from "../ai/providers.js";
 import { fetchImage } from "./fetchurl.js";
 import { makeMediaCheck } from "./mediacheck.js";
@@ -320,7 +321,21 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     }
     if (compared.some(e => e.ai_stance)) r.ai.used = true;
     const line = writeSections(r).assessment[0]; if (r.sections.assessment[0] !== line) r.sections.assessment.unshift(line);   // the verdict line is always the rule-based one
-    r.completed_at = nowISO(); r.limitations = limitations(r);
+    r.completed_at = nowISO(); r.limitations = limitations(r); r.priority = caseRow?.priority || "routine";
+    // the one-page Information Operations Assessment: rule-based draft, rewritten by the AI when available, then checked
+    let ioa = buildAssessment(r, { priority: r.priority });
+    if (aiState.ok && claims.length && budget(config.ai.timeoutMs || 90000) >= 3000) {
+      try {
+        const facts = { subject: r.subject, source: { platform: src.platform, author: src.author, published_at: src.published_at, access: src.access }, overall: ov.label, strength: ov.strength_label,
+          claims: claims.map((c, i) => ({ text: c.text, verdict: AUTO_VERDICTS[assessments[i].verdict], reason: assessments[i].reason })), references: ioa.references.map(f => ({ n: f.n, publisher: f.publisher, title: f.title, addresses: f.addresses, rating: f.rating })),
+          indicators: io.observed.map(o => o.indicator), image_findings: (mediaRes.images || []).flatMap(i => i.observations.filter(o => o.strength !== "ai").map(o => o.text)).slice(0, 4) };
+        const out = await withTimeout(askJson(user, caseId, "one-page assessment drafting", aiPrompt(ioa, facts)), budget(config.ai.timeoutMs || 90000), "AI assessment drafting"); check();
+        const chk = checkAiSections(out, ioa, { hasAmplification: io.observed.some(o => ["repetition", "dataset", "amplification", "spread"].includes(o.kind)), nRefs: ioa.references.length });
+        if (chk.removed.length) notesAI.push(`One-page assessment: AI text not used for ${chk.removed.join("; ")}.`);
+        ioa = { ...chk, removed: undefined }; if (ioa.written_by === "ai") r.ai.used = true;
+      } catch (e) { if (e instanceof Cancelled) throw e; notesAI.push(`One-page assessment drafting by AI was not used (${e.message}); rule-based text applied.`); }
+    }
+    r.io_assessment = ioa;
     check();
     const fin = db.prepare("UPDATE investigations SET status = 'done', completed_at = ?, subject = ?, overall = ?, source_published_at = ?, result_json = ?, error = NULL, stages_json = ? WHERE id = ? AND status = 'running'")
       .run(r.completed_at, r.subject, ov.verdict, src.published_at, JSON.stringify(r), JSON.stringify(stagesWith(row(id), "report", "done", r.written_by === "ai" ? `text drafted by ${r.ai.model} and checked` : "rule-based text")), id);
@@ -387,16 +402,32 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     audit(user, "Automatic report reviewed", "investigation", r.id, { report_id: r.report_id, note: res.review.note });
     if (r.case_id) cases.change(user, r.case_id, `Automatic report ${r.report_id} reviewed by ${user.display_name}`, () => {});
   }
-  async function file(id, fmt) {
+  // the one-page assessment is rebuilt from the saved investigation each time it is opened (header status and review
+  // are current); AI-drafted section text saved with the investigation is kept. Nothing is written back.
+  function assessmentOf(res, r) {
+    const fresh = buildAssessment(res, { priority: res.priority || (r.case_id ? db.prepare("SELECT priority FROM cases WHERE id = ?").get(r.case_id)?.priority : null) });
+    const saved = res.io_assessment;
+    return saved?.written_by === "ai" ? { ...fresh, background: saved.background, analysis: saved.analysis, assessment: saved.assessment, recommendations: saved.recommendations, written_by: "ai" } : fresh;
+  }
+  async function file(id, fmt, kind = "report") {
+    if (kind === "report") {
+      const r = row(id); if (!r) throw new HttpError(404, "No such investigation.");
+      if (r.status !== "done") throw new HttpError(409, "The report is not ready yet.");
+      const res = JSON.parse(r.result_json), a = assessmentOf(res, r);
+      if (fmt === "html") return { body: assessmentHtml(a, { detailsUrl: true }), type: "text/html; charset=utf-8", name: `${r.report_id}-assessment.html` };
+      if (fmt === "pdf") { const p = await assessmentPdf(a); return { body: p.buf, type: "application/pdf", name: `${r.report_id}-assessment.pdf`, pages: p.pages }; }
+      if (fmt === "docx") return { body: docxFromBody(assessmentDocxXml(a)), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}-assessment.docx` };
+      if (fmt === "json") return { body: JSON.stringify(a, null, 2), type: "application/json", name: `${r.report_id}-assessment.json` };
+    }
     const r = row(id); if (!r) throw new HttpError(404, "No such investigation.");
     if (r.status !== "done") throw new HttpError(409, "The report is not ready yet.");
     const res = JSON.parse(r.result_json);
     const images = (res.media?.images || []).slice(0, 6).map(i => { const m = db.prepare("SELECT thumb_sha256 FROM media WHERE id = ?").get(i.media_id); let buffer = null; try { buffer = m?.thumb_sha256 ? fs.readFileSync(storage.pathOf(m.thumb_sha256)) : null; } catch {}
       return { media_id: i.media_id, buffer, dataUri: buffer ? `data:image/jpeg;base64,${buffer.toString("base64")}` : null }; });
-    if (fmt === "html") return { body: toHtml(res, { images }), type: "text/html; charset=utf-8", name: `${r.report_id}.html` };
-    if (fmt === "pdf") return { body: await toPdf(res, { images }), type: "application/pdf", name: `${r.report_id}.pdf` };
-    if (fmt === "docx") return { body: toDocx(res), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}.docx` };
-    if (fmt === "json") return { body: JSON.stringify(res, null, 2), type: "application/json", name: `${r.report_id}.json` };
+    if (fmt === "html") return { body: toHtml(res, { images }), type: "text/html; charset=utf-8", name: `${r.report_id}-details.html` };
+    if (fmt === "pdf") return { body: await toPdf(res, { images }), type: "application/pdf", name: `${r.report_id}-details.pdf` };
+    if (fmt === "docx") return { body: toDocx(res), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}-details.docx` };
+    if (fmt === "json") return { body: JSON.stringify(res, null, 2), type: "application/json", name: `${r.report_id}-details.json` };
     throw new HttpError(404, "Formats: html, pdf, docx, json.");
   }
   const idle = () => !running.size && !queue.length;
@@ -411,5 +442,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     return inv;
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
-  return { start, rerun, get, list, review, file, idle, close, services, STAGES };
+  return { start, rerun, get, list, review, file, assessmentOf, idle, close, services, STAGES };
 }

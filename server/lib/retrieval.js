@@ -17,11 +17,13 @@ export const OFFICIAL_SOURCES = [
   ["kenyalaw.org", "Kenya Law (Kenya Gazette and laws)"], ["redcross.or.ke", "Kenya Red Cross"], ["africacheck.org", "Africa Check"], ["pesacheck.org", "PesaCheck"]
 ];
 const STOP = new Set("the a an and or of to in on at for with by from is are was were be been being this that these those it its as has have had will would can could should may might not no yes their there they them he she his her our we you your i me my about after before over under into than then also just very more most such only other some any each all both few many much do does did done new says said according breaking urgent update alert ya na wa kwa la za katika kuwa ni hii huu hiyo hizo leo jana sasa".split(" "));
+// short terms that carry the meaning of a claim are kept: "5G", "4G", "M23", "G7" (letters with digits) and two-letter acronyms ("UN", "AU")
+const keep = w => w.length > 2 || (/\d/.test(w) && /\p{L}/u.test(w)) || /^[A-Z]{2}$/.test(w);
 export function buildQuery(text) {
-  const words = String(text || "").replace(/https?:\/\/\S+/g, " ").replace(/[#@][\p{L}\p{N}_]+/gu, m => m.slice(1)).split(/[^\p{L}\p{N}'-]+/u).filter(w => w.length > 2 && !STOP.has(w.toLowerCase()));
+  const words = String(text || "").replace(/https?:\/\/\S+/g, " ").replace(/[#@][\p{L}\p{N}_]+/gu, m => m.slice(1)).split(/[^\p{L}\p{N}'-]+/u).filter(w => keep(w) && !STOP.has(w.toLowerCase()));
   return [...new Set(words)].slice(0, 14).join(" ").slice(0, 200);
 }
-const tokens = s => new Set(String(s || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 2 && !STOP.has(w)));
+const tokens = s => new Set(String(s || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => (w.length > 2 || (/\d/.test(w) && /\p{L}/u.test(w))) && !STOP.has(w)));
 export function relevance(a, b) { const A = tokens(a), B = tokens(b); if (!A.size || !B.size) return 0; let n = 0; for (const x of A) if (B.has(x)) n++; return n / Math.min(A.size, B.size); }
 
 async function getJson(url, headers, timeoutMs) {

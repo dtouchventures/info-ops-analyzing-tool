@@ -767,9 +767,13 @@ let watchDead = [], watchSeen = 0;
   check("the seven processing stages are shown, including the image checks", (await a.$$("#istages li")).length === 7 && (await a.textContent("#istages")).includes("Extracting the content") && (await a.textContent("#istages")).includes("Checking images and media"));
   await a.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
   const rep = a.frameLocator("#irep"), body = await rep.locator("body").innerText(), body0 = await a.textContent("#ires");
-  check("the completed report appears automatically with all five sections", ["A. BACKGROUND", "B. ANALYSIS", "C. ASSESSMENT", "D. RECOMMENDATIONS", "E. REFERENCES"].every(h => body.toUpperCase().includes(h)), body.slice(0, 200));
-  check("the report is labelled AI-generated and not reviewed, with its dates", /AI-generated · not reviewed by an analyst/.test(body) && /Investigation date/.test(body) && /EAT/.test(body));
-  check("without evidence sources the report says the evidence is insufficient (nothing invented)", /Insufficient evidence/.test(body) && /Avoid drawing conclusions/.test(body));
+  check("the one-page Information Operations Assessment appears automatically with its four sections", body.toUpperCase().includes("INFORMATION OPERATIONS ASSESSMENT REPORT") && ["1. BACKGROUND", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", "KEY REFERENCES", "LIMITATIONS", "REPORT STATUS"].every(h => body.toUpperCase().includes(h)), body.slice(0, 200));
+  check("the assessment is labelled AI-generated and not reviewed, dated in EAT, and not presented as an official KDF document", /AI-Generated \(not reviewed\)/.test(body) && /EAT/.test(body) && /not an official KDF intelligence document/.test(body));
+  check("without evidence sources the assessment says the evidence is insufficient (nothing invented)", /Insufficient evidence/i.test(body) && /Seek corroboration/.test(body));
+  { const h = await a.getAttribute("#idet", "href"), pg = await a.context().newPage(); await pg.goto(S.base + h); const dt = await pg.textContent("body");
+    check("the supporting evidence and investigation details stay available separately", /SUPPORTING EVIDENCE AND INVESTIGATION DETAILS/.test(dt) && /A\. Background/i.test(dt), dt.slice(0, 120));
+    await pg.goto(S.base + h.replace(/details\.html$/, "report.html")); const pp = await pg.pdf({ format: "A4" }), np = (pp.toString("latin1").match(/\/Type\s*\/Page\b/g) || []).length;
+    check("printed from the browser, the HTML assessment fits one A4 page (same as the PDF)", np === 1, `${np} page(s)`); await pg.close(); }
   check("the results show the verdict, the claims with their evidence, the evidence sources and next steps", ["Overall preliminary verdict", "Claims and evidence", "Evidence sources", "Recommended next steps"].every(t => body0.includes(t)), body0.slice(0, 200));
   check("the extracted content and the detected claims are shown", (await a.textContent("#iprev")).includes("Ministry of Health") && (await a.textContent("#iprev")).includes("Detected claims"));
   check("PDF and Word downloads are offered", !!(await a.$('#iacts a[href$="report.pdf"]')) && !!(await a.$('#iacts a[href$="report.docx"]')));
@@ -785,7 +789,7 @@ let watchDead = [], watchSeen = 0;
   await ph.goto(S.base); await ph.fill("#lu", "ana"); await ph.fill("#lp", PW); await ph.click("#lb"); await ph.waitForSelector(".shell");
   await ph.goto(S.base + "/#/investigate"); await ph.waitForSelector("#igo"); await ph.fill("#iv", "PRACTICE: A new steel bridge in Marsabit town was opened last night.");
   await ph.click("#igo"); await ph.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
-  check("on a phone the page fits the screen and shows the report", (await ph.evaluate(() => document.documentElement.scrollWidth)) <= 380 && /Background/i.test(await ph.frameLocator("#irep").locator("body").innerText()));
+  check("on a phone the page fits the screen and shows the report", (await ph.evaluate(() => document.documentElement.scrollWidth)) <= 380 && /BACKGROUND/i.test(await ph.frameLocator("#irep").locator("body").innerText()));
   await shot(ph, "41-automatic-report-phone"); await ph.context().close();
 }
 let dead = [], seen = 0;
