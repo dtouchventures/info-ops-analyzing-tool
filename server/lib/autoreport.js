@@ -21,7 +21,8 @@ export function writeSections(r) {
   const kind = { url: "a link", text: "pasted text", image: "an image or screenshot", document: "a document" }[x.input_type] || "a submission";
   const bg = [`The submission was ${kind}${x.platform ? ` from ${x.platform}` : ""}${x.title ? `, titled “${x.title}”` : ""}.`];
   // content the platform did not let AIVS read, supplied by an analyst instead (1.30): said first, because everything rests on it
-  if (x.provenance) bg.push(`${x.provenance.platform || "The platform"} did not allow automatic extraction of the original post${x.provenance.original_link ? ` (${x.provenance.original_link})` : ""}. The content analysed here was supplied by ${x.provenance.supplied_by} on ${eat(x.provenance.supplied_at)} as ${x.provenance.items.join(", ")}, not retrieved automatically.`);
+  if (x.provenance && !x.provenance.continues) bg.push(`The content analysed was captured by ${x.provenance.supplied_by} from their own browser view on ${eat(x.provenance.supplied_at)}${x.provenance.original_link ? ` (${x.provenance.original_link})` : ""}, not retrieved automatically by AIVS.`);
+  else if (x.provenance) bg.push(`${x.provenance.platform || "The platform"} did not allow automatic extraction of the original post${x.provenance.original_link ? ` (${x.provenance.original_link})` : ""}. The content analysed here was supplied by ${x.provenance.supplied_by} on ${eat(x.provenance.supplied_at)} as ${x.provenance.items.join(", ")}, not retrieved automatically.`);
   const who = [x.author && `attributed to ${x.author} (${x.author_basis || "basis not stated"})`, x.published_at && `dated ${eat(x.published_at)} (${x.published_basis || "basis not stated"})`].filter(Boolean);
   bg.push(who.length ? `It is ${who.join(" and ")}.` : "No author or publication date could be established from the submission.");
   const chk = r.claims.filter((c, i) => r.assessments[i].verdict !== "not_verifiable" || c.claim_type === "factual");

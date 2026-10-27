@@ -164,5 +164,13 @@ export function makeRetrieval(db, { config, audit, usage }) {
     }
   }
   function usageFail(service) { try { db.prepare("INSERT INTO api_usage(at,service,operation,units,est_cost_usd,status) VALUES (?,?,?,?,?,?)").run(nowISO(), service, "call", 1, null, "error"); } catch {} }
-  return { status, retrieve, connectors, suggestVerdicts };
+  // independent public references to a social media post AIVS could not read (1.31): pages that quote or link the post itself.
+  // They are listed as references, never treated as the post's content.
+  async function references(link, { postId = null } = {}) {
+    if (!S.braveKey) return { configured: false, results: [], note: "No web search is configured (BRAVE_SEARCH_API_KEY), so independent references to the post could not be looked for." };
+    const qs = [`"${link}"`, postId && /^\d{6,}$/.test(postId) ? `"${postId}"` : null].filter(Boolean), seen = new Set(), out = [], errors = [];
+    for (const q of qs) { try { for (const r of await brave(q)) { const h = host(r.url) || ""; if (/(^|\.)(facebook|instagram|fb)\.com$/.test(h) || seen.has(r.url)) continue; seen.add(r.url); out.push({ ...r, found_by: q }); } } catch (e) { errors.push(e.message); } }
+    return { configured: true, results: out.slice(0, 8), errors, note: out.length ? `${out.length} public page(s) refer to this post. They are independent references, not the post's content.` : "No public page referring to this post was found." };
+  }
+  return { status, retrieve, connectors, suggestVerdicts, references };
 }

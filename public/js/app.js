@@ -20,7 +20,7 @@ const ROUTES = [
   [/^#\/start$/, () => import("./pages/start.js"), "start"],
   [/^#\/dashboard$/, () => import("./pages/dashboard.js"), "dashboard"],
   [/^#\/verify(?:\/(post))?$/, () => import("./pages/verify.js"), "verify"],
-  [/^#\/investigate(?:\/(INV-\d+))?$/, () => import("./pages/investigate.js"), "investigate"],
+  [/^#\/investigate(?:\/(INV-\d+|capture)(?:\?.*)?)?$/, () => import("./pages/investigate.js"), "investigate"],
   [/^#\/search(?:\?(.*))?$/, () => import("./pages/search.js"), "search"],
   [/^#\/privacy$/, () => import("./pages/privacy.js"), "privacy"],
   [/^#\/cases(?:\?(.*))?$/, () => import("./pages/cases.js"), "cases"],
@@ -141,7 +141,7 @@ function loginView(msg) {
 
 // The version of these browser files. If the running server reports a different version, the server was not
 // restarted after an update: the pages are new but the server code is old, so new features show nothing.
-export const CLIENT_VERSION = "1.30.0";
+export const CLIENT_VERSION = "1.31.0";
 async function checkServerVersion() {
   try {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());

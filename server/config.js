@@ -70,7 +70,8 @@ export const config = {
   // optional reverse-image search for automatic investigations (images are sent to Google Cloud Vision web detection)
   mediaCheck: { visionKey: env.GOOGLE_VISION_API_KEY || "", visionBase: env.GOOGLE_VISION_BASE_URL || "https://vision.googleapis.com", timeoutMs: int(env.SEARCH_TIMEOUT_MS, 15000) },
   // social media post lookup through the platforms' public embed services (no key except Facebook/Instagram)
-  social: { metaToken: env.META_OEMBED_TOKEN || "", timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },
+  // Meta oEmbed needs an app token: META_OEMBED_TOKEN (APPID|CLIENTTOKEN), or META_APP_ID with the app's client token (META_CLIENT_TOKEN)
+  social: { metaToken: env.META_OEMBED_TOKEN || (env.META_APP_ID && env.META_CLIENT_TOKEN ? `${env.META_APP_ID}|${env.META_CLIENT_TOKEN}` : ""), timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },
   // optional local AI for social media analysis (Ollama on this computer or an institution server; never the internet)
   ollama: { url: env.OLLAMA_URL || ((env.AI_PROVIDER || "").toLowerCase() === "ollama" ? env.AI_BASE_URL || "http://localhost:11434" : ""), model: env.OLLAMA_MODEL || ((env.AI_PROVIDER || "").toLowerCase() === "ollama" ? env.AI_MODEL || "" : ""), timeoutMs: int(env.OLLAMA_TIMEOUT_MS, 60000), batch: int(env.OLLAMA_BATCH_SIZE, 20), allowRemote: env.OLLAMA_ALLOW_REMOTE === "true" || env.AI_ALLOW_REMOTE === "true" },
   // official platform APIs for collecting public posts (server side only; leave blank to keep a collector off)

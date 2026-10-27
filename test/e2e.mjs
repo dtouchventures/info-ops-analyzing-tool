@@ -855,7 +855,7 @@ let watchDead = [], watchSeen = 0;
   await a.click("#igo"); await a.waitForSelector("#ierr:not([hidden])"); check("Analyze Information without input explains what is missing", (await a.textContent("#ierr")).includes("Paste a link or some text"));
   await a.fill("#iv", "PRACTICE: The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026. Share this before it is deleted!");
   await a.click("#igo"); await a.waitForSelector("#istages li", { timeout: 10000 });
-  check("the seven processing stages are shown, including the image checks", (await a.$$("#istages li")).length === 7 && (await a.textContent("#istages")).includes("Extracting the content") && (await a.textContent("#istages")).includes("Checking images and media"));
+  check("the eight processing stages are shown, from source detection to the report, including the image checks", (await a.$$("#istages li")).length === 8 && (await a.textContent("#istages")).includes("Detecting the source") && (await a.textContent("#istages")).includes("Extracting the content") && (await a.textContent("#istages")).includes("Checking images and media"));
   await a.waitForSelector("#invOut:not([hidden])", { timeout: 60000 });
   const rep = a.frameLocator("#irep"), body = await rep.locator("body").innerText(), body0 = await a.textContent("#ires");
   check("the one-page Information Operations Assessment appears automatically with its four sections", body.toUpperCase().includes("INFORMATION OPERATIONS ASSESSMENT REPORT") && ["1. BACKGROUND", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", "KEY REFERENCES", "LIMITATIONS", "REPORT STATUS"].every(h => body.toUpperCase().includes(h)), body.slice(0, 200));

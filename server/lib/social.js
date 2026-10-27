@@ -15,6 +15,7 @@
 import { parseSourceLink } from "../../shared/text.js";
 import { nowISO } from "./db.js";
 import { normText } from "./io.js";
+import { fetchPage } from "./fetchurl.js";
 
 const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", mdash: "—", ndash: "–", hellip: "…", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" };
 const decode = s => String(s || "").replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => e[0] === "#" ? (() => { const n = e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : +e.slice(1); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ""; })() : ENT[e.toLowerCase()] ?? m);
@@ -127,6 +128,48 @@ export function makeSocial(db, { config }) {
     }
     attempts.push({ method: "share link redirect", result: "failed", detail: "too many redirects" }); return null;
   }
+
+  // ---------------------------------------------------------------- public page metadata (Open Graph), only where the site allows it
+  // The post's own public page is read once, as a link preview does, and only when the site's robots.txt allows automated access
+  // to that path; a sign-in page, a consent wall or a missing description counts as "not available". Nothing is bypassed.
+  const robotsCache = new Map();
+  async function robotsAllows(u) {
+    const key = u.origin; let rules = robotsCache.get(key);
+    if (!rules || Date.now() - rules.at > 6 * 3600e3) {
+      let txt = ""; try { const base = S.bases?.page?.[u.hostname]; const r = await get(`${base || u.origin}/robots.txt`, { accept: "text/plain" }); txt = r.status === 200 ? r.body : r.status >= 500 ? null : ""; } catch { txt = null; }
+      const groups = []; let cur = null, lastUa = false;
+      for (const raw of String(txt || "").split(/\r?\n/)) { const l = raw.replace(/#.*$/, "").trim(), m = /^([\w-]+)\s*:\s*(.*)$/.exec(l); if (!m) continue; const k = m[1].toLowerCase(), v = m[2].trim();
+        if (k === "user-agent") { if (!lastUa) { cur = { agents: [], rules: [] }; groups.push(cur); } cur.agents.push(v.toLowerCase()); lastUa = true; }
+        else { lastUa = false; if (cur && (k === "allow" || k === "disallow")) cur.rules.push({ allow: k === "allow", path: v }); } }
+      const g = groups.find(x => x.agents.some(a => a !== "*" && "aivs-verification".includes(a))) || groups.find(x => x.agents.includes("*"));
+      rules = { at: Date.now(), unknown: txt === null, rules: g ? g.rules.filter(r => r.path) : [] }; robotsCache.set(key, rules);
+    }
+    // robots.txt that cannot be read (network error or server error) means no automated access (RFC 9309)
+    if (rules.unknown) { robotsCache.delete(key); return { allowed: false, rule: "robots.txt could not be read" }; }
+    const p = u.pathname + u.search; let best = null;
+    for (const r of rules.rules) { const re = new RegExp(`^${r.path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\\\$$/, "$")}`); if (re.test(p) && (!best || r.path.length > best.path.length || (r.path.length === best.path.length && r.allow))) best = r; }
+    return { allowed: !best || best.allow, rule: best ? `${best.allow ? "Allow" : "Disallow"}: ${best.path}` : null };
+  }
+  async function publicMetadata(link, A, platform) {
+    const u = new URL(link), rb = await robotsAllows(u);
+    if (!rb.allowed) { A.push({ method: "public page metadata (Open Graph)", result: "not permitted", detail: rb.rule === "robots.txt could not be read" ? `${u.hostname}'s robots.txt could not be read, so AIVS did not read the page (no automated access without the site's permission)` : `${u.hostname}'s robots.txt does not allow automated access to this page (${rb.rule}), so AIVS did not read it` }); return null; }
+    try {
+      const base = S.bases?.page?.[u.hostname], pg = await fetchPage(base ? `${base}${u.pathname}${u.search}` : link, { allowPrivate: !!base || !!config.allowPrivateFetch });
+      const fin = new URL(pg.finalUrl);
+      if (/^\/(login|checkpoint|accounts\/login|consent|challenge)/i.test(fin.pathname) || /log in|sign up to see|login/i.test(String(pg.title || "")) && !pg.description) { A.push({ method: "public page metadata (Open Graph)", result: "blocked", detail: `${platform} showed a sign-in page instead of the post. AIVS does not sign in to platforms.` }); return null; }
+      const desc = String(pg.description || "").trim();
+      if (!desc && !pg.title) { A.push({ method: "public page metadata (Open Graph)", result: "no data", detail: "the page gave no title or description" }); return null; }
+      A.push({ method: "public page metadata (Open Graph)", result: desc ? "ok (description may be shortened)" : "title only" });
+      return { title: pg.title || null, description: desc || null, image: (pg.images || [])[0]?.url || null, published_at: pg.published || null, published_basis: pg.publishedBasis || null, author: pg.author || null, final_url: pg.finalUrl };
+    } catch (e) { A.push({ method: "public page metadata (Open Graph)", result: "failed", detail: redact(e.message) }); return null; }
+  }
+  const useMetadata = (out, md, platform) => {
+    if (!md) return;
+    if (md.image && !out.thumbnail_url) out.thumbnail_url = md.image;
+    if (!out.text && md.description) Object.assign(out, { text: md.description, text_status: "partial", text_source: `${platform} public page description (Open Graph; may be shortened)` });
+    if (md.published_at && !out.posted_at) Object.assign(out, { posted_at: md.published_at, posted_basis: `${md.published_basis} of the public page` });
+    if (!out.title && md.title) out.title = md.title;
+  };
 
   // ---------------------------------------------------------------- adapters
   async function xAdapter(out, L, A) {
@@ -271,15 +314,18 @@ export function makeSocial(db, { config }) {
       } else A.push({ method: "Meta oEmbed", result: "failed", detail: ids.kind === "share" ? `${r.message} Share links are often not accepted: open the post and copy the address from the browser bar.` : r.message });
     } else if (!S.metaToken) out.needs.push({ setting: "META_OEMBED_TOKEN", why: "the app ID and client token (APPID|CLIENTTOKEN) of a Meta app with the oEmbed Read feature: gives the author and sometimes a shortened text of public posts" });
     if (out.text) return;
-    if (opts.skipGraph && !S.metaToken) return { status: "unavailable", message: opts.reason || "Facebook did not provide this post's text to AIVS." };
+    // 3. the post's public page metadata, where Facebook allows automated access
+    if (ids.kind !== "share" || out.resolved_url) { useMetadata(out, await publicMetadata(link, A, "Facebook"), "Facebook"); if (out.text) return; }
+    if (opts.skipGraph && !S.metaToken) return { status: "unavailable", message: `${opts.reason || "Facebook did not provide this post's text to AIVS."} ${A.filter(a => /Open Graph/.test(a.method)).map(a => a.detail || a.result).join(" ")}`.trim() };
     if (!S.metaToken && !P.facebookToken) return { status: "not_configured", message: "Facebook shares the words of a post only with registered apps, and no Meta token is set on this server (META_OEMBED_TOKEN or FACEBOOK_ACCESS_TOKEN)." };
     return { status: out.author_name ? "no_text" : "unavailable", message: ids.kind === "share" && !out.resolved_url ? "Facebook did not reveal where this share link leads. Open it, copy the post's address from the browser bar and paste that instead." : "Facebook did not give AIVS the words of this post." };
   }
   async function instagramAdapter(out, L, A) {
     out.service = "meta";
+    if (!S.metaToken) { useMetadata(out, await publicMetadata(L.url, A, "Instagram"), "Instagram"); if (out.text) return; }
     if (!S.metaToken) { out.needs.push({ setting: "META_OEMBED_TOKEN", why: "Instagram shares a post's author and caption only with registered Meta apps that have the oEmbed Read feature" }); return { status: "not_configured", message: "Instagram shares a post only with registered apps, and no Meta app token (META_OEMBED_TOKEN) is set on this server." }; }
     const r = await oembed("meta_embed", `${B.meta}/v21.0/instagram_oembed?${new URLSearchParams({ url: L.url, access_token: S.metaToken, omitscript: "true" })}`);
-    if (!r.ok) { A.push({ method: "Meta oEmbed (Instagram)", result: "failed", detail: r.message }); return { status: "unavailable", message: r.message }; }
+    if (!r.ok) { A.push({ method: "Meta oEmbed (Instagram)", result: "failed", detail: r.message }); useMetadata(out, await publicMetadata(L.url, A, "Instagram"), "Instagram"); if (out.text) return; return { status: "unavailable", message: r.message }; }
     const bq = /<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/i.exec(String(r.json.html || "")), p = bq && /<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(bq[1]);
     const words = r.json.title || (p ? htmlText(p[1]) : null);
     A.push({ method: "Meta oEmbed (Instagram)", result: words ? "ok (caption may be shortened)" : "author only, no caption" });

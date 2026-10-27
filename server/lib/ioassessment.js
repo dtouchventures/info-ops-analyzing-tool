@@ -60,7 +60,7 @@ export function buildAssessment(r, { priority = null, approval = null } = {}) {
   const who = [x.author && `attributed to ${x.author}`, x.platform && `on ${x.platform}`].filter(Boolean).join(" ");
   const bg = [
     main ? `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} claims that ${lc(short(main.text.replace(/[.!]+$/, ""), 32))}.` : `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} was submitted, but no checkable claim could be identified.`,
-    x.provenance ? `${x.provenance.platform || "The platform"} did not allow automatic extraction; the content was supplied by an analyst, not retrieved automatically.` : null,
+    x.provenance ? (x.provenance.continues ? `${x.provenance.platform || "The platform"} did not allow automatic extraction; the content was supplied by an analyst, not retrieved automatically.` : "The content was captured by an analyst from their own browser view, not retrieved automatically.") : null,
     pub ? `It was published on ${pub}${x.published_basis ? "" : ""} and received by AIVS on ${recv}.` : `Its publication date could not be established; AIVS received it on ${recv}.`,
     places.length || orgs.length ? `It refers to ${[places.length && places.join(", "), orgs.length && orgs.join(", ")].filter(Boolean).join(" and ")}.` : null,
     `It merits analysis because it ${topic ? `concerns ${topic}` : "makes a checkable public claim"}${content.length ? " and shows features common in misleading messages" : ""}, and could affect public understanding if repeated.`,

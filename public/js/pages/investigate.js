@@ -7,7 +7,7 @@ import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
 
-const STAGES = [["extract", "Extracting the content"], ["analyse", "Detecting claims"], ["search", "Searching for evidence"], ["compare", "Cross-checking sources"], ["media", "Checking images and media"], ["assess", "AI assessment"], ["report", "Generating the report"]];
+const STAGES = [["source", "Detecting the source"], ["extract", "Extracting the content (authorised methods)"], ["analyse", "Detecting claims (AI)"], ["search", "Collecting evidence"], ["compare", "Cross-checking sources"], ["media", "Checking images and media"], ["assess", "Assessment"], ["report", "Generating the report"]];
 const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "warn", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
@@ -25,7 +25,7 @@ export async function render(el, params = []) {
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:stretch">
         <input id="iv" type="text" inputmode="url" autocomplete="off" maxlength="2000" placeholder="https://example.com/news/article" style="flex:1;min-width:240px;font-size:16px;padding:12px">
         <button class="btn primary" id="igo" style="font-size:16px;padding:12px 20px">Analyse Automatically</button></div>
-      <div class="tiny sub" style="margin-top:6px">News sites, blogs, X, YouTube, TikTok, Telegram and other public pages. Facebook and Instagram posts can be read only with an approved Meta access token; otherwise add a screenshot below.</div>
+      <div class="tiny sub" style="margin-top:6px">News sites, blogs, X, YouTube, TikTok, Telegram, Facebook and Instagram. AIVS tries every method it is allowed to use; when a platform restricts access it says so and offers the alternatives.</div>
       <details id="imore" style="margin-top:12px"><summary class="small">No link? Paste text, or add a screenshot, image, PDF or Word file</summary>
         <textarea id="itext" rows="4" maxlength="20000" style="margin-top:8px" placeholder="Paste the text of a post, message or report"></textarea>
         <div class="row" style="margin-top:8px;gap:10px;flex-wrap:wrap"><label class="btn ghost sm" for="ifile" style="cursor:pointer">Add files</label>
@@ -66,8 +66,30 @@ export async function render(el, params = []) {
     try { const r = await api.upload("/api/investigations", fd); location.hash = `#/investigate/${r.id}`; }
     catch (e) { err.innerHTML = `<div>${esc(errMsg(e))}</div>`; err.hidden = false; $("#igo").disabled = false; $("#igo").textContent = "Analyse Automatically"; }
   };
+  if (params[0] === "capture") return captureView(el);
   if (params[0]) follow(el, params[0]);
 }
+// the bookmarklet opens AIVS with the post's address and the text the analyst selected in their own browser; nothing is sent until
+// the analyst checks it and presses Continue
+function captureView(el) {
+  const raw = new URLSearchParams(location.hash.split("?").slice(1).join("?")).get("d") || "{}"; let d = {};
+  try { d = JSON.parse(raw); } catch { try { d = JSON.parse(decodeURIComponent(raw)); } catch {} }
+  history.replaceState(null, "", "#/investigate/capture");   // the captured text does not stay in the address bar
+  $("#invForm").hidden = true;
+  const box = document.createElement("div"); box.className = "card"; box.id = "icap";
+  box.innerHTML = `<div class="hd"><h3>Captured from your browser</h3></div><div class="bd">
+    <p class="small" style="margin-top:0">This was captured from a page open in your own browser. Check it, correct it if needed, and continue. The report will say it was captured by you, not retrieved by AIVS.</p>
+    <label class="f" for="capUrl">Post address</label><input id="capUrl" style="width:100%" value="${esc(d.u || "")}">
+    <label class="f" for="capText">Text</label><textarea id="capText" rows="6" style="width:100%">${esc(d.t || "")}</textarea>
+    ${d.ti ? `<div class="tiny sub">Page title: ${esc(d.ti)}</div>` : ""}
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" id="capGo">Continue the investigation</button><a class="btn ghost" href="#/investigate">Cancel</a></div><div id="capErr" class="callout bad" style="margin-top:8px" hidden></div></div>`;
+  el.querySelector(".pagehead").after(box);
+  $("#capGo").onclick = async () => { $("#capGo").disabled = true;
+    try { const n = await api.post("/api/investigations/capture", { url: $("#capUrl").value.trim(), text: $("#capText").value, title: d.ti || "" }); location.hash = `#/investigate/${n.id}`; }
+    catch (e) { $("#capErr").innerHTML = `<div>${esc(errMsg(e))}</div>`; $("#capErr").hidden = false; $("#capGo").disabled = false; } };
+}
+// a bookmark the analyst keeps once; on a post they are permitted to see, it sends the selected text (or the page's own description)
+const bookmarklet = () => `javascript:(()=>{const s=String(getSelection()||'').trim(),m=n=>(document.querySelector('meta[property="'+n+'"]')||{}).content||'',d={u:location.href,t:(s||m('og:description')).slice(0,8000),ti:document.title.slice(0,200)};if(!d.t){alert('Select the text of the post first, then click AIVS capture again.');return}window.open(${JSON.stringify(location.origin + "/#/investigate/capture?d=")}+encodeURIComponent(JSON.stringify(d)),'_blank','noopener')})()`;
 
 function stages(list) {
   const by = Object.fromEntries((list || []).map(s => [s.key, s]));
@@ -79,7 +101,8 @@ function preview(p) {
   $("#iplat").textContent = p.platform || (p.url ? "Website" : "Submitted content");
   const meta = [p.author && `By ${esc(p.author)}`, p.publisher && esc(p.publisher), p.published_at && `Published ${esc(eat(p.published_at))}`].filter(Boolean).join(" · ");
   const counts = p.metrics ? Object.entries(p.metrics).filter(([, v]) => v != null).map(([k, v]) => `${esc(k)} ${Number(v).toLocaleString()}`).join(" · ") : "";
-  $("#iprev").innerHTML = `${p.url ? `<div class="tiny sub" style="word-break:break-all">${httpLink(p.url)}</div>` : ""}
+  const si = p.source_info, prevInv = si?.previous?.length ? `<div class="callout info" style="margin:6px 0"><div class="small">Investigated before: ${si.previous.map(x => `<a href="#/investigate/${esc(x.id)}">${esc(x.report_id)}</a> (${esc(x.label || "")}, ${esc(eat(x.created_at))})`).join(" · ")}</div></div>` : "";
+  $("#iprev").innerHTML = `${si?.valid ? `<div class="tiny sub">Detected: ${esc([si.platform, si.kind, si.account && `account ${si.account}`, si.post_id && `ID ${si.post_id}`].filter(Boolean).join(" · "))}</div>` : ""}${prevInv}${p.url ? `<div class="tiny sub" style="word-break:break-all">${httpLink(p.url)}</div>` : ""}
     ${p.title ? `<h3 style="margin:6px 0 4px">${esc(p.title)}</h3>` : ""}${meta ? `<div class="small sub">${meta}</div>` : ""}
     ${p.description ? `<p class="small" style="margin:6px 0">${esc(p.description)}</p>` : ""}
     ${(p.images || []).length ? `<div class="row" style="gap:8px;flex-wrap:wrap;margin:8px 0">${p.images.map(i => `<figure style="margin:0;max-width:200px"><img src="/api/media/${encodeURIComponent(i.media_id)}/thumb" alt="${esc(i.name)}" style="max-width:200px;max-height:150px;border:1px solid var(--line);border-radius:6px;display:block"><figcaption class="tiny sub">${esc(i.source || i.name)}</figcaption></figure>`).join("")}</div>` : ""}
@@ -103,6 +126,12 @@ function continueForm(inv, b) {
     <label class="f" for="ctSrc">Original source link (optional)</label><input id="ctSrc" style="width:100%" placeholder="https://… the article or page the post comes from">
     <div class="row" style="gap:10px;margin-top:10px;align-items:center"><button class="btn primary" id="ctGo">Continue the investigation</button><span class="tiny sub">Up to 5 files.</span></div>
     <div id="ctErr" class="callout bad" style="margin-top:8px" hidden></div>
+    <details style="margin-top:10px"><summary class="small"><b>Capture it from your own browser</b> (one click, for posts you are permitted to see)</summary><div class="small" style="margin-top:6px">
+      1. Drag this button to your browser's bookmarks bar once: <a class="btn sm" id="ctBm" href="${esc(bookmarklet())}">AIVS capture</a><br>
+      2. Open the post on ${esc(plat)}, select its text, and click <b>AIVS capture</b> in your bookmarks bar. AIVS opens with the text filled in for you to check.<br>
+      <span class="tiny sub">The capture runs in your browser with your own access; AIVS never signs in to ${esc(plat)}.</span></div></details>
+    ${(b.attempts || []).length ? `<details class="tiny sub" style="margin-top:8px"><summary>What AIVS tried</summary><ul style="margin:4px 0 0 18px">${b.attempts.map(a => `<li>${esc(a.method)}: <b>${esc(a.result)}</b>${a.detail ? ` — ${esc(a.detail)}` : ""}</li>`).join("")}</ul></details>` : ""}
+    ${inv.result.references ? `<div class="small" style="margin-top:8px"><b>Independent references</b> <span class="tiny sub">(public pages that mention the post; not the post's content)</span>: ${inv.result.references.results?.length ? `<ul style="margin:4px 0 0 18px">${inv.result.references.results.map(x => `<li>${httpLink(x.url, x.title)} <span class="tiny sub">${esc(x.publisher || "")}${x.published_at ? ` · ${esc(eat(x.published_at))}` : ""}</span></li>`).join("")}</ul>` : esc(inv.result.references.note || "none found")}</div>` : ""}
     <details class="tiny sub" style="margin-top:8px"><summary>Why it could not be read</summary>${esc(b.reason)}</details></div></div>`;
 }
 function fixForm(inv) {
@@ -113,6 +142,18 @@ function fixForm(inv) {
     <textarea id="fxText" rows="3" placeholder="Paste the text of the post or article"></textarea>
     <div class="row" style="margin-top:8px;gap:10px;flex-wrap:wrap"><label class="btn ghost sm" for="fxFile" style="cursor:pointer">Add a screenshot or file</label><input id="fxFile" type="file" multiple accept="image/*,.pdf,.docx" style="position:absolute;opacity:0;width:1px;height:1px"><span id="fxNames" class="small muted"></span>
       <button class="btn primary sm" id="fxGo">Analyse again with this</button></div><div id="fxErr" class="callout bad" style="margin-top:8px" hidden></div></div></div>`;
+}
+// the AI's reading of the content (Ollama), kept apart from the evidence: it is not verification
+function aiFindings(a) {
+  if (!a) return "";
+  const ent = Object.entries(a.entities || {}).filter(([, v]) => v.length).map(([k, v]) => `${esc(k)}: ${v.map(esc).join(", ")}`).join(" · ");
+  return `<div class="card" style="margin-top:12px" id="iai"><div class="hd"><h3>AI findings</h3><span class="chip grey">AI-supported, not verification · ${esc(a.model || "")}</span></div><div class="bd small">
+    <div>Language: <b>${esc(a.language || "not stated")}</b>${a.sentiment?.label ? ` · Tone: <b>${esc(a.sentiment.label)}</b>${a.sentiment.towards ? ` towards ${esc(a.sentiment.towards)}` : ""}` : ""}</div>
+    ${a.narratives.length ? `<div style="margin-top:6px"><b>Narratives</b><ul style="margin:2px 0 0 18px">${a.narratives.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    ${a.misleading.length ? `<div style="margin-top:6px"><b>Possibly misleading claims</b><ul style="margin:2px 0 0 18px">${a.misleading.map(m => `<li>“${esc(m.quote)}” <span class="sub">— ${esc(m.why)}</span></li>`).join("")}</ul></div>` : ""}
+    ${ent ? `<div style="margin-top:6px"><b>Named in the content</b> — ${ent}</div>` : ""}
+    ${a.gaps.length ? `<div style="margin-top:6px"><b>Information gaps</b><ul style="margin:2px 0 0 18px">${a.gaps.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    <p class="tiny sub" style="margin:6px 0 0">${esc(a.note)}</p></div></div>`;
 }
 function results(inv) {
   // nothing readable was extracted: no analysis ran, and the page says what happened and what to do instead
@@ -138,6 +179,7 @@ function results(inv) {
       ${o.note ? `<p class="small" style="margin:6px 0">${esc(o.note)}</p>` : ""}
       <p class="small" style="margin:6px 0">${esc(r.sections.assessment.slice(0, 2).join(" "))}</p>
       <p class="tiny sub" style="margin:4px 0 0">AI-generated preliminary assessment · ${esc(r.review?.status === "reviewed" ? `reviewed by ${r.review.by}` : "not reviewed by an analyst")}. The strength label describes the evidence found, not the probability that the claim is true.${r.ai.used ? ` AI model: ${esc(r.ai.model)}.` : ` AI not used: ${esc(r.ai.reason || "")}`}</p></div></div>
+    ${aiFindings(r.ai?.content)}
     <h3 style="margin:16px 0 4px">Claims and evidence</h3>${claims || '<p class="small sub">No claim could be checked.</p>'}
     ${imgs ? `<h3 style="margin:16px 0 4px">Image verification</h3><div class="card"><div class="bd">${imgs}<p class="tiny sub">${esc(r.media.note)}</p></div></div>` : ""}
     <div class="grid g2" style="margin-top:12px;align-items:start">
@@ -157,13 +199,18 @@ async function follow(el, id) {
     if (!inv.preview) preview({ platform: r.source.platform, url: r.source.url, title: r.source.title, text: r.content, claims: r.claims, notes: r.source.notes });
     $("#ifix").innerHTML = fixForm(inv); $("#ires").innerHTML = results(inv);
     $("#iacts").innerHTML = `<span class="chip ${VC[r.overall.verdict]}" style="font-size:14px">${esc(r.overall.label)} · ${esc(r.overall.strength_label)}</span>
-      <a class="btn sm primary" href="${base}.pdf" download>Download Report (PDF)</a><a class="btn sm" href="${base}.docx" download>Word</a><a class="btn sm ghost" href="${base}.html?download=1">HTML</a>
+      ${!r.blocked ? `<button class="btn sm primary" id="igen" title="Write the one-page report again from the stored evidence, with the AI model if it is available now">Generate Report</button>` : ""}<a class="btn sm ${r.blocked ? "primary" : ""}" href="${base}.pdf" download>Download Report (PDF)</a><a class="btn sm" href="${base}.docx" download>Word</a><a class="btn sm ghost" href="${base}.html?download=1">HTML</a>
       <a class="btn sm ghost" id="idet" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Supporting evidence</a><a class="btn sm ghost" href="${base.replace(/report$/, "details")}.pdf" download>Evidence (PDF)</a>
       ${inv.case_id ? `<a class="btn sm ghost" href="#/case/${esc(inv.case_id)}">Open case ${esc(inv.case_id)}</a>` : ""}<a class="btn sm ghost" href="#/investigate">New investigation</a>
       ${App.can("case.approve") && !r.review?.at && inv.created_by !== App.me.id ? `<button class="btn sm ghost" id="irev">Record a review</button>` : ""}`;
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();
     $("#invOut").hidden = false;
     const rb = $("#irev"); if (rb) rb.onclick = async () => { const note = prompt("What did you check? (recorded with your name)"); if (!note) return; try { await api.post(`/api/investigations/${encodeURIComponent(inv.id)}/review`, { note }); follow(el, id); } catch (e) { alert(errMsg(e)); } };
+    const bm = $("#ctBm"); if (bm) bm.onclick = e => { e.preventDefault(); alert("Drag this button to your bookmarks bar, then use it on the post's page."); };
+    const gen = $("#igen");
+    if (gen) gen.onclick = async () => { gen.disabled = true; gen.textContent = "Generating…";
+      try { const g = await api.post(`/api/investigations/${encodeURIComponent(inv.id)}/report`, {}); $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text(); gen.textContent = g.written_by === "ai" ? `Report generated (${g.ai})` : "Report generated (rule-based)"; if (g.reason) gen.title = `AI not used: ${g.reason}`; }
+      catch (e) { gen.textContent = "Generate Report"; alert(errMsg(e)); } finally { gen.disabled = false; } };
     const ct = $("#ctGo");
     if (ct) ct.onclick = async () => {
       const fd = new FormData(), t = $("#ctText").value.trim(), su = $("#ctSrc").value.trim(), files = [...$("#ctShot").files, ...$("#ctMedia").files];

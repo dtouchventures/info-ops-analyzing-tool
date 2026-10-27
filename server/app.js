@@ -1185,6 +1185,8 @@ export function createApp(config) {
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   api.get("/investigations/services", (req, res) => { const s = investigations.services(); res.json({ reverse_search: s.reverse_search, ai_vision: s.ai_vision, evidence: s.evidence, ai: { configured: s.ai.configured, model: s.ai.model || null, local: !!s.ai.local, reason: s.ai.reason || null } }); });
+  api.post("/investigations/capture", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.capture(req.user, req.body || {}))));
+  api.post("/investigations/:id/report", requirePerm("case.create"), h(async (req, res) => res.json(await investigations.regenerate(req.user, req.params.id))));
   api.post("/investigations/:id/rerun", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     try { res.status(202).json(investigations.rerun(req.user, req.params.id, { text: req.body?.text, files: req.files || [], source_url: req.body?.source_url })); } catch (e) { cleanup(req.files || []); throw e; }
   }));

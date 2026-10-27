@@ -159,7 +159,7 @@ async function continueWith(client, id, fields, files = []) {
 }
 test("2a. Facebook post that cannot be read: the analyst pastes the text and the investigation continues, marked analyst-supplied", async () => {
   const url = "https://www.facebook.com/KenyaDefenceForces/posts/2222222222", first = await investigate(ana, { url });
-  assert.equal(first.result.blocked.can_continue, true); assert.deepEqual(first.result.blocked.options, ["screenshot", "media", "text", "source_url"]);
+  assert.equal(first.result.blocked.can_continue, true); assert.deepEqual(first.result.blocked.options, ["screenshot", "media", "text", "source_url", "browser_capture"]);
   assert.equal((await ana.post(`/api/investigations/${first.id}/rerun`, undefined, { form: form({}) })).status, 400, "something must be supplied");
   const inv = await continueWith(ana, first.id, { text: "The Ministry of Health confirmed 12 new cholera cases in Garissa County on 20 October 2026." }), r = await common(ana, inv);
   assert.ok(!r.blocked, "it continued"); assert.ok(["extract", "analyse", "search", "compare", "assess", "report"].every(k => ["done", "warning"].includes(inv.stages.find(s => s.key === k).status)), JSON.stringify(inv.stages));
