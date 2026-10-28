@@ -1,10 +1,6 @@
-// Settings: personal preferences, administration, service status and the secondary tools kept out of the
-// main menu. Those tools still work and keep their data; they are listed here so nothing is lost.
-import { App, crumbs, OTHER_TOOLS } from "../app.js";
-import { esc, icon } from "../ui.js";
-
-const DESC = { dashboard: "Case figures, conclusions and recent activity.", verify: "The one-page verification form used before the guided steps.", new: "Start a case from images, video, audio or documents.",
-  search: "Search all cases, evidence and the archive.", archive: "Documented images used for reverse-image matching.", datasets: "Fact-check datasets searched for every claim once approved." };
+// Settings: personal preferences, administration and service status.
+import { App, crumbs } from "../app.js";
+import { esc } from "../ui.js";
 
 export async function render(el) {
   crumbs("<b>Settings</b>");
@@ -19,9 +15,6 @@ export async function render(el) {
         <p style="margin-top:0">The AI models in use with their measured scores, and which services are working on this installation.</p>
         <div class="row"><a class="btn sm" href="#/models">AI models</a><a class="btn sm" href="#/status">Service status</a>${admin ? `<a class="btn sm primary" href="#/admin">Administration</a>` : ""}</div>
         ${admin ? `<p class="tiny sub">Users and roles, AI connection, audit trail, storage checks and training data.</p>` : ""}</div></div>
-    </div>
-    <div class="card" style="margin-top:14px"><div class="hd"><h3>Other tools</h3><span class="small sub right">Not in the main menu; they still work and keep their data</span></div><div class="bd">
-      <ul class="mini">${OTHER_TOOLS.filter(([k]) => !["new", "verify"].includes(k) || App.can("case.create")).map(([k, h, l, ic]) => `<li>${icon(ic)}<a href="${h}">${esc(l)}</a><span class="small sub" style="flex:1">${esc(DESC[k] || "")}</span></li>`).join("")}
-        <li>${icon("chat")}<span><b>Research assistant, AI assistance and transcripts</b></span><span class="small sub" style="flex:1">Inside each case in Advanced mode.</span></li></ul></div></div>`;
+    </div>`;
   el.querySelector("#setPw").onclick = () => document.getElementById("pwLink")?.click();
 }
