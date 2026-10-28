@@ -28,6 +28,11 @@ try {
   assert.match(await page.locator('#page').innerText(), /Claims: 2\/2/);
   assert.match(await page.locator('#page').innerText(), /This case has reached the maximum limit of two claims\./);
   await page.click('#srchAll');
+  const draft = 'An analyst can keep editing while collection runs.';
+  await page.locator('[data-ctext]').first().fill(draft);
+  await page.waitForTimeout(1800);
+  assert.equal(await page.locator('[data-ctext]').first().inputValue(), draft, 'background polling must not discard active typing');
+  await page.locator('h1').click();
   await page.locator('.nav a[href="#/settings"]').click(); await page.locator('#setPw').waitFor();
   await page.reload(); await page.locator('#setPw').waitFor();
   let tasks = await (await page.request.get(S.base + '/api/tasks')).json();
@@ -79,7 +84,7 @@ try {
   await page.goto(S.base + '/#/tasks'); await page.locator('#taskList article').first().waitFor();
   await page.screenshot({ path: '../../outputs/jicho-background-tasks.png', fullPage: true });
   assert.deepEqual(errors, []);
-  console.log('PASS: two-claim UI, navigation during processing, refresh, results on return, retry, logout/login, report scope, mobile layout, legacy selection/report retry, no browser errors');
+  console.log('PASS: two-claim UI, navigation during processing, refresh, results on return, retry, logout/login, report scope, mobile layout, active typing preserved, legacy selection/report retry, no browser errors');
 } finally {
   release(); await browser?.close();
   for (let i = 0; i < 100 && !S.ctx.tasks.idle(); i++) await new Promise(r => setTimeout(r, 50));

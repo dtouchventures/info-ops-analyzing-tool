@@ -4,7 +4,7 @@ This extends the existing Express, browser-module and SQLite application. It add
 
 ## Working while processing continues
 
-The sidebar and top bar link to **Background tasks**. Case checks, evidence collection, AI verification and automatic reports save a server-side task record. Users can navigate, refresh, or sign out and return to the same task and case. The task page shows **Pending**, **Processing**, **Completed** or **Failed**, with results linked to the case and a **Retry** control for failures. **Run again** is a separate explicit action for completed work.
+The sidebar and top bar link to **Background tasks**. Case checks, evidence collection, AI verification and automatic reports save a server-side task record. Users can navigate, refresh, or sign out and return to the same task and case. Case polling pauses while an analyst is typing, so background updates do not discard an active edit. Unchanged task status does not repeatedly replace the task list. The task page shows **Pending**, **Processing**, **Completed** or **Failed**, with results linked to the case and a **Retry** control for failures. **Run again** is a separate explicit action for completed work.
 
 `case_tasks` stores the requester, case, operation, options, attempts, error and result. Requests with unchanged inputs reuse their task; pending/processing duplicates coalesce even when sent with a different request key. A source fingerprint allows new analysis after the input, media or OCR changes. Work is bounded to two tasks at a time and serialized within each case. Task creation, execution and retry use the existing role and case-edit permissions; task options and results are private to the requester and administrators.
 

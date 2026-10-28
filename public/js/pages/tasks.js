@@ -6,12 +6,18 @@ const LABEL = { analysis: 'Evidence analysis', collection: 'Evidence collection'
 export async function render(el, _args, { isCurrent }) {
   crumbs('<b>Background tasks</b>');
   el.innerHTML = '<div class="pagehead"><div><h1>Background tasks</h1><p>Work continues on the server while you use other pages. Your tasks remain available after refreshing or signing in again.</p></div></div><div id="taskList" aria-live="polite">Loading…</div>';
-  const panel = el.querySelector('#taskList');
+  const panel = el.querySelector('#taskList'); let lastData = '';
   async function update() {
     if (!isCurrent() || !panel.isConnected) return;
     try {
       const data = await api.get('/api/tasks');
       if (!isCurrent() || !panel.isConnected) return;
+      const signature = JSON.stringify(data);
+      if (signature === lastData) {
+        if (data.tasks.some(t => ['pending', 'processing'].includes(t.status)) || data.investigations?.some(t => ['Pending', 'Processing'].includes(t.status_label))) setTimeout(update, 1500);
+        return;
+      }
+      lastData = signature;
       panel.innerHTML = data.tasks.length ? data.tasks.map(t => `<article class="card" style="margin-bottom:12px"><div class="bd"><div class="row"><h2>${esc(LABEL[t.kind] || t.kind)}</h2><span class="chip ${t.status === 'failed' ? 'warn' : t.status === 'completed' ? 'sup' : 'info'}">${esc(t.status_label)}</span><a href="#/case/${encodeURIComponent(t.case_id)}">${esc(t.case_id)}</a></div><p class="small sub">Requested ${fmtDT(t.created_at)} · Attempt ${t.attempts}</p>${t.error ? `<p role="status">${esc(t.error)}</p>` : ''}
         ${t.kind === 'collection' && t.result ? `<p class="small">${(t.result.connectors || []).reduce((n, x) => n + (x.stored || 0), 0)} new evidence suggestions. <a href="#/case/${encodeURIComponent(t.case_id)}/evidence">Review evidence</a></p><ul class="small">${(t.result.connectors || []).map(c => `<li>${esc(c.label || c.key)}: ${c.errors?.length ? esc(c.errors.join("; ")) : !c.configured ? "Not configured" : `${c.results || 0} results, ${c.stored || 0} new suggestions`}</li>`).join("")}</ul>` : ''}
         ${t.status === 'failed' ? `<button class="btn sm" data-retry="${t.id}">Retry</button>` : t.status === 'completed' ? `<button class="btn sm" data-again="${t.id}">Run again</button>` : '<p class="small">You can leave this page. Results will be saved with the case.</p>'}

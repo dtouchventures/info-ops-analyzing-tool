@@ -40,7 +40,13 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   let A, pollT, lastView = null, lastStatus = null;
   const load = async () => { A = await api.get(`/api/cases/${encodeURIComponent(id)}`); };
   try { await load(); } catch (e) { el.innerHTML = `<div class="callout bad"><div><b>Case not available.</b> ${esc(e.message)}</div></div>`; return; }
-  const reload = async () => { await load(); if (isCurrent()) draw(); };
+  const reload = async () => {
+    // Polling must not replace a form while the analyst is typing into it.
+    if (isCurrent() && el.contains(document.activeElement) && document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')) {
+      clearTimeout(pollT); pollT = setTimeout(() => isCurrent() && reload(), 1500); return;
+    }
+    await load(); if (isCurrent()) draw();
+  };
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) toast(okMsg); await reload(); refreshNavCounts(); } catch (e) { fail(e); } };
 
   function taskSummary() {
