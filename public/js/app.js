@@ -113,25 +113,43 @@ async function changePassword(forced) {
 }
 
 function loginView(msg) {
-  $("#root").innerHTML = `<div class="login">
-    <section class="art"><div><div class="brand-mark" style="width:44px;height:44px;font-size:15px">AIVS</div>
-      <h1>Information Verification and Evidence Assistant</h1>
-      <p>A workspace for authorised analysts to examine public or approved text, images and video, compare evidence, record what remains uncertain, and produce reviewed verification reports.</p>
-      <ul><li>Every file is preserved and fingerprinted on receipt.</li><li>Automated checks and AI produce leads and suggestions only.</li><li>Every assessment is approved by a second, authorised reviewer.</li></ul></div>
-      <p class="tiny" style="color:#8aa2b8">Authorised use only. Activity is recorded in a tamper-evident audit log.</p></section>
-    <section class="form"><h2>Sign in</h2><p class="muted small">Use the account issued by your administrator.</p>
-      <form id="lf" novalidate>
-        <label class="f" for="lu">Username</label><input type="text" id="lu" autocomplete="username" required>
-        <label class="f" for="lp">Password</label><input type="password" id="lp" autocomplete="current-password" required>
-        <div id="lerr" class="callout bad" style="margin-top:12px" ${msg ? "" : "hidden"}>${esc(msg || "")}</div>
-        <button class="btn primary" style="width:100%;margin-top:16px;padding:10px" id="lb">Sign in</button>
+  $("#root").innerHTML = `<main class="login">
+    <section class="art" aria-label="JICHO AI introduction">
+      <div class="login-brand"><div class="stratcom-mark">
+        <svg viewBox="0 0 200 48" aria-label="STRATCOM" role="img"><defs><path id="stratcom-arc" d="M 18,44 Q 100,-22 182,44"/></defs><text><textPath href="#stratcom-arc" startOffset="50%" text-anchor="middle">STRATCOM</textPath></text></svg>
+        <img src="/assets/login/kdf.png" alt="Kenya Defence Forces emblem" width="1244" height="1120">
+      </div><div><h1>JICHO <span>AI</span></h1><p>Information Operations<br>Intelligence System</p><div class="kenya-stripe" aria-hidden="true"></div></div></div>
+      <p class="login-motto">Monitor · Verify · Analyse · Assess · Report</p>
+      <div class="login-context"><b>Academic / unofficial project</b><p>Emblems are reference assets. This project does not imply KDF or DMI endorsement.</p></div>
+    </section>
+    <section class="form" aria-labelledby="login-title">
+      <img class="dmi-emblem" src="/assets/login/dmi.png" alt="Directorate of Military Intelligence emblem" width="1500" height="1070">
+      <div class="login-fields"><h2 id="login-title">Sign in</h2><p class="login-intro">Use the account issued by your administrator.</p>
+      <form id="lf">
+        <label class="f" for="lu">Username</label><input type="text" id="lu" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <label class="f" for="lp">Password</label><div class="login-password"><input type="password" id="lp" name="password" autocomplete="current-password" required><button type="button" id="loginReveal" aria-controls="lp" aria-pressed="false">Show password</button></div>
+        <div id="lerr" class="callout bad" role="alert" tabindex="-1" ${msg ? "" : "hidden"}>${esc(msg || "")}</div>
+        <button class="btn primary" id="lb" type="submit">Sign in <span aria-hidden="true">→</span></button>
       </form>
-      <div class="notice">First installation? The server creates an <b>admin</b> account and writes a one-time password to <span class="mono">data/FIRST-LOGIN.txt</span>.</div></section></div>`;
-  $("#lu").focus();
+      <div class="notice">Need access or help signing in? Contact your administrator.</div>
+      <p class="login-audit">Authorised use only. Activity is recorded in an audit log.</p></div>
+    </section></main>`;
+  $("#lu").focus({ preventScroll: true });
+  $("#loginReveal").onclick = () => {
+    const input = $("#lp"), reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    $("#loginReveal").textContent = reveal ? "Hide password" : "Show password";
+    $("#loginReveal").setAttribute("aria-pressed", String(reveal));
+  };
   $("#lf").onsubmit = async e => {
-    e.preventDefault(); const b = $("#lb"); b.disabled = true; b.innerHTML = '<span class="spin"></span> Signing in…';
-    try { await api.post("/api/auth/login", { username: $("#lu").value.trim(), password: $("#lp").value }); await start(); }
-    catch (er) { $("#lerr").hidden = false; $("#lerr").textContent = er.message; b.disabled = false; b.textContent = "Sign in"; }
+    e.preventDefault(); const b = $("#lb"); if (b.disabled) return;
+    b.disabled = true; b.textContent = "Signing in…"; $("#lf").setAttribute("aria-busy", "true"); $("#lerr").hidden = true;
+    try { await api.post("/api/auth/login", { username: $("#lu").value.trim(), password: $("#lp").value }); $("#lp").value = ""; await start(); }
+    catch (er) {
+      const error = $("#lerr"); error.hidden = false; error.textContent = er.message;
+      $("#lp").value = ""; $("#lp").type = "password"; $("#loginReveal").textContent = "Show password"; $("#loginReveal").setAttribute("aria-pressed", "false");
+      b.disabled = false; b.textContent = "Sign in"; $("#lf").removeAttribute("aria-busy"); error.focus();
+    }
   };
 }
 
