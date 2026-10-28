@@ -936,7 +936,10 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const inv = row(id); if (!inv) throw new HttpError(404, "No such investigation.");
     if (inv.created_by !== user.id && user.role !== "admin") throw new HttpError(403, "Only the requester or an administrator can retry this investigation.");
     if (!can(user, "case.create")) throw new HttpError(403, "Your role cannot start investigations.");
-    if (inv.case_id) cases.requireEdit(user, cases.mustCase(inv.case_id));
+    if (inv.case_id) {
+      cases.requireEdit(user, cases.mustCase(inv.case_id));
+      if (db.prepare("SELECT 1 FROM case_tasks WHERE case_id=? AND status='processing'").get(inv.case_id)) throw new HttpError(409, "Another background task is processing this case. Retry after it completes.");
+    }
     if (inv.status !== "failed") return get(id, user);
     if (inv.content_key && db.prepare("SELECT 1 FROM investigations WHERE content_key=? AND id!=? AND status IN ('queued','running')").get(inv.content_key, inv.id)) throw new HttpError(409, "A matching investigation is already running.");
     if (running.has(inv.id)) throw new HttpError(409, "The previous attempt is still stopping. Retry shortly.");

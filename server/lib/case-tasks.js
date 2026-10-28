@@ -79,7 +79,7 @@ export function makeCaseTasks(db, { cases, audit, concurrency = 2 }) {
     if (stopped || !db.open) return;
     while (running < concurrency) {
       const next = db.transaction(() => {
-        const t = db.prepare("SELECT t.* FROM case_tasks t WHERE t.status='pending' AND NOT EXISTS (SELECT 1 FROM case_tasks r WHERE r.case_id=t.case_id AND r.status='processing') ORDER BY t.id LIMIT 1").get();
+        const t = db.prepare("SELECT t.* FROM case_tasks t WHERE t.status='pending' AND NOT EXISTS (SELECT 1 FROM case_tasks r WHERE r.case_id=t.case_id AND r.status='processing') AND NOT EXISTS (SELECT 1 FROM investigations i WHERE i.case_id=t.case_id AND i.status IN ('queued','running')) ORDER BY t.id LIMIT 1").get();
         if (!t || !handlers.has(t.kind)) return null;
         if (!db.prepare("UPDATE case_tasks SET status='processing',started_at=?,attempts=attempts+1 WHERE id=? AND status='pending'").run(nowISO(), t.id).changes) return null;
         return t;
@@ -88,5 +88,6 @@ export function makeCaseTasks(db, { cases, audit, concurrency = 2 }) {
       running++; void execute(next);
     }
   }
-  return { enqueue, get, list, retry, register(kind, fn) { handlers.set(kind, fn); }, start() { setImmediate(pump); }, idle: () => !running && !db.prepare("SELECT 1 FROM case_tasks WHERE status='pending'").get(), close() { stopped = true; } };
+  const wake = setInterval(pump, 1000); wake.unref();
+  return { enqueue, get, list, retry, register(kind, fn) { handlers.set(kind, fn); }, start() { setImmediate(pump); }, idle: () => !running && !db.prepare("SELECT 1 FROM case_tasks WHERE status='pending'").get(), close() { stopped = true; clearInterval(wake); } };
 }

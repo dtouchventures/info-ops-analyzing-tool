@@ -190,3 +190,23 @@ test('queued work rechecks the requesting account before it executes', async () 
     assert.equal(T.ctx.db.prepare('SELECT COUNT(*) n FROM claims WHERE case_id=?').get(id).n, 0);
   } finally { release?.(); T.ctx.tasks.close(); await T.close(); T.ctx.db.close(); }
 });
+
+test('case tasks wait for native investigations, and native retries wait for case tasks', async () => {
+  const T = await startServer(), u = await login(T.base, 'ana'); let release;
+  try {
+    const id = (await u.post('/api/cases', { claim_text: 'An existing investigation owns this case while it runs.' })).body.id;
+    const uid = T.ctx.db.prepare("SELECT id FROM users WHERE username='ana'").get().id;
+    T.ctx.db.prepare("INSERT INTO investigations(id,report_id,case_id,status,stages_json,input_json,created_by,created_at) VALUES ('INV-blocked','REPORT-blocked',?,'running','[]','{}',?,?)").run(id, uid, new Date().toISOString());
+    const pending = (await u.post(`/api/cases/${id}/tasks`, { kind: 'analysis' })).body;
+    await pause(100); assert.equal((await u.get(`/api/tasks/${pending.id}`)).body.status, 'pending');
+    T.ctx.db.prepare("UPDATE investigations SET status='done' WHERE id='INV-blocked'").run();
+    assert.equal((await waitFor(async () => (await u.get(`/api/tasks/${pending.id}`)).body)).status, 'completed');
+    const gate = new Promise(r => release = r);
+    T.ctx.tasks.register('collection', async () => { await gate; return {}; });
+    const collecting = (await u.post(`/api/cases/${id}/tasks`, { kind: 'collection' })).body;
+    await waitFor(async () => (await u.get(`/api/tasks/${collecting.id}`)).body, x => x.status === 'processing');
+    T.ctx.db.prepare("UPDATE investigations SET status='failed' WHERE id='INV-blocked'").run();
+    assert.equal((await u.post('/api/investigations/INV-blocked/retry')).status, 409);
+    release(); await waitFor(async () => (await u.get(`/api/tasks/${collecting.id}`)).body);
+  } finally { release?.(); T.ctx.tasks.close(); await T.close(); T.ctx.db.close(); }
+});
