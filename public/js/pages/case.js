@@ -6,6 +6,7 @@ import { extractEntities } from "/shared/text.js";
 import { differenceMap, errorLevel, matchedRegion, bindSlider } from "../lib/forensics.js";
 import { recognise } from "../lib/ocr.js";
 import { openVideo, frameBlob, uploadFrame, sampleFrames } from "../lib/video.js";
+import { videoResultHtml, stagesHtml } from "../lib/videoview.js";
 import { transcriptPanel, bindTranscripts, LANG_OPTS } from "./transcript.js";
 import { coverageTab } from "./coverage.js";
 import { verdictNeeds, ACTIVE_VERDICTS, ACTIVE_CONCLUSIONS } from "/shared/verdict.js";
@@ -259,7 +260,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   function media(body, c, P) {
     const top = A.media.filter(m => !m.parent_media_id), frames = id => A.media.filter(m => m.parent_media_id === id);
     const canAdd = P.edit;
-    body.innerHTML = `${canAdd ? `<div class="card"><div class="bd"><div class="dropzone" id="dz" tabindex="0" role="button"><b>Add images, video, audio or documents</b><div class="small muted">Drop files, paste a screenshot (Ctrl+V) or choose files: images, video, audio (voice notes: MP3, M4A, WAV, OGG/Opus, AMR, FLAC), PDF, Word (.docx), TXT, CSV or JSON. Originals are kept unchanged and fingerprinted. Re-run checks afterwards.</div><input type="file" id="fi" multiple accept="image/*,video/*,audio/*,.opus,.amr,.m4a,.pdf,.docx,.txt,.csv,.json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden></div>${App.meta.transcribe?.ok ? `<div class="row" style="margin-top:8px"><label class="small" for="utl">Transcribe audio and video on upload</label><select id="utl" style="width:auto"><option value="">No</option>${LANG_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>` : ""}<ul class="uplist" id="ul"></ul></div></div>` : ""}
+    body.innerHTML = `${canAdd ? `<div class="card"><div class="bd"><div class="dropzone" id="dz" tabindex="0" role="button"><b>Add images, video, audio or documents</b><div class="small muted">Drop files, paste a screenshot (Ctrl+V) or choose files: images, video, audio (voice notes: MP3, M4A, WAV, OGG/Opus, AMR, FLAC), PDF, Word (.docx), TXT, CSV or JSON. Originals are kept unchanged and fingerprinted. Re-run checks afterwards.</div><input type="file" id="fi" multiple accept="image/*,video/*,audio/*,.mov,.avi,.opus,.amr,.m4a,.pdf,.docx,.txt,.csv,.json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden></div>${App.meta.transcribe?.ok ? `<div class="row" style="margin-top:8px"><label class="small" for="utl">Transcribe audio and video on upload</label><select id="utl" style="width:auto"><option value="">No</option>${LANG_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>` : ""}<ul class="uplist" id="ul"></ul></div></div>` : ""}
       <div class="card"><div class="hd"><h3>Media under examination</h3><span class="small sub right">${A.media.length} item${A.media.length === 1 ? "" : "s"} · archive similarity and metadata are investigative leads, not proof</span></div>
       ${top.length ? top.map(m => m.kind === "document" ? docCard(m, P) : m.kind === "audio" ? audioCard(m, P) : m.kind === "video" ? videoCard(m, frames(m.id), P) + frames(m.id).map(f => imageCard(f, P)).join("") : imageCard(m, P)).join("") : `<div class="bd">${empty("No media attached", "This case has text only. Add the image or video that circulated with the post, if there was one.")}</div>`}</div>`;
     if (canAdd) bindUpload(c);
@@ -312,7 +313,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
     const parent = m.parent_media_id ? A.media.find(x => x.id === m.parent_media_id) : null;
     return `<div class="mediacard" id="mc-${esc(m.id)}">
       <div><div class="pv"><img src="${thumb(m.id)}" alt="${esc(m.original_name)}" data-view="${esc(m.id)}" loading="lazy"></div>
-        <div class="row" style="margin-top:8px"><button class="btn sm" data-view="${esc(m.id)}">Enlarge</button><button class="btn sm adv" data-ela="${esc(m.id)}">Error level analysis</button><button class="btn sm" data-web="${esc(m.id)}">Search the web</button><a class="btn sm ghost" href="${content(m.id)}" target="_blank" rel="noopener">Original</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download</a></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm" data-view="${esc(m.id)}">Enlarge</button><button class="btn sm adv" data-ela="${esc(m.id)}">Error level analysis</button><button class="btn sm" data-web="${esc(m.id)}" title="Upload the image yourself to a reverse-image search service">Reverse image search</button><a class="btn sm ghost" href="${content(m.id)}" target="_blank" rel="noopener">Original</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download</a></div>
         <div data-elabox="${esc(m.id)}" hidden></div></div>
       <div style="min-width:0">
         <h4>${esc(m.id)} ${parent ? `<span class="chip info">Frame at ${m.frame_time.toFixed(2)} s of ${esc(parent.id)} · ${m.frame_origin === "auto" ? "auto-sampled" : "selected by analyst"}</span>` : `<span class="small sub" style="font-weight:400">${esc(m.original_name)}</span>`}</h4>
@@ -342,15 +343,33 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   const sbs = (m, x) => `<div class="compare sbs"><figure><img src="${thumb(m.id)}" alt="Submitted" style="${x.mirrored ? "transform:scaleX(-1)" : ""}"><figcaption>Submitted ${esc(m.id)}${x.mirrored ? " (flipped back)" : ""}</figcaption></figure><figure><img src="${thumb(x.target_media_id)}" alt="Reference"><figcaption>${x.target_archive_id ? `Archive ${esc(x.target_archive_id)}` : `Case ${esc(x.target_case_id)}`}</figcaption></figure></div>`;
   function videoCard(m, frames, P) {
     return `<div class="mediacard" id="mc-${esc(m.id)}"><div><div class="pv"><video id="vid-${esc(m.id)}" src="${content(m.id)}" controls preload="metadata"></video></div>
-        <div class="row" style="margin-top:8px">${P.edit ? `<button class="btn sm primary" data-cap="${esc(m.id)}">Capture this frame</button><button class="btn sm" data-sample="${esc(m.id)}">Sample 6 frames</button>` : ""}<a class="btn sm ghost" href="${content(m.id)}?download=1">Download original</a></div>
+        <div class="row" style="margin-top:8px">${P.edit ? `<button class="btn sm primary" data-rvs="${esc(m.id)}" title="Automatic: keyframes, on-screen text, speech, reverse search of keyframes, earlier versions, findings">Reverse video search</button><button class="btn sm" data-cap="${esc(m.id)}">Capture this frame</button><button class="btn sm" data-sample="${esc(m.id)}">Sample 6 frames</button>` : ""}<a class="btn sm ghost" href="${content(m.id)}?download=1">Download original</a></div>
         <div class="tiny sub" id="vt-${esc(m.id)}" style="margin-top:4px"></div></div>
       <div><h4>${esc(m.id)} <span class="small sub" style="font-weight:400">${esc(m.original_name)}</span> <span class="chip grey">Video</span></h4>
         <dl class="kv" style="margin-top:8px"><dt>File</dt><dd>${esc(m.mime)} · ${kb(m.size)} · received ${fmtDT(m.uploaded_at)}</dd><dt>SHA-256 (exact bytes)</dt><dd class="mono tiny">${esc(m.sha256)}</dd></dl>
         <p class="small muted">Video is compared through its frames. Pause on a moment worth checking and capture it; the timestamp is recorded with the frame. Frames are then matched like images after you re-run checks.</p>
         <div class="frames">${frames.map(f => `<figure><a href="#mc-${esc(f.id)}"><img src="${thumb(f.id)}" alt=""></a><figcaption class="num">${f.frame_time.toFixed(2)} s · ${f.frame_origin === "auto" ? "auto" : "analyst"}${A.matches.some(x => x.media_id === f.id && x.level !== "possible") ? ` <span class="chip con">match</span>` : ""}</figcaption></figure>`).join("") || `<span class="small sub">No frames yet.</span>`}</div>
+        <div class="vbox" data-rvsbox="${esc(m.id)}" style="margin-top:10px"></div>
         ${transcriptPanel(m)}</div></div>`;
   }
+  // reverse video search (1.35): automatic; the latest analysis of each video is shown in its card
+  async function showVideoCheck(mid, poll = false) {
+    const box = $(`[data-rvsbox="${CSS.escape(mid)}"]`); if (!box) return;
+    let list; try { list = (await api.get(`/api/media/${encodeURIComponent(mid)}/video-checks`)).analyses; } catch { return; }
+    const a = list[0]; if (!a) { box.innerHTML = ""; return; }
+    const running = ["queued", "running"].includes(a.status);
+    box.innerHTML = `<div class="card"><div class="hd"><h3>Reverse video search <span class="mono small">${esc(a.id)}</span></h3><span class="chip ${a.status === "done" ? "sup" : a.status === "failed" ? "con" : "grey"} right">${esc(a.status === "done" ? "Completed" : a.status === "failed" ? "Failed" : "Running")}</span></div><div class="bd">
+      ${running || a.status === "failed" ? stagesHtml(a.stages) : ""}${a.status === "failed" ? `<div class="callout bad" style="margin-top:6px"><div>${esc(a.error || "")}</div></div>` : ""}${a.result ? videoResultHtml(a.result) : ""}</div></div>`;
+    if (running) setTimeout(() => showVideoCheck(mid, true), 1500);
+    else if (poll && a.status === "done") { toast("Reverse video search finished. The keyframes were added to the case."); await reload(); }
+  }
   function bindMedia(c, P) {
+    $$("[data-rvsbox]").forEach(b => showVideoCheck(b.dataset.rvsbox));
+    $$("[data-rvs]").forEach(b => b.onclick = async () => {
+      b.disabled = true; b.innerHTML = '<span class="spin"></span> Starting…';
+      try { await api.post(`/api/media/${encodeURIComponent(b.dataset.rvs)}/video-check`); toast("Reverse video search started. It runs automatically; results appear here."); showVideoCheck(b.dataset.rvs, true); }
+      catch (e) { fail(e); } finally { b.disabled = false; b.textContent = "Reverse video search"; }
+    });
     $$("[data-web]").forEach(b => b.onclick = () => webSearch(A.media.find(x => x.id === b.dataset.web), P));
     $$("[data-view]").forEach(b => b.onclick = () => { const m = A.media.find(x => x.id === b.dataset.view); viewer(content(m.id), `${m.id} · ${m.original_name}`); });
     $$("[data-ela]").forEach(b => b.onclick = async () => {

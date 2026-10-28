@@ -69,6 +69,10 @@ export const config = {
     visionModel: env.INVESTIGATE_VISION_MODEL || "", visionBase: env.INVESTIGATE_VISION_URL || "" },
   // optional reverse-image search for automatic investigations (images are sent to Google Cloud Vision web detection)
   mediaCheck: { visionKey: env.GOOGLE_VISION_API_KEY || "", visionBase: env.GOOGLE_VISION_BASE_URL || "https://vision.googleapis.com", timeoutMs: int(env.SEARCH_TIMEOUT_MS, 15000) },
+  // video verification (1.35): FFmpeg/FFprobe (FFMPEG_PATH / FFPROBE_PATH, else the bundled @ffmpeg-installer packages, else the
+  // system PATH), how much of a video is analysed, how many keyframes are kept and how many are sent to reverse search
+  video: { ffmpegPath: env.FFMPEG_PATH || "", ffprobePath: env.FFPROBE_PATH || "", maxAnalyseS: int(env.VIDEO_MAX_ANALYSE_S, 900), maxKeyframes: Math.min(24, int(env.VIDEO_MAX_KEYFRAMES, 10)),
+    reverseFrames: Math.min(8, int(env.VIDEO_REVERSE_FRAMES, 4)), maxDownloadMb: int(env.VIDEO_MAX_DOWNLOAD_MB, 200), youtubeBase: env.YOUTUBE_API_BASE_URL || "https://www.googleapis.com/youtube/v3" },
   // social media post lookup through the platforms' public embed services (no key except Facebook/Instagram)
   // Meta oEmbed needs an app token: META_OEMBED_TOKEN (APPID|CLIENTTOKEN), or META_APP_ID with the app's client token (META_CLIENT_TOKEN)
   social: { metaToken: env.META_OEMBED_TOKEN || (env.META_APP_ID && env.META_CLIENT_TOKEN ? `${env.META_APP_ID}|${env.META_CLIENT_TOKEN}` : ""), timeoutMs: int(env.SOCIAL_TIMEOUT_MS, 10000) },

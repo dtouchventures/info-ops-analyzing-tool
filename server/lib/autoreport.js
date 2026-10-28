@@ -46,6 +46,7 @@ export function writeSections(r) {
 
   const as = [`Overall: ${o.label}. Strength of the available evidence: ${o.strength_label.toLowerCase()}.${o.note ? ` ${o.note}` : ""}`, r.io.assessment];
   if (["restricted", "failed"].includes(x.access)) as.push("The original content could not be fully read, which limits this assessment.");
+  for (const v of vids(r)) as.push(v.summary);
   if (r.media?.images?.length) as.push(r.media.reuse.length ? "Image findings: at least one image appears to be reused from an earlier context (see Image verification)." : `Image findings: ${r.media.images.length} image(s) were checked; no sign of reuse of an older image was found in the reference archive${r.media.services?.reverse_search?.configured ? " or by reverse-image search" : ""}. This does not show that the images are original or unaltered.`);
   if (["insufficient", "mixed"].includes(o.verdict)) as.push("The claim should not be treated as established or as false until stronger evidence is available.");
 
@@ -109,6 +110,20 @@ details{margin-top:10px;border:1px solid var(--line);border-radius:6px;padding:6
 const link = (u, t) => isHttp(u) ? `<a href="${esc(u)}" rel="noopener noreferrer" target="_blank">${esc(t || u)}</a>` : esc(t || u);
 const withCites = (s, ids) => esc(s).replace(/\[(E-\d+)\]/g, (m, id) => ids.has(id) ? `<a href="#${id}">[${id}]</a>` : m);
 export function label(r) { return r.review?.status === "reviewed" ? `AI-generated · reviewed by ${r.review.by} on ${eat(r.review.at)}` : "AI-generated · not reviewed by an analyst"; }
+// video verification (1.35): ranked matches (verified vs possible), findings, coverage and limits
+const vids = r => (r.media?.videos || []).filter(v => !v.error);
+const matchLine = m => `#${m.rank} ${m.verification === "verified" ? "VERIFIED MATCH" : "Possible similarity"} · keyframe ${m.keyframe_t} s · ${m.title || m.publisher || m.ref || "earlier copy"}${m.url ? ` · ${m.url}` : m.ref ? ` · ${m.source} ${m.ref}` : ""} · ${m.date ? `dated ${eat(m.date, false)}${m.days_before_claim != null ? ` (${m.days_before_claim} days before the claim)` : ""}` : "date not known"} · ${m.method}`;
+export function videoLines(v) {
+  return { head: `${v.video.name} · ${v.probe?.duration_s ? `${v.probe.duration_s.toFixed(1)} s` : ""} · ${v.keyframes.length} keyframes (${v.keyframes.map(k => `${k.t} s`).join(", ")}) · SHA-256 ${String(v.video.sha256).slice(0, 16)}…`,
+    findings: v.findings.map(f => f.text), matches: v.matches.slice(0, 8).map(matchLine), coverage: v.coverage,
+    speech: v.transcript?.text ? `Speech (machine transcript, not checked): “${String(v.transcript.text).slice(0, 300)}”` : `Speech: ${v.transcript?.skipped || v.transcript?.error || "not transcribed"}`,
+    onscreen: v.onscreen_text?.length ? `On-screen text (OCR): ${v.onscreen_text.slice(0, 6).map(o => `“${o.text}” (${o.t} s)`).join("; ")}` : "On-screen text: none readable", limits: v.limits };
+}
+const vidHtml = r => { const list = vids(r); if (!list.length) return "";
+  return `<h2>Video verification</h2>${list.map(v => { const L = videoLines(v);
+    return `<div style="margin:8px 0"><div class="s"><b>${esc(L.head)}</b></div><p>${esc(v.summary)}</p>${L.findings.length ? `<ul>${L.findings.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+    <table><tr><th>Rank</th><th>Match</th><th>Source and date</th><th>How it was compared</th></tr>${v.matches.slice(0, 8).map(m => `<tr><td>${m.rank}</td><td>${m.verification === "verified" ? "<b>Verified match</b>" : "Possible similarity"}<div class="s">keyframe ${esc(m.keyframe_t)} s</div></td><td>${m.url ? link(m.url, m.title || m.url) : esc(`${m.title || ""} (${m.source} ${m.ref || ""})`)}<div class="s">${esc(m.publisher || "")} · ${esc(m.date ? eat(m.date, false) : "date not known")}${m.days_before_claim != null ? ` · ${esc(m.days_before_claim)} days before the claim` : ""}</div></td><td class="s">${esc(m.method)}</td></tr>`).join("") || `<tr><td colspan="4" class="s">No match.</td></tr>`}</table>
+    <p class="s">${esc(L.speech)}<br>${esc(L.onscreen)}</p><p class="s">${esc(v.coverage)} ${esc(v.limits.join(" "))}</p></div>`; }).join("")}`; };
 const imgHtml = (r, images) => {
   const list = (r.media?.images || []);
   if (!list.length) return "";
@@ -136,7 +151,7 @@ export function toHtml(r, { standalone = true, images = [] } = {}) {
   <h2>C. Assessment</h2>${S.assessment.map(s => `<p>${withCites(s, ids)}</p>`).join("")}${ind ? `<p class="s"><b>Information operations indicators (observed):</b></p><ul>${ind}</ul>` : ""}
   <p class="s"><b>Limitations:</b> ${r.limitations.map(esc).join(" ")}</p>
   <h2>D. Recommendations</h2><ul>${S.recommendations.map(s => `<li>${withCites(s, ids)}</li>`).join("")}</ul>
-  ${imgHtml(r, images)}
+  ${imgHtml(r, images)}${vidHtml(r)}
   <h2>E. References</h2>${main.length ? `<ol class="refs">${main.map(ref).join("")}</ol>` : '<p class="s">No relevant evidence was retrieved.</p>'}
   ${rest.length ? `<details><summary>Supplementary evidence (${rest.length} more item${rest.length > 1 ? "s" : ""}, kept for audit)</summary><ol class="refs">${rest.map(ref).join("")}</ol></details>` : ""}
   <p class="s" style="margin-top:14px">Generated by AIVS ${esc(r.version)}. Text drafted by ${r.written_by === "ai" ? `the AI model ${esc(r.ai.model)} (checked)` : "the AIVS rule-based writer"}. Times in East Africa Time (UTC+3).</p></div>`;
@@ -179,6 +194,8 @@ export function toPdf(r, { images = [] } = {}) {
       for (const i of r.media.images) { p(`${i.name}${i.width ? ` (${i.width}x${i.height})` : ""}${i.link ? ` - ${i.link.source}` : ""}`, { bold: true, size: 8.5 }); for (const o of i.observations) p(`- ${o.text}${o.strength === "ai" ? " (AI, not verified)" : ""}`, { size: 8 }); }
       p(r.media.note, { size: 7.5, color: MUTED });
     }
+    for (const v of vids(r)) { const L = videoLines(v); h2("Video verification"); p(L.head, { bold: true, size: 8.5 }); p(v.summary, { size: 8.5 });
+      for (const f of L.findings) p(`- ${f}`, { size: 8 }); for (const m of L.matches) p(`- ${m}`, { size: 7.5 }); p(L.speech, { size: 7.5 }); p(L.onscreen, { size: 7.5 }); p(`${v.coverage} ${v.limits.join(" ")}`, { size: 7.5, color: MUTED }); }
     h2("D. Recommendations"); r.sections.recommendations.forEach(s => p(`- ${s}`));
     h2("E. References"); const { main, rest } = references(r);
     if (!main.length) p("No relevant evidence was retrieved.", { size: 8.5, color: MUTED });
@@ -217,6 +234,8 @@ export function toDocx(r) {
   r.claims.forEach((c, i) => P.push(para(`Claim ${c.seq}: ${c.text} — ${AUTO_VERDICTS[r.assessments[i].verdict]} (strength: ${STRENGTH[r.assessments[i].strength]})`, { b: true })));
   if (r.content) { P.push(para("Original content", { style: "Heading1" })); if (r.source.title) P.push(para(r.source.title, { b: true })); P.push(para(String(r.content).slice(0, 1500))); }
   if (r.media?.images?.length) { P.push(para("Image verification", { style: "Heading1" })); for (const i of r.media.images) { P.push(para(i.name, { b: true })); for (const o of i.observations) P.push(para(`• ${o.text}${o.strength === "ai" ? " (AI, not verified)" : ""}`)); } P.push(para("The images are in the PDF and HTML reports.", { size: 18, color: "475467" })); }
+  for (const v of vids(r)) { const L = videoLines(v); P.push(para("Video verification", { style: "Heading1" })); P.push(para(L.head, { b: true })); P.push(para(v.summary));
+    for (const x of [...L.findings, ...L.matches]) P.push(para(`• ${x}`)); P.push(para(L.speech)); P.push(para(L.onscreen)); P.push(para(`${v.coverage} ${v.limits.join(" ")}`, { size: 18, color: "475467" })); }
   sec("C. Assessment", r.sections.assessment); for (const i of r.io.observed) P.push(para(`• Indicator (observed): ${i.indicator}`));
   P.push(para(`Limitations: ${r.limitations.join(" ")}`, { size: 18, color: "475467" }));
   sec("D. Recommendations", r.sections.recommendations, true);

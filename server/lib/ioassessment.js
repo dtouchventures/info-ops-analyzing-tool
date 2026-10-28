@@ -73,6 +73,20 @@ export function principalClaims(r) {
 const KDF_RE = /\b(kdf|kenya defen[cs]e forces?|kenya army|kenya navy|kenya air ?force|military|soldiers?|troops|defen[cs]e|jeshi|wanajeshi|recruit\w*|cdf|al-?shabaab|atmis|amisom)\b/i;
 
 // ---------------------------------------------------------------- the four sections (rule-based, British English)
+// one sentence per verified video for the one-page report (1.35): what was compared, verified vs possible, and the search coverage
+export function videoNote(r) {
+  const vids = (r.media?.videos || []).filter(v => !v.error); if (!vids.length) return null;
+  const one = v => { const rec = v.findings?.find(f => f.kind === "recycled"), m = rec ? v.matches.find(x => x.rank === rec.rank) : null, ctx = v.findings?.some(f => f.kind === "context");
+    const what = m ? `an earlier copy dated ${String(m.date).slice(0, 10)} (${m.publisher || m.url || "earlier source"}) was verified, indicating recycled footage` : v.verified ? `${v.verified} verified match(es) were found, none dated well before the claim` : v.possible ? `${v.possible} possible similarit${v.possible === 1 ? "y was" : "ies were"} found but not confirmed` : "no earlier copy was found";
+    return `${v.keyframes.length} keyframes were compared; ${what}${ctx ? ", and the earlier copy refers to a different place" : ""}; ${v.internet_search ? `reverse search covered ${(v.searched || []).map(s => s.provider.replace(/ \(.*\)$/, "")).join(" and ")} only` : "internet-wide reverse search was not completed"}`; };
+  return `Video verification: ${vids.map(one).join("; another video: ")}.`;
+}
+// an AI-written analysis keeps the video sentence (it is added back when the model left it out, within the word limit)
+export function keepVideoNote(a) {
+  if (!a?.video_note || a.analysis.includes("Video verification")) return a;
+  const ss = String(a.analysis).split(/(?<=[.!?])\s+/).filter(Boolean); ss.splice(Math.min(1, ss.length), 0, a.video_note);
+  return { ...a, analysis: fit(ss, LIMITS.analysis[1]) };
+}
 export function buildAssessment(r, { priority = null } = {}) {
   const x = r.source, o = r.overall, P = principalClaims(r), main = P[0]?.c || null;
   const refs = refsFor(r, P.map(p => p.c.id)), cite = ids => { const ns = refs.filter(f => ids.includes(f.id)).map(f => `[${f.n}]`); return ns.length ? ` ${ns.join("")}` : ""; };
@@ -100,10 +114,13 @@ export function buildAssessment(r, { priority = null } = {}) {
     ["restricted", "failed"].includes(x.access) && !x.provenance ? "The original content could not be fully retrieved." : null];
   let background = fit(bg, LIMITS.background[1]);
 
+  // video verification (1.35): one concise sentence, placed right after the evidence-search sentence so it is never cut
+  const vnote = videoNote(r);
   // 2. ANALYSIS (80–180 words): each principal claim, its evidence and the gaps
   const SHORT = { factcheck: "fact-check databases", web: "web search", official: "official and fact-checking sites", news: "a news index" };
   const an = [ok.length ? `AIVS searched ${ok.map(s => SHORT[s.key] || s.label).join(", ")} automatically and compared ${plural(r.evidence.filter(e => !e.repeat_of && !["reference", "earlier_case"].includes(e.tier)).length, "independent item")}${r.evidence.some(e => e.page_read) ? `, reading the full text of ${plural(r.evidence.filter(e => e.page_read).length, "source")}` : ""}.`
     : `No independent evidence source could be searched${errored.length ? ` (${errored.map(s => s.label).join(", ")} returned errors)` : unconfigured.length ? " (no search service is configured)" : ""}, so the claims could not be compared with outside reporting.`];
+  if (vnote) an.push(vnote);
   for (const k of claims) {
     const parts = [`Claim ${k.n} (“${short(k.text, 16)}”) is assessed as ${k.verdict_io} (confidence: ${k.confidence}).`];
     if (k.contradicting.length) parts.push(`It is contradicted by ${refs.filter(f => k.contradicting.includes(f.n)).map(f => `${f.publisher}${f.rating ? `, which rates it “${f.rating}”` : ""} [${f.n}]`).join(" and ")}.`);
@@ -131,7 +148,9 @@ export function buildAssessment(r, { priority = null } = {}) {
   const spread = amplification.length ? "Repetition was observed, which is consistent with amplification but does not prove coordination." : "No dissemination or amplification data indicates coordinated activity.";
   const urgency = ["contradicted", "misleading"].includes(o.verdict) && (kdf || cues.length) ? (o.strength === "strong" ? "High" : "Moderate") : o.verdict === "supported" ? "Low" : "Moderate";
   const unc = shot && !x.screenshot?.original?.retrieved ? "the post is known only from a screenshot; the original was not independently retrieved" : ["restricted", "failed"].includes(x.access) && !x.provenance ? "the original content could not be fully read" : x.provenance ? "the content was supplied by an analyst and could not be compared with the live post" : !ok.length ? "no independent source could be searched" : !x.author && !pub ? "the origin and date of the content are unknown" : r.evidence.filter(e => !e.repeat_of).length < 2 ? "few independent sources were found" : "the sources consulted cover only what they index";
-  const as = [open, classify, impl, spread, `Significance: ${urgency}; confidence: ${conf}. Main limitation: ${unc}.`];
+  const vids = (r.media?.videos || []).filter(v => !v.error);
+  const unc2 = vids.length && !vids.some(v => v.internet_search) && /few independent sources|cover only what they index|could not be searched/.test(unc) ? "internet-wide reverse search of the video's keyframes was not completed" : unc;
+  const as = [open, classify, impl, spread, `Significance: ${urgency}; confidence: ${conf}. Main limitation: ${unc2}.`];
   let assessment = fit(as.filter(Boolean), LIMITS.assessment[1]);
 
   // 4. RECOMMENDATIONS (3–5, each beginning "There is a need to…"): communication and review measures, never verification chores
@@ -141,6 +160,7 @@ export function buildAssessment(r, { priority = null } = {}) {
     rec.push(`${REC_PREFIX} issue a timely public clarification through authorised KDF channels that corrects the inaccurate claim${firstCon ? `, citing the evidence [${firstCon.n}]` : ""}.`);
     rec.push(`${REC_PREFIX} raise public awareness of this ${/recruit|fee|ksh|pay|m-?pesa/i.test(text) ? "fraudulent recruitment narrative and of the official recruitment channels" : "misleading narrative"} through authorised communication.`);
   }
+  if ((r.media?.videos || []).some(v => v.reuse?.length)) rec.push(`${REC_PREFIX} make the footage's earlier, verified context known through authorised KDF channels if the recycled video continues to circulate.`);
   if (o.verdict === "supported") rec.push(`${REC_PREFIX} reinforce the accurate information through authorised KDF channels where public interest warrants it.`);
   if (["insufficient", "mixed", "not_verifiable"].includes(o.verdict)) rec.push(`${REC_PREFIX} treat the narrative as unverified and avoid public statements that presume it false until evidence becomes available.`);
   if (["extraction_blocked", "insufficient_content"].includes(o.verdict)) rec.push(`${REC_PREFIX} obtain the content through permitted means so that the verification can be completed.`);
@@ -155,7 +175,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   const header = { reference: r.report_id, date: eatDate(r.completed_at || r.created_at, true), subject: short(r.subject, 16), source: [x.platform, x.publisher && x.publisher !== x.platform ? x.publisher : null].filter(Boolean).join(" · ") || ({ text: "Submitted text", image: "Submitted image", document: "Submitted document", screenshot: "Screenshot" }[x.input_type] || "Not established"),
     ...(srcLabel ? { source: srcLabel } : {}), source_url: x.url || null, priority: ({ routine: "Routine", priority: "Priority", urgent: "Urgent" })[priority] || "Routine", status: "DRAFT — NOT APPROVED" };
   const obj = () => ({ title: "AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", header, background, analysis, assessment, recommendations, references: refs, claims, limitation: null,
-    verdict: o.verdict, verdict_label: ioV, strength: conf, urgency, written_by: "rules", training: !!r.training });
+    verdict: o.verdict, verdict_label: ioV, strength: conf, urgency, written_by: "rules", training: !!r.training, ...(vnote ? { video_note: vnote } : {}) });
   // the page stays near 480 words: sections are shortened in proportion, whole sentences only
   const pageWords = () => words(assessmentHtml(obj()).replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " "));
   const full = [words(background), words(analysis), words(assessment)];

@@ -108,6 +108,10 @@ export function makeAutoComplete(db, { cases }) {
     // 1.34: a screenshot shows a post but does not prove it exists or was published as shown
     if (source.input_type === "screenshot") unc.push({ code: "auto_screenshot", text: `The content is known from a screenshot submitted by an analyst; ${source.screenshot?.original?.retrieved ? "the original post was retrieved from the visible link for comparison" : "the original post was not independently retrieved"}. A screenshot is not proof that the post exists or was published as shown, and OCR may misread names and numbers.` });
     if (!source.published_at) unc.push({ code: "auto_date", text: "The original publication date of the content could not be established from the source." });
+    for (const v of (media?.videos || []).filter(v => !v.error)) {
+      if (!v.internet_search) unc.push({ code: "auto_video_search", text: `Video ${v.video.name}: internet-wide reverse search of its keyframes was not completed (${(v.unavailable || []).map(u => `${u.provider}: ${u.reason}`).join("; ") || "provider errors"}); only local similarity analysis was done.` });
+      if (v.possible) unc.push({ code: "auto_video_possible", text: `Video ${v.video.name}: ${v.possible} possible similarit${v.possible === 1 ? "y" : "ies"} with earlier footage could not be confirmed by AIVS's own comparison.` });
+    }
     if (media?.reuse?.length) unc.push({ code: "auto_media", text: `${plural(media.reuse.length, "image reuse indicator")} suggest an attached image may be older than the claim; see the image findings.` });
     if (otherClaims.length) unc.push({ code: "auto_other", text: `${plural(otherClaims.length, "further statement")} in the content ${otherClaims.length === 1 ? "was" : "were"} recorded but not assessed (at most two principal claims are assessed).` });
     if (aiState && !aiState.ok) unc.push({ code: "auto_ai", text: `The organisation's AI model was not available (${cut(aiState.reason, 120)}); the assessment was written by the fixed AIVS rules.` });

@@ -307,7 +307,19 @@ function mig22(db) {
   CREATE INDEX IF NOT EXISTS screenshot_analyses_sha ON screenshot_analyses(sha256);
   CREATE INDEX IF NOT EXISTS screenshot_analyses_created ON screenshot_analyses(created_at);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// 1.35: video verification: one record per analysed video (stages, container metadata, extraction, ranked matches and findings) and
+// its keyframes (stored as case images) with their timestamps, perceptual hashes and colour-layout embedding
+function mig23(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS video_analyses (id TEXT PRIMARY KEY, media_id TEXT NOT NULL REFERENCES media(id), case_id TEXT NOT NULL REFERENCES cases(id), investigation_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed')), stage TEXT, stages_json TEXT NOT NULL, probe_json TEXT, extract_json TEXT, result_json TEXT, transcript_id TEXT, error TEXT,
+    is_training INTEGER NOT NULL DEFAULT 0, created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL, completed_at TEXT);
+  CREATE INDEX IF NOT EXISTS video_analyses_media ON video_analyses(media_id);
+  CREATE INDEX IF NOT EXISTS video_analyses_case ON video_analyses(case_id);
+  CREATE TABLE IF NOT EXISTS video_keyframes (id INTEGER PRIMARY KEY, analysis_id TEXT NOT NULL REFERENCES video_analyses(id), video_media_id TEXT NOT NULL REFERENCES media(id), frame_media_id TEXT NOT NULL REFERENCES media(id),
+    t REAL NOT NULL, origin TEXT, dhash TEXT, phash TEXT, dhash_m TEXT, phash_m TEXT, embedding TEXT, ocr_text TEXT, created_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS video_keyframes_analysis ON video_keyframes(analysis_id);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

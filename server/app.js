@@ -15,7 +15,8 @@ import { makeReports } from "./lib/report.js";
 import { makeAutomaticReports, automaticReportHtml } from "./lib/automatic-report.js";
 import { makeAI } from "./ai/index.js";
 import { seedTraining, seedCoverageDemo } from "./lib/training.js";
-import { fetchPage } from "./lib/fetchurl.js";
+import { fetchPage, fetchImage } from "./lib/fetchurl.js";
+import { makeVideoCheck } from "./lib/videocheck.js";
 import { reportPdf, reportCsv } from "./lib/pdf.js";
 import { makeRetrieval, OFFICIAL_SOURCES } from "./lib/retrieval.js";
 import { makeIo, sampleDataset, normText, CAVEATS as IO_CAVEATS, parseFile, detectMapping } from "./lib/io.js";
@@ -103,10 +104,12 @@ export function createApp(config) {
   const investigations = makeInvestigations(db, { config, cases, retrieval, media, storage, social, fetchPage, extractDocument, ai, audit, version: VERSION0, approvals, autocomplete, notify });
   investigations.useCaseReports(id => reports.render(id));
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
+  const videoCheck = makeVideoCheck(db, { config, storage, audit, media, cases, transcriber, ocr: (f, ms) => investigations.ocr(f, ms), fetchPage, fetchImage });
+  investigations.useVideo(videoCheck);
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
   const screenshots = makeScreenshots(db, { config, storage, audit, investigations, io, social, fetchPage, notify });
-  const ctx = { screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const ctx = { videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -220,7 +223,7 @@ export function createApp(config) {
   // rate limits: everything, plus a tighter budget for work that fetches, stores or computes a lot
   const RL = { windowMs: 300000, general: 1500, heavy: 60, ...(config.rateLimit || {}) };
   const general = makeLimiter({ windowMs: RL.windowMs, limit: RL.general, name: "General" }), heavy = makeLimiter({ windowMs: RL.windowMs, limit: RL.heavy, name: "Heavy" });
-  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/frames|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample|live\/sources(\/\d+\/sync)?|live\/check|live\/instagram\/test|live\/training\/sample|monitor\/searches(\/\d+\/(report|watchlist))?|monitor\/watchlists\/\d+\/report|monitor\/items\/\d+\/(verify|image))$/;
+  const HEAVY = /^\/(investigations|verify|check-image|archive(\/import)?|cases\/[^/]+\/(media|analyse|ai\/runs|to-archive|assistant|coverage\/ai)|media\/[^/]+\/(frames|video-check)|cases\/[^/]+\/retrieve|evidence\/[^/]+\/check-source|io\/datasets(\/\d+\/(analyse|add))?|io\/sample|extract-text|social\/lookup|extract|verify\/post|io\/collect|io\/discussion-sample|io\/watch-demo|watch\/lists\/\d+\/analyse|io\/datasets\/\d+\/(enrich|ai)|io\/claims\/\d+\/case|watch\/lists\/\d+\/(preview|run|submit|import)|watch\/sources\/\w+\/check|watch\/alerts\/\d+\/action|media\/[^/]+\/transcripts|kb\/datasets(\/\d+\/evaluate)?|kb\/sample|live\/sources(\/\d+\/sync)?|live\/check|live\/instagram\/test|live\/training\/sample|monitor\/searches(\/\d+\/(report|watchlist))?|monitor\/watchlists\/\d+\/report|monitor\/items\/\d+\/(verify|image))$/;
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
@@ -1210,6 +1213,11 @@ export function createApp(config) {
     try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
+  // ---------------------------------------------------------------- reverse video search and verification (1.35)
+  api.get("/video-checks/status", (req, res) => res.json(videoCheck.status()));
+  api.post("/media/:id/video-check", requirePerm("case.edit"), h((req, res) => res.status(202).json(videoCheck.start(req.user, req.params.id))));
+  api.get("/media/:id/video-checks", (req, res) => res.json({ analyses: videoCheck.forMedia(req.params.id) }));
+  api.get("/video-checks/:id", (req, res) => res.json(videoCheck.get(req.params.id)));
   // ---------------------------------------------------------------- automatic social media screenshot analysis (1.34)
   const shotUpload = multer({ dest: storage.tmpDir, limits: { fileSize: (MAX_SCREENSHOT_MB + 1) * 1024 * 1024, files: 1, fields: 5 } });
   const canShot = (req, res, next) => (can(req.user, "io.import") && can(req.user, "case.create") ? next() : next(new HttpError(403, "Your role cannot start screenshot analyses.")));

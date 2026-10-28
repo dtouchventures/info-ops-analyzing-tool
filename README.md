@@ -310,6 +310,42 @@ Rate limits are respected: after a platform says "too many requests", AIVS does 
 
 What is **said** in a video is never available from these services (YouTube gives caption files only to the video's owner). To check speech, add a copy of the video you are permitted to use: the AIVS transcription service transcribes it.
 
+## Reverse video search and video verification (1.35)
+
+Add a video (MP4, MOV, AVI or WebM) on **Verify Information**, or paste a link to a video *file*. The video is then verified automatically. On a case, the **Reverse video search** button on the video card runs the same analysis again. It sits beside **Reverse image search**, which is on each image and keyframe.
+
+1. **Reading the video:**
+   - **Container metadata** is read with FFprobe: duration, codec, creation time and location tag. It is reported as a lead only.
+   - **Keyframes** are extracted with FFmpeg, at scene changes and by even sampling. Near-identical frames are dropped, at most `VIDEO_MAX_KEYFRAMES` are kept, and the first `VIDEO_MAX_ANALYSE_S` seconds are analysed.
+   - **What is kept:** the keyframes are stored as images of the case with their timestamps, and the original video is never changed.
+2. **On-screen text** (captions, text in logos) is read by OCR on each keyframe. Logos without text are not recognised.
+3. **Speech** is transcribed by the AIVS transcription service (faster-whisper) when `TRANSCRIBE_URL` is set. The transcript is kept with the video.
+4. **Local similarity:** each keyframe is compared with the reference archive, earlier cases and the keyframes of earlier analysed videos. The comparison uses perceptual hashes (dHash + pHash) and a colour-layout embedding. The embedding is a fixed descriptor, not a neural network.
+5. **Reverse search** uses authorised providers only:
+   - **Google Cloud Vision web detection** (`GOOGLE_VISION_API_KEY`): selected keyframes are sent to Google, and each send is audited. Every page it reports is retrieved and archived, its date is read, and its image is compared by AIVS itself.
+   - **YouTube Data API** (`YOUTUBE_API_KEY`): earlier uploads matching the video's words, published before the claim, are compared by thumbnail.
+6. **Results:**
+   - **Matches** are ranked by relevance, with the source URL, date and how each one was compared.
+   - **Verified match:** AIVS compared the two pictures itself (perceptual distance ≤ 24/128 and embedding ≥ 0.90).
+   - **Possible similarity:** everything else, including a provider's match that AIVS could not confirm.
+   - **Findings:** possible recycled footage (a verified copy dated more than 30 days before the claim), possible misleading context (the earlier copy names other places), and date and location inconsistencies.
+7. **Assessment:**
+   - **Verdict:** verified recycled footage counts as reuse, so the content is assessed as misleading when the claims are not otherwise settled.
+   - **One-page report:** gets one concise "Video verification" sentence and a recommendation.
+   - **Details report:** lists every match.
+
+**What AIVS does not claim:**
+
+- AIVS never says it searched the whole internet.
+- It never names the original uploader.
+- It makes no finding about AI generation or manipulation, because it does not test for them.
+
+When no reverse-search provider is configured, the report says *"Internet-wide reverse search was not completed"*; keyframe extraction and local similarity analysis are still done.
+
+**Platform videos:** links to platform videos (YouTube, TikTok, Facebook, Instagram) are not downloaded, because the platforms' terms do not allow it. Their thumbnail is checked instead; for full verification, upload the video file.
+
+**FFmpeg:** `npm install` installs FFmpeg and FFprobe through the `@ffmpeg-installer/ffmpeg` and `@ffprobe-installer/ffprobe` packages. `start-windows.bat` does this once. You can also set `FFMPEG_PATH` and `FFPROBE_PATH`. `GET /api/video-checks/status` shows what is available.
+
 ## Automatic screenshot analysis (1.34)
 
 **Social Media Analysis → Upload Screenshot — Automatic AI Analysis.** The analyst uploads one screenshot (PNG, JPEG or WebP, up to 25 MB); everything else is automatic:
@@ -633,7 +669,7 @@ npm run test:e2e          # 192-check browser test of the full workflow (needs P
 ## Limits (pilot)
 
 - Single server with SQLite. See `docs/ARCHITECTURE.md` for moving to PostgreSQL and object storage.
-- Video is compared through frames. The video container's metadata is not read (there is no ffprobe dependency).
+- Video is compared through keyframes. Since 1.35 the container metadata is read with FFprobe (bundled through npm); it is reported as a lead only.
 - Speech-to-text supports English and Kiswahili only. Accuracy depends on the recording; on a CPU, expect roughly real-time to a few times slower with the `small` model. Always check against the recording.
 - The text rules (claim extraction, dates, places) are rule-based. Treat their output as a starting point.
 - Thresholds were tuned on a small synthetic set.

@@ -7,6 +7,7 @@ export function sniff(b) {
   if (s(0, "RIFF") && s(8, "WEBP")) return { mime: "image/webp", kind: "image", ext: "webp" };
   if (s(0, "GIF87a") || s(0, "GIF89a")) return { mime: "image/gif", kind: "image", ext: "gif" };
   // audio recordings (voice notes, calls, broadcasts)
+  if (s(0, "RIFF") && s(8, "AVI ")) return { mime: "video/x-msvideo", kind: "video", ext: "avi" };   // AVI (1.35)
   if (s(0, "RIFF") && s(8, "WAVE")) return { mime: "audio/wav", kind: "audio", ext: "wav" };
   if (s(0, "ID3") || (b[0] === 0xff && (b[1] & 0xe6) === 0xe2)) return { mime: "audio/mpeg", kind: "audio", ext: "mp3" };   // MP3 (ID3 tag or MPEG audio frame)
   if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return { mime: "audio/aac", kind: "audio", ext: "aac" };                    // AAC in ADTS frames

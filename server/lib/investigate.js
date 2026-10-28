@@ -19,9 +19,10 @@ import { HttpError, can } from "./auth.js";
 import { parseSourceLink, suggestSource, parsePostScreenshot, extractEntities, extractHashtags, redFlags, injectionFlags } from "../../shared/text.js";
 import { compare, topFor, assessClaim, overall, ioIndicators, checkSections, AUTO_VERDICTS, STRENGTH as STRENGTH_LABEL } from "./autoeval.js";
 import { writeSections, limitations, toHtml, toPdf, toDocx, docxFromBody } from "./autoreport.js";
-import { buildAssessment, checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, applyApproval, validRecommendation, LIMITS, words as wordCount } from "./ioassessment.js";
+import { keepVideoNote, buildAssessment, checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, applyApproval, validRecommendation, LIMITS, words as wordCount } from "./ioassessment.js";
 import { providers } from "../ai/providers.js";
-import { fetchImage } from "./fetchurl.js";
+import { fetchImage, fetchVideo, VIDEO_URL } from "./fetchurl.js";
+import { sniff } from "./sniff.js";
 import { normalizeLink, facebookIds } from "./social.js";
 import { makeMediaCheck } from "./mediacheck.js";
 
@@ -134,6 +135,9 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
 
   // the Facebook service of live monitoring (set after both are created; see app.js)
   let facebook = null;
+  // video verification (1.35, set after both are created; see app.js)
+  let videoCheck = null;
+  const useVideo = v => { videoCheck = v; };
   const useFacebook = f => { facebook = f; };
   // no readable content: every later step is marked "skipped", no AI or evidence search runs, and the report says why
   function finishBlocked(id, user, inv, input, src, content, verdict) {
@@ -281,10 +285,19 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         const lk = await withTimeout(social.lookup(input.url, fb ? { skipGraph: true, reason: fb.message } : {}), 60000, `${L.platform} lookup`).catch(e => ({ status: "error", message: e.message }));
         src.extraction_attempts = [...(fb?.attempts || []).map(a => ({ ...a, method: `Live Monitoring service: ${a.method}` })), ...(lk.attempts || [])];
         linkImages.push(...thumbsOf({ ...lk, platform: L.platform }));
+        if (["YouTube", "TikTok"].includes(L.platform) || /video|reel/.test(srcInfo.kind || "")) src.notes.push(`${L.platform}'s video file is not downloaded (the platform's terms do not allow it); only its thumbnail image was checked. For full video verification (keyframes, speech, reverse search) upload the video file.`);
         Object.assign(src, { metrics: lk.metrics || null, description: lk.title && lk.title !== lk.text ? lk.title : null,
           video: ["YouTube", "TikTok"].includes(L.platform) && (lk.title || lk.duration) ? { title: lk.title || null, duration: lk.duration || null, channel: lk.author_name || null, tags: (lk.tags || []).slice(0, 10), captions: lk.transcript?.note || null } : null });
         if (lk.text) { embed = lk; parts.push(lk.text); src.access = "partial"; src.method.push(`${L.platform} public embed (${lk.text_source || lk.service || "oEmbed"})`); src.notes.push("Only the post's text was read from the platform's embed service; images, video and replies were not."); if (lk.author_name) Object.assign(src, { author: lk.author_name, author_basis: `name from ${L.platform}'s public embed` }); if (lk.posted_at && !src.published_at) Object.assign(src, { published_at: lk.posted_at, published_basis: lk.posted_basis }); }
         else { src.access = "restricted"; src.notes.push(`${L.platform} did not let AIVS read this post automatically${lk.message ? ` (${lk.message})` : ""}. Nothing was guessed.`); src.fallback = `Upload a screenshot of the ${L.platform} post or paste its text, then analyse again.`; embed = lk.raw ? lk : null; }
+      } else if (VIDEO_URL.test((() => { try { return new URL(input.url).pathname; } catch { return ""; } })()) && videoCheck) {
+        // a link to a video file (1.35): downloaded (size-limited, public addresses only), kept and verified like an uploaded video
+        try {
+          const v = await withTimeout(fetchVideo(input.url, { allowPrivate: !!config.allowPrivateFetch, maxBytes: (config.video?.maxDownloadMb || 200) * 1048576 }), 180000, "Video retrieval");
+          const tmp = path.join(storage.tmpDir, `inv-${id}-link-video.${v.ext}`); fs.writeFileSync(tmp, v.raw);
+          input.files.push({ name: `linked-video.${v.ext}`, size: v.raw.length, path: tmp, temp: true, link: { url: input.url, final_url: v.finalUrl } });
+          src.method.push(`video file downloaded from the link (${Math.round(v.raw.length / 1048576 * 10) / 10} MB)`); src.input_type = "video"; src.title = src.title || path.basename(new URL(v.finalUrl).pathname);
+        } catch (e) { src.access = "failed"; src.notes.push(`The video file could not be retrieved from the link (${e.message}).`); src.fallback = "Upload the video file itself, or paste the post's text."; }
       } else {
         try {
           page = await withTimeout(fetchPage(input.url, { allowPrivate: !!config.allowPrivateFetch, allowPdf: true }), 45000, "Page retrieval");
@@ -347,6 +360,19 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           if (d.created && !src.published_at) Object.assign(src, { published_at: d.created, published_basis: "creation date in the document's properties (may differ from publication)" });
           if (!input.url && !P) src.input_type = "document";
         } catch (e) { src.notes.push(`${f.name}: ${e.message}`); }
+      } else if (sniff(buf.subarray(0, 64))?.kind === "video" && videoCheck) {
+        // video (1.35): keyframes, on-screen text and speech are read now; the keyframes are kept with the case and verified later
+        if (!videoCheck.available()) { src.notes.push(`${f.name}: the video is kept with the case, but it could not be analysed: FFmpeg/FFprobe are not available on this computer (run npm install, or set FFMPEG_PATH and FFPROBE_PATH).`); continue; }
+        check(); setStage(id, "extract", "running", `reading the video ${f.name}: keyframes, on-screen text and speech`);
+        const x = await videoCheck.extract(f.path, f.name, { budgetMs: Math.max(60000, budget(480000)), onStage: (k, st, d) => { if (st === "running") setStage(id, "extract", "running", `video ${f.name}: ${k}…`); } });
+        f.video = x; src.input_type = input.text || P ? src.input_type : "video";
+        const vt = videoCheck.videoText(x);
+        if (vt.speech.replace(/\s/g, "").length >= 15) { parts.push(vt.speech); src.method.push(`speech in ${f.name} transcribed by the AIVS transcription service (machine transcript, not checked)`); }
+        if (vt.onscreen.replace(/\s/g, "").length >= 15) { parts.push(vt.onscreen); src.method.push(`on-screen text read by OCR from ${x.frames.length} keyframe(s) of ${f.name}`); }
+        if (x.frames.length) src.method.push(`${x.frames.length} keyframe(s) extracted from ${f.name}`);
+        src.notes.push(...x.errors.map(e => `${f.name}: ${e}`), ...x.notes.slice(0, 3).map(n => `${f.name}: ${n}`));
+        if (x.transcript?.skipped || x.transcript?.error) src.notes.push(`${f.name}: speech not transcribed (${x.transcript.skipped || x.transcript.error}).`);
+        if (x.probe && !src.video) src.video = { duration: x.probe.duration_s, width: x.probe.video.width, height: x.probe.video.height, codec: x.probe.video.codec, sound: !!x.probe.audio, container_created: x.probe.metadata.creation_time || null };
       } else if (avOf(buf, f.name)) src.notes.push(`${f.name}: video or audio evidence is kept with the case; its frames and speech can be checked from the case (capture frames, transcribe). Its content is not read automatically here.`);
       else src.notes.push(`${f.name}: this file type is not supported here (use an image, video, PDF or Word .docx).`);
     }
@@ -363,6 +389,10 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       } catch (e) { src.original_source = { url: S.source_url, error: e.message }; src.notes.push(`The original source named by the analyst could not be retrieved (${e.message}); its link is kept.`); }
     }
     if (S && src.provenance) { src.provenance.platform = src.platform; src.method = src.method.map(m => /^text read from .* by OCR/.test(m) ? `${m}, from a screenshot supplied by the analyst` : m); if (parts.length) src.access = "analyst_supplied"; }
+    // a video with no speech, no readable on-screen text and no accompanying text is still verified as footage (1.35): the case
+    // records what was submitted, and no claim is taken from that description
+    const vids = input.files.filter(f => f.video?.frames?.length);
+    if (parts.join("").replace(/\s/g, "").length < 25 && vids.length) { src.video_only = true; parts.push(`Video submitted for verification: ${vids.map(f => f.name).join(", ")}. Too little speech, on-screen text or accompanying text was found to take a claim from it; the footage itself was checked.`); }
     const content = [...new Set(parts.map(p => p.trim()).filter(Boolean))].join("\n\n").slice(0, 20000);
     src.mentions = [...new Set((content.match(/(^|[^\w@])@([A-Za-z0-9_]{2,30})\b/g) || []).map(m => m.trim().replace(/^[^@]*/, "")))].slice(0, 20);
     if (!parts.length && src.access === "full") { src.access = "failed"; src.fallback = src.fallback || "Paste the text, or upload a clearer screenshot."; }
@@ -397,6 +427,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         if (!fs.existsSync(f.path)) continue;
         try {
           const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.temp) safeRm(f.path);
+          if (f.link) { linkByMedia[m.id] = { url: f.link.url, source: "video file from the submitted link" }; audit(user, "Video retrieved from the link and kept with the case", "case", caseId, { media: m.id, url: f.link.url, final_url: f.link.final_url, sha256: m.sha256 }); }
+          if (f.video && m.kind === "video") { try { f.videoAnalysis = await videoCheck.persist(user, { caseId, mediaId: m.id, extracted: f.video, investigationId: id, contextText: input.text || null }); } catch (e) { src.notes.push(`${f.name}: the keyframes could not be kept (${e.message}).`); } }
           const o = ocrs.find(x => x.file === f); if (o?.text && m.kind === "image") cases.addOcr(user, m.id, { text: o.text, lang: "eng+swa", confidence: o.confidence, engine: "tesseract.js (server, automatic investigation)" });
         } catch (e) { src.notes.push(`${f.name} was not kept with the case: ${e.message}`); }
       }
@@ -445,6 +477,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         }
       }
     }
+    if (src.video_only) claims = [];   // the description of the submission is not a claim
     // at most two principal claims (1.32): the most significant, relevant and verifiable; duplicates combined; the others are
     // kept in the case and listed in the report as further statements
     let otherClaims = [], principalBy = "rules";
@@ -498,7 +531,19 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     let mediaRes = { images: [], reuse: [], services: mediacheck.status(), note: "No image was available for this investigation." };
     let mediaFailed = false;
     if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
-    setStage(id, "media", mediaFailed ? "failed" : mediaRes.images.length ? "done" : "skipped", mediaRes.images.length ? `${mediaRes.images.length} image(s) checked${mediaRes.reuse.length ? ` · ${mediaRes.reuse.length} possible reuse indicator(s)` : ""}` : "no image to check");
+    // video verification (1.35): local similarity, reverse search of keyframes, earlier versions, findings; verified recycled footage
+    // counts as reuse in the overall verdict, possible similarities do not
+    mediaRes.videos = [];
+    for (const f of input.files.filter(f => f.videoAnalysis)) {
+      check();
+      try { const v = await videoCheck.verify(user, { analysisId: f.videoAnalysis, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, contextText: input.text || null, budgetMs: Math.max(20000, budget(240000)), check });
+        mediaRes.videos.push(v); mediaRes.reuse.push(...v.reuse); }
+      catch (e) { if (e instanceof Cancelled) throw e; src.notes.push(`${f.name}: video verification did not finish (${e.message}).`); mediaRes.videos.push({ analysis_id: f.videoAnalysis, error: e.message, video: { name: f.name } }); }
+    }
+    if (!mediaRes.videos.length) delete mediaRes.videos;
+    const vdone = (mediaRes.videos || []).filter(v => !v.error);
+    if (vdone.length && !mediaRes.images.length) mediaRes.note = "AIVS reports observations about images and video; it does not decide that footage is manipulated or AI-generated.";
+    setStage(id, "media", mediaFailed ? "failed" : mediaRes.images.length || vdone.length ? "done" : "skipped", vdone.length ? [mediaRes.images.length ? `${mediaRes.images.length} image(s) checked` : null, ...vdone.map(v => `video ${v.video.name}: ${v.keyframes.length} keyframe(s), ${v.verified} verified and ${v.possible} possible match(es)${v.reuse.length ? ", possible recycled footage" : ""}${v.internet_search ? "" : "; internet-wide reverse search not completed"}`)].filter(Boolean).join(" · ") : mediaRes.images.length ? `${mediaRes.images.length} image(s) checked${mediaRes.reuse.length ? ` · ${mediaRes.reuse.length} possible reuse indicator(s)` : ""}` : "no image to check");
     // 6 ---- assessment
     check(); setStage(id, "assess", "running");
     let assessments = claims.map(c => assessClaim(c, compared, searched));
@@ -598,11 +643,11 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       try {
         const x = r.source, facts = { subject: r.subject, source: { platform: x.platform, author: x.author, published_at: x.published_at, access: x.access, supplied_by_analyst: !!x.provenance }, overall: r.overall.label, strength: r.overall.strength_label,
           claims: r.claims.map((c, i) => ({ text: c.text, verdict: AUTO_VERDICTS[r.assessments[i].verdict], reason: r.assessments[i].reason })), references: ioa.references.map(f => ({ n: f.n, publisher: f.publisher, title: f.title, addresses: f.addresses, rating: f.rating || null })),
-          indicators: r.io.observed.map(o => o.indicator), image_findings: (r.media?.images || []).flatMap(i => i.observations.filter(o => o.strength !== "ai").map(o => o.text)).slice(0, 4) };
+          indicators: r.io.observed.map(o => o.indicator), video_findings: (r.media?.videos || []).filter(v => !v.error).map(v => v.summary), image_findings: (r.media?.images || []).flatMap(i => i.observations.filter(o => o.strength !== "ai").map(o => o.text)).slice(0, 4) };
         const out = await withTimeout(askJson(user, r.case_id, "one-page assessment drafting", aiPrompt(ioa, facts)), room(), "AI assessment drafting"); check();
         const chk = checkAiSections(out, ioa, { hasAmplification: r.io.observed.some(o => ["repetition", "dataset", "amplification", "spread"].includes(o.kind)), nRefs: ioa.references.length });
         if (chk.removed.length) notesAI.push(`One-page assessment: AI text not used for ${chk.removed.join("; ")}.`);
-        ioa = { ...chk, removed: undefined }; if (ioa.written_by === "ai") r.ai.used = true;
+        ioa = keepVideoNote({ ...chk, removed: undefined, video_note: ioa.video_note }); if (ioa.written_by === "ai") r.ai.used = true;
       } catch (e) { if (e instanceof Cancelled) throw e; notesAI.push(`One-page assessment drafting by AI was not used (${e.message}); rule-based text applied.`); }
     }
     return ioa;
@@ -880,5 +925,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
   const visionCheck = () => mediacheck.visionCheck();
-  return { useCaseReports, autoSubmit, ocr, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
+  return { useCaseReports, autoSubmit, ocr, useVideo, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
 }

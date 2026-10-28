@@ -32,7 +32,7 @@ export function makeMedia(db, storage) {
     const fd = fs.openSync(tmpFile, "r"), head = Buffer.alloc(64); fs.readSync(fd, head, 0, 64, 0); fs.closeSync(fd);
     let t = sniff(head);
     if (!t && isTextName(name)) t = { mime: "text/plain", kind: "document", ext: "txt" };
-    if (!t) { fs.rmSync(tmpFile, { force: true }); throw new HttpError(415, `${name}: unsupported file type. Use images (JPEG, PNG, WebP, GIF, HEIC), video (MP4, MOV, WebM, 3GP), audio (MP3, WAV, M4A, AAC, OGG/Opus voice notes, FLAC, AMR) or documents (PDF, Word .docx, TXT, CSV, JSON).`); }
+    if (!t) { fs.rmSync(tmpFile, { force: true }); throw new HttpError(415, `${name}: unsupported file type. Use images (JPEG, PNG, WebP, GIF, HEIC), video (MP4, MOV, AVI, WebM, 3GP), audio (MP3, WAV, M4A, AAC, OGG/Opus voice notes, FLAC, AMR) or documents (PDF, Word .docx, TXT, CSV, JSON).`); }
     if (archiveId && t.kind !== "image") { fs.rmSync(tmpFile, { force: true }); throw new HttpError(415, "Archive records need an image (for a video, capture a frame first)."); }
     const size = fs.statSync(tmpFile).size;
     let width = null, height = null, meta = {}, hashes = {};

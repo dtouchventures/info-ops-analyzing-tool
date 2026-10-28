@@ -35,11 +35,11 @@ async function resolveSafe(host, allowPrivate) {
   return addrs[0];
 }
 
-function request(url, addr, accept, max = MAX_BYTES) {
+function request(url, addr, accept, max = MAX_BYTES, timeout = TIMEOUT) {
   return new Promise((resolve, reject) => {
     const mod = url.protocol === "https:" ? https : http;
     const req = mod.request(url, {
-      method: "GET", timeout: TIMEOUT, servername: net.isIP(url.hostname) ? undefined : url.hostname,
+      method: "GET", timeout, servername: net.isIP(url.hostname) ? undefined : url.hostname,
       lookup: (_h, o, cb) => (o && o.all ? cb(null, [{ address: addr.address, family: addr.family }]) : cb(null, addr.address, addr.family)),
       headers: { "User-Agent": UA, Accept: accept, "Accept-Language": "en,sw;q=0.8", "Accept-Encoding": "gzip, deflate, br" }
     }, res => {
@@ -52,7 +52,7 @@ function request(url, addr, accept, max = MAX_BYTES) {
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
       res.on("error", reject);
     });
-    req.on("timeout", () => req.destroy(new HttpError(504, "The page did not answer within 12 seconds. Try again later or paste the text.")));
+    req.on("timeout", () => req.destroy(new HttpError(504, timeout === TIMEOUT ? "The page did not answer within 12 seconds. Try again later or paste the text." : `The server did not answer within ${Math.round(timeout / 1000)} seconds.`)));
     req.on("error", e => reject(e instanceof HttpError ? e : new HttpError(502, `The page could not be retrieved (${e.code || e.message}).`)));
     req.end();
   });
@@ -102,6 +102,27 @@ export async function fetchImage(input, { allowPrivate = false, maxBytes = IMAGE
     if (!mime) throw new HttpError(415, "The link did not return a JPEG, PNG, WebP or GIF image.");
     if (b.length < 1024) throw new HttpError(422, "The image is too small to analyse (probably an icon or tracking pixel).");
     return { finalUrl: url.href, mime, raw: b };
+  }
+  throw new HttpError(508, "Too many redirects.");
+}
+
+// A video file at a public address (1.35): MP4, MOV, WebM or AVI, checked by its first bytes; size-limited. Video pages of
+// social platforms are not downloaded (their terms do not allow it): only links that return the video file itself are.
+export const VIDEO_URL = /\.(mp4|m4v|mov|webm|avi)(\?|#|$)/i;
+export async function fetchVideo(input, { allowPrivate = false, maxBytes = 200 * 1048576 } = {}) {
+  let url;
+  try { url = new URL(String(input).trim()); } catch { throw new HttpError(400, "Not a valid video address."); }
+  for (let hop = 0; hop <= 5; hop++) {
+    if (!["http:", "https:"].includes(url.protocol)) throw new HttpError(400, "Only http:// and https:// videos can be retrieved.");
+    if (url.username || url.password) throw new HttpError(400, "Video links containing a user name or password are not retrieved.");
+    const addr = await resolveSafe(url.hostname, allowPrivate);
+    const r = await request(url, addr, "video/mp4,video/quicktime,video/webm,video/x-msvideo;q=0.9,*/*;q=0.1", maxBytes, 120000);
+    if (r.redirect) { url = new URL(r.redirect, url); continue; }
+    if (r.status >= 400) throw new HttpError(502, `The video server answered with HTTP ${r.status}.`);
+    const b = r.body, sig = b.subarray(0, 12).toString("latin1");
+    const kind = sig.slice(4, 8) === "ftyp" ? (/^qt/.test(sig.slice(8, 12)) ? "mov" : "mp4") : b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3 ? "webm" : sig.startsWith("RIFF") && sig.slice(8, 12) === "AVI " ? "avi" : null;
+    if (!kind) throw new HttpError(415, "The link did not return an MP4, MOV, WebM or AVI video file.");
+    return { finalUrl: url.href, ext: kind, raw: b, contentType: String(r.headers["content-type"] || "") };
   }
   throw new HttpError(508, "Too many redirects.");
 }

@@ -56,6 +56,14 @@ if not exist node_modules\pdfkit (
   echo  Components installed.
 )
 
+REM video verification (1.35) needs FFmpeg and FFprobe; an existing installation gets them once (failure does not stop AIVS)
+if not exist node_modules\@ffprobe-installer\ffprobe (
+  echo  Installing the video tools ^(FFmpeg, FFprobe^) for video verification...
+  echo Installing video tools>> "%LOG%"
+  call npm install --omit=dev --no-audit --no-fund >> "%LOG%" 2>&1
+  if errorlevel 1 ( echo  The video tools could not be installed now; AIVS starts without video analysis. & echo RESULT: video tools not installed>> "%LOG%" )
+)
+
 REM if an older copy of AIVS is still running (for example in a minimised window), stop it so the update takes effect
 set AIVSPORT=8080
 if defined PORT set AIVSPORT=%PORT%

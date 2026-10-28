@@ -271,6 +271,22 @@ check("posts can be filtered by account", (await a.$$eval("table.t tbody tr", r 
   check("posts can be added to a dataset; duplicates are skipped and the signal appears", posts3 === "3" && /Synchronised messages\s*1(?!\d)/.test(await a.textContent("#tabBody .kpis")));
   await shot(a, "26-monitor-added");
 }
+// ---- 1.35: reverse video search (SYNTHETIC video; no reverse-search provider configured in this test server)
+{ await a.goto(S.base + "/#/investigate"); await a.waitForSelector("#igo");
+  await a.click("#imore summary"); await a.fill("#itext", "TEST FIXTURE: Video shows the KDF convoy attacked in Lamu this morning.");
+  await a.setInputFiles("#ifile", "test/fixtures/video/recycled-convoy.mp4"); await a.click("#igo");
+  await a.waitForSelector("#invOut:not([hidden])", { timeout: 240000 });
+  const out = await a.textContent("#ires");
+  check("video upload: keyframes extracted and the video verification shown, stating that internet-wide reverse search was not completed", /Video verification/.test(out) && /3 keyframe/.test(out) && /Internet-wide reverse search was not completed/.test(out), out.slice(0, 160));
+  const invId = (await a.evaluate(() => location.hash)).match(/INV-\d+/)[0], cid = await a.evaluate(async id => (await (await fetch(`/api/investigations/${id}`)).json()).result.case_id, invId);
+  await a.goto(S.base + `/#/case/${cid}/media`); await a.waitForSelector("[data-rvs]");
+  check("Reverse video search sits on the video beside Reverse image search on its keyframes", (await a.textContent("[data-rvs]")).trim() === "Reverse video search" && (await a.$$("[data-web]")).length >= 3 && (await a.textContent("[data-web]")).trim() === "Reverse image search");
+  await a.waitForFunction(() => /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 30000 });
+  await a.click("[data-rvs]"); await a.waitForFunction(() => /VC-000002/.test(document.querySelector("[data-rvsbox]")?.textContent || "") && /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 240000 });
+  const box = await a.textContent("[data-rvsbox]");
+  check("Reverse video search runs automatically from the case and shows keyframes, findings, matches and coverage", /Matches, ranked by relevance/.test(box) && /Keyframe extraction and local similarity analysis/.test(box) && /did not establish who first published/.test(box), box.slice(0, 160));
+  await shot(a, "28-reverse-video-search");
+}
 // ---- 1.34: one screenshot, analysed automatically (the analyst only uploads)
 { await a.goto(S.base + "/#/monitor"); await a.waitForSelector("#shotFile");
   check("Social Media Analysis shows the screenshot upload first", (await a.textContent(".shotcard h3")).includes("Upload Screenshot — Automatic AI Analysis"));

@@ -3,6 +3,7 @@
 // compares sources, checks the images, assesses each claim and writes the report. The extracted content is shown as
 // soon as it is available. Text, screenshots and files can still be given when there is no link, or to correct an
 // incomplete extraction. Everything is labelled as an AI-generated preliminary assessment.
+import { videoResultHtml } from "../lib/videoview.js";
 import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
@@ -27,10 +28,11 @@ export async function render(el, params = []) {
         <input id="iv" type="text" inputmode="url" autocomplete="off" maxlength="2000" placeholder="https://example.com/news/article" style="flex:1;min-width:240px;font-size:16px;padding:12px">
         <button class="btn primary" id="igo" style="font-size:16px;padding:12px 20px">Analyse Automatically</button></div>
       <div class="tiny sub" style="margin-top:6px">News sites, blogs, X, YouTube, TikTok, Telegram, Facebook and Instagram. AIVS tries every method it is allowed to use; when a platform restricts access it says so and offers the alternatives.</div>
-      <details id="imore" style="margin-top:12px"><summary class="small">No link? Paste text, or add a screenshot, image, PDF or Word file</summary>
+      <details id="imore" style="margin-top:12px"><summary class="small">No link? Paste text, or add a screenshot, image, video (reverse video search), PDF or Word file</summary>
         <textarea id="itext" rows="4" maxlength="20000" style="margin-top:8px" placeholder="Paste the text of a post, message or report"></textarea>
         <div class="row" style="margin-top:8px;gap:10px;flex-wrap:wrap"><label class="btn ghost sm" for="ifile" style="cursor:pointer">Add files</label>
-          <input id="ifile" type="file" multiple accept="image/*,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="position:absolute;opacity:0;width:1px;height:1px"><span id="ifiles" class="small muted"></span></div>
+          <input id="ifile" type="file" multiple accept="image/*,video/mp4,video/quicktime,video/x-msvideo,video/webm,.mp4,.mov,.avi,.webm,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="position:absolute;opacity:0;width:1px;height:1px"><span id="ifiles" class="small muted"></span></div>
+        <div class="tiny sub" style="margin-top:4px"><b>Reverse video search:</b> add an MP4, MOV or AVI file (or paste a link to the video file). AIVS extracts keyframes, reads on-screen text and speech, searches for earlier copies of the footage and compares them, automatically.</div>
       </details>
       ${App.training ? `<div class="callout train" style="margin-top:12px"><div>You are viewing Training records: this becomes a training investigation, kept apart from real cases.</div></div>` : ""}
       <div id="ierr" class="callout bad" style="margin-top:12px" hidden></div>
@@ -242,6 +244,7 @@ function results(inv) {
     ${aiFindings(r.ai?.content)}
     <h3 style="margin:16px 0 4px">Principal claims and evidence <span class="tiny sub">(at most two; checked automatically)</span></h3>${claims || '<p class="small sub">No claim could be checked.</p>'}
     ${r.other_claims?.length ? `<details class="small" style="margin-top:6px"><summary>Further statements recorded but not prioritised (${r.other_claims.length})</summary><ul style="margin:4px 0 0 18px">${r.other_claims.map(c => `<li>${esc(c.text)}</li>`).join("")}</ul></details>` : ""}
+    ${(r.media?.videos || []).length ? `<h3 style="margin:16px 0 4px">Video verification</h3>${r.media.videos.map(v => `<div class="card"><div class="bd">${videoResultHtml(v)}</div></div>`).join("")}` : ""}
     ${imgs ? `<h3 style="margin:16px 0 4px">Image verification</h3><div class="card"><div class="bd">${imgs}<p class="tiny sub">${esc(r.media.note)}</p></div></div>` : ""}
     <div class="grid g2" style="margin-top:12px;align-items:start">
       <div class="card"><div class="hd"><h3>Evidence sources</h3></div><div class="bd small">${r.search.length ? `<ul style="margin:0 0 0 18px">${r.search.map(s => `<li>${esc(s.label)}: ${s.status === "ok" || s.status === "partial" ? `${s.results} result(s)` : s.status === "not_configured" ? "not configured" : `<span style="color:var(--con)">${esc((s.errors || [])[0] || s.status)}</span>`}</li>`).join("")}</ul>` : "No search was run."}

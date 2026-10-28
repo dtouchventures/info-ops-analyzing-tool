@@ -110,6 +110,30 @@ export function makeTranscriber(db, { config, storage, audit, cases }) {
     const t = db.prepare("SELECT case_id, media_id FROM transcripts WHERE id = ?").get(id);
     audit(null, "Machine transcript stored", "case", t.case_id, { transcript: id, media: t.media_id, segments: (r.segments || []).length, language: r.language, model: `${r.engine} ${r.model}`, unclear: (r.segments || []).filter(s => s.unclear).length });
   }
+  // 1.35 (video verification): transcribe a file directly (a video being verified, before it is stored with a case), waiting at most
+  // timeoutMs; the copy sent is deleted by the service after transcribing. Returns the service's result (segments with times).
+  async function transcribeFile(file, name, { language = "auto", timeoutMs = 300000 } = {}) {
+    const cf = configured(); if (!cf.ok) throw new Error(cf.reason);
+    const fd = new FormData(); fd.append("file", await fs.openAsBlob(file), name); fd.append("language", LANGS[language] ? language : "auto");
+    const j = await call("POST", "/v1/jobs", fd, Math.max(60000, Math.min(timeoutMs, T.timeoutMs))), t0 = Date.now();
+    try {
+      for (;;) {
+        const s = await call("GET", `/v1/jobs/${j.id}`);
+        if (s.status === "failed") throw new Error(`The transcription service could not transcribe this recording: ${s.error}`);
+        if (s.status === "done") return s.result;
+        if (Date.now() - t0 > timeoutMs) throw new Error(`The transcription did not finish within ${Math.round(timeoutMs / 1000)} s.`);
+        await new Promise(r => setTimeout(r, T.pollMs));
+      }
+    } finally { call("DELETE", `/v1/jobs/${j.id}`).catch(() => {}); }
+  }
+  // keep a result obtained with transcribeFile as the recording's transcript (machine-generated, corrections kept as usual)
+  function storeResult(user, mediaId, result, { language = "auto" } = {}) {
+    const m = db.prepare("SELECT * FROM media WHERE id = ?").get(mediaId); if (!m?.case_id) throw new HttpError(404, "Recording not found.");
+    const id = nextId(db, "transcript", n => `T-${String(n).padStart(6, "0")}`);
+    db.prepare("INSERT INTO transcripts(id,media_id,case_id,status,language_requested,media_sha256,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)").run(id, m.id, m.case_id, "running", LANGS[language] ? language : "auto", m.sha256, user?.id ?? null, nowISO());
+    save(id, result);
+    return id;
+  }
   // after a restart, keep following jobs that were in progress
   function resume() { for (const t of db.prepare("SELECT t.id AS tid, m.* FROM transcripts t JOIN media m ON m.id = t.media_id WHERE t.status IN ('queued','running')").all()) run(t.tid, t).catch(() => {}); }
 
@@ -159,5 +183,5 @@ export function makeTranscriber(db, { config, storage, audit, cases }) {
     audit(user, `Transcript ${t.id} segments added as evidence ${eid}`, "case", t.case_id, { segments: segs.map(s => s.seq), from, to });
     return eid;
   }
-  return { status, checkHealth, start, resume, get, list, edit, history, exportAs, toEvidence, label };
+  return { status, configured, transcribeFile, storeResult, checkHealth, start, resume, get, list, edit, history, exportAs, toEvidence, label };
 }
