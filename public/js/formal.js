@@ -5,7 +5,7 @@
 import { api } from "./api.js";
 import { $, esc, toast, fail, confirmBox, fmtDT } from "./ui.js";
 
-const FIELDS = [["purpose", "1. Purpose", 3], ["background", "2. Background", 4], ["analysis", "3. Analysis", 8], ["assessment", "4. Assessment", 4]];
+const FIELDS = [["purpose", "1. Purpose", 3], ["background", "2. Background", 4], ["analysis", "3. Analysis", 8], ["assessment", "5. Assessment", 4]];
 
 export async function formalPanel(box, kind, id) {
   const base = `/api/formal/${kind}/${encodeURIComponent(id)}`;
@@ -21,9 +21,9 @@ export async function formalPanel(box, kind, id) {
         <div class="hint">Military date-time group, printed at the top right: day, hour and minute, time zone letter (Z = UTC, C = East Africa Time), month, year.</div>
         <label class="f" for="fr_subject">Subject <span class="req">*</span></label><input type="text" id="fr_subject" maxlength="200" value="${esc(c.subject)}" ${ed ? "" : "disabled"}>
         ${FIELDS.map(([k, l, rows]) => `<label class="f" for="fr_${k}">${l} <span class="req">*</span></label><textarea id="fr_${k}" rows="${rows}" ${ed ? "" : "disabled"}>${esc(c[k])}</textarea>`).join("")}
-        <label class="f" for="fr_recs">5. Recommendations <span class="req">*</span></label><textarea id="fr_recs" rows="5" ${ed ? "" : "disabled"}>${esc(c.recommendations.join("\n"))}</textarea>
+        <label class="f" for="fr_recs">6. Recommendations <span class="req">*</span></label><textarea id="fr_recs" rows="5" ${ed ? "" : "disabled"}>${esc(c.recommendations.join("\n"))}</textarea>
         <div class="hint">One recommendation per line. They are lettered (a), (b), (c) when printed.</div>
-        <label class="f" for="fr_conclusion">6. Conclusion <span class="req">*</span></label><textarea id="fr_conclusion" rows="3" ${ed ? "" : "disabled"}>${esc(c.conclusion)}</textarea>
+        <label class="f" for="fr_conclusion">7. Conclusion <span class="req">*</span></label><textarea id="fr_conclusion" rows="3" ${ed ? "" : "disabled"}>${esc(c.conclusion)}</textarea>
         <div class="fgrid" style="margin-top:4px"><div><label class="f" for="fr_rank">Rank</label><input type="text" id="fr_rank" maxlength="120" value="${esc(c.preparer.rank)}" ${ed ? "" : "disabled"}></div>
           <div><label class="f" for="fr_name">Name</label><input type="text" id="fr_name" maxlength="120" value="${esc(c.preparer.name)}" ${ed ? "" : "disabled"}></div>
           <div><label class="f" for="fr_appt">Appointment</label><input type="text" id="fr_appt" maxlength="120" value="${esc(c.preparer.appointment)}" ${ed ? "" : "disabled"}></div></div>

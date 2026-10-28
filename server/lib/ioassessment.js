@@ -1,3 +1,4 @@
+import { fit as serviceFit, html as serviceHtml, pdf as servicePdf, docx as serviceDocx } from "./formal-print.js";
 // AIVS — KDF Information Operations Assessment (1.25; four-section format and HOD approval 1.32): a one-page product.
 // Built automatically from a completed investigation: exactly four sections (Executive Summary / Background Information,
 // Analysis of at most two principal claims with their evidence, a KDF Information Operations Assessment, and 3–5
@@ -120,14 +121,14 @@ export function buildAssessment(r, { priority = null } = {}) {
 
   // 1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION (40–80 words)
   const shot = x.input_type === "screenshot";
-  const who = [x.author && `attributed to ${x.author}${shot ? " (as shown)" : ""}`, x.platform && `on ${x.platform}${shot ? " (apparent)" : ""}`].filter(Boolean).join(" ");
+  const who = !main && kind === "image" ? "" : [x.author && `attributed to ${x.author}${shot ? " (as shown)" : ""}`, x.platform && `on ${x.platform}${shot ? " (apparent)" : ""}`].filter(Boolean).join(" ");
   const bg = [
     main ? `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} asserts that ${lc(short(main.text.replace(/[.!]+$/, ""), 28))}${P[1] ? `, and that ${lc(short(P[1].c.text.replace(/[.!]+$/, ""), 18))}` : ""}.` : `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} was submitted, but no checkable claim could be identified.`,
     x.provenance ? (x.provenance.continues ? `${x.provenance.platform || "The platform"} did not allow automatic extraction; the content was supplied by an analyst.` : "The content was captured by an analyst from their own browser view.") : null,
     // 1.34: a screenshot is a copy of a post, not proof of it; whether the original was retrieved is always stated
     shot ? `The screenshot was submitted by an analyst; ${x.screenshot?.original?.retrieved ? "the original post was retrieved from the visible link" : "the original post was not independently retrieved"}, so its authenticity is not established.` : null,
     pub ? `It was published on ${pub} and received by AIVS on ${recv}.` : `Its publication date could not be established; AIVS received it on ${recv}.`,
-    `It is significant to KDF because it ${kdf ? "concerns the Kenya Defence Forces or their activities" : topic ? `concerns ${topic}` : "makes a public claim"} and could shape public understanding if repeated.`,
+    main ? `It is significant to KDF because it ${kdf ? "concerns the Kenya Defence Forces or their activities" : topic ? `concerns ${topic}` : "makes a public claim"} and could shape public understanding if repeated.` : "The image alone does not establish a factual claim; its source and context require corroboration.",
     ["restricted", "failed"].includes(x.access) && !x.provenance ? "The original content could not be fully retrieved." : null];
   let background = fit(bg, LIMITS.background[1]);
 
@@ -147,7 +148,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   }
   if (r.other_claims?.length) an.push(`${plural(r.other_claims.length, "further statement")} in the content ${r.other_claims.length === 1 ? "was" : "were"} recorded but not prioritised.`);
   if (cues.length) an.push(`Warning signs in the text: ${cues.slice(0, 2).map(i => lc(short(firstSentence(i.indicator), 10)).replace(/…$/, "")).join("; ")}.`);
-  an.push(x.author || pub ? `The source is partly traceable (${[x.author ? "author named" : "author unknown", pub ? "date stated" : "date unknown"].join(", ")}).` : "The original source is not traceable: no author or publication date was established.");
+  an.push(!main && kind === "image" ? "The image source and publication date have not been independently established." : x.author || pub ? `The source is partly traceable (${[x.author ? "author named" : "author unknown", pub ? "date stated" : "date unknown"].join(", ")}).` : "The original source is not traceable: no author or publication date was established.");
   let analysis = fit(an, LIMITS.analysis[1]);
 
   // 3. ASSESSMENT (70–130 words): KDF Information Operations judgement, classification, implications, confidence and limitation
@@ -181,6 +182,12 @@ export function buildAssessment(r, { priority = null } = {}) {
   rec.push(`${REC_PREFIX} monitor related public narratives${r.hashtags?.length ? ` (${r.hashtags.slice(0, 2).join(" ")})` : ""} through the JICHO AI watchlist and report observed changes in circulation without presuming coordination.`);
   if (o.verdict !== "supported") rec.push(`${REC_PREFIX} strengthen transparent institutional communication on the subject so that accurate information is readily available to the public.`);
   rec.push(`${REC_PREFIX} preserve the evidence collected and escalate significant concerns for authorised review.`);
+  if (!main && kind === "image") {
+    rec.length = 0;
+    rec.push(`${REC_PREFIX} monitor publicly available reuse of the image and record changes in captions, timing and circulation.`);
+    rec.push(`${REC_PREFIX} prepare a source-and-context brief for authorised review, identifying the evidence gaps before any public clarification.`);
+    rec.push(`${REC_PREFIX} preserve the submitted image and submit new contextual evidence for reassessment without presuming authenticity or hostile intent.`);
+  }
   let recommendations = [...new Set(rec)].slice(0, 5);
   while (recommendations.length < 3) recommendations.push(`${REC_PREFIX} keep the subject under review as new information becomes available.`);
   while (words(recommendations.join(" ")) > LIMITS.recommendations[1] && recommendations.length > 3) recommendations.splice(recommendations.length - 2, 1);
@@ -256,7 +263,7 @@ p{margin:2px 0;text-align:justify}ol{margin:2px 0 0 17px;padding:0}li{margin:1px
 @media print{a{color:inherit;text-decoration:none}.v{background:none}}`;
 const refLine = f => `[${f.n}] ${f.publisher}, “${f.title}”${f.date ? `, ${f.date}` : ""} — ${f.addresses}${f.read ? " (full text read)" : ""}.`;
 const approvalLine = ap => `Approved by ${ap.name}${ap.designation ? `, ${ap.designation}` : ""}, on ${ap.at_text} · Approval reference ${ap.ref} · Status: APPROVED · Verification code ${ap.code}${ap.verify_path ? ` (verify at ${ap.verify_path})` : ""}`;
-export function assessmentHtml(a, { standalone = true } = {}) {
+function legacyAssessmentHtml(a, { standalone = true } = {}) {
   const h = a.header, approved = !!a.approval;
   const body = `<div class="page"><div class="t">${esc(a.title)}<span class="st">${approved ? "APPROVED" : "DRAFT"}</span></div>
   ${approved ? "" : '<div class="draft">DRAFT — NOT APPROVED</div>'}
@@ -273,7 +280,7 @@ export function assessmentHtml(a, { standalone = true } = {}) {
 
 // ---------------------------------------------------------------- one-page PDF (pdfkit); the text is shrunk, never cut, to fit one A4 page
 const pdfSafe = s => String(s ?? "").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/·/g, "|").replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff]/gu, "?");
-export async function assessmentPdf(a) {
+async function legacyAssessmentPdf(a) {
   const { default: PDFDocument } = await import("pdfkit");
   const approved = !!a.approval;
   const render = size => new Promise((resolve, reject) => {
@@ -326,3 +333,27 @@ export function assessmentDocxXml(a) {
     a.approval ? para(run(`APPROVED BY HEAD OF DEPARTMENT — ${approvalLine(a.approval)}`, { b: true, color: "05603A", size: 15 }), { jc: "left" }) : para(run("Not approved for release: Head of Department approval is required.", { size: 15, color: "374151" }))].join("");
   return `<w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="640" w:right="700" w:bottom="640" w:left="700" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body>`;
 }
+
+// The service-writing template is shared by the main report preview and both downloads.
+export function serviceWritingReport(a) {
+  const date = String(a.header?.date || "").match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2})(\d{2})/);
+  const stamp = date ? `${date[1].padStart(2,"0")}${date[4]}${date[5]}C ${date[2].toUpperCase()} ${date[3].slice(-2)}` : "DATE NOT RECORDED";
+  const refs = (a.references || []).map(f => `[${f.n}] ${f.publisher || "Source"}: ${f.title}${f.date ? ` (${f.date})` : ""}.`).join(" ");
+  const status = a.approval ? `APPROVED BY HEAD OF DEPARTMENT. ${approvalLine(a.approval)}.` : `${a.header.status || "DRAFT — NOT APPROVED"}. Submit the assessment and proposed tasks for authorised review before release.`;
+  return { date: stamp, subject: /^Image submitted for visual verification/i.test(a.header.subject || "") ? "Visual verification of a submitted image" : a.header.subject,
+    purpose: `To assess the submitted information against available evidence and recommend information operations tasks. Reference: ${a.header.reference}.`,
+    background: a.background,
+    analysis: `${a.analysis}${refs ? ` Evidence references: ${refs}` : ""}`,
+    assessment: `${a.assessment}${a.limitation ? ` Limitation: ${a.limitation}` : ""}`,
+    recommendations: (a.recommendations || []).map(t => t.replace(/^There is a need to\s+/i, "").replace(/^./, x => x.toUpperCase())),
+    conclusion: `${a.verdict_label ? `Overall finding: ${a.verdict_label}. ` : ""}${status}`,
+    preparer: a.preparer || { rank: "", name: "", appointment: "" } };
+}
+function serviceLayout(a) {
+  const report = serviceWritingReport(a), layout = serviceFit(report);
+  if (!layout.fits) throw new Error("The report exceeds one A4 page. Shorten the editable assessment before printing.");
+  return { report, layout };
+}
+export function assessmentHtml(a) { const report=serviceWritingReport(a), layout=serviceFit(report); return serviceHtml(report,layout,{fits:layout.fits}); }
+export async function assessmentPdf(a) { const {report,layout}=serviceLayout(a); return {buf:await servicePdf(report,layout),pages:1}; }
+export function assessmentDocx(a) { const {report,layout}=serviceLayout(a); return serviceDocx(report,layout); }

@@ -21,7 +21,7 @@ import { HttpError, can } from "./auth.js";
 import { parseSourceLink, suggestSource, parsePostScreenshot, extractEntities, extractHashtags, redFlags, injectionFlags } from "../../shared/text.js";
 import { compare, topFor, assessClaim, overall, ioIndicators, checkSections, AUTO_VERDICTS, STRENGTH as STRENGTH_LABEL } from "./autoeval.js";
 import { writeSections, limitations, toHtml, toPdf, toDocx, docxFromBody } from "./autoreport.js";
-import { keepVideoNote, buildAssessment, checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, applyApproval, validRecommendation, LIMITS, words as wordCount } from "./ioassessment.js";
+import { keepVideoNote, buildAssessment, checkAiSections, aiPrompt, assessmentHtml, assessmentPdf, assessmentDocxXml, assessmentDocx, applyApproval, validRecommendation, LIMITS, words as wordCount } from "./ioassessment.js";
 import { providers } from "../ai/providers.js";
 import { fetchImage, fetchVideo, VIDEO_URL } from "./fetchurl.js";
 import { sniff } from "./sniff.js";
@@ -367,10 +367,17 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           const post = parsePostScreenshot(o.text, {}), body = (post.text || o.text).trim();
           // OCR of a photograph without writing gives noise: only text that reads as words is used
           const toks = body.split(/\s+/).filter(Boolean), wordy = toks.length ? toks.filter(t => /^[\p{L}][\p{L}'’-]{1,}[.,:;!?)]*$/u.test(t) && /[aeiouy]/i.test(t)).length / toks.length : 0;
-          if (body.replace(/\s/g, "").length >= 15 && (wordy >= 0.6 || (!P && o.confidence >= 70))) { parts.push(body); src.method.push(`text read from ${f.name} by OCR (Tesseract, English and Kiswahili)`); }
-          else if (body.replace(/\s/g, "").length >= 15) src.notes.push(`${f.name}: the image contains little readable writing (OCR confidence ${o.confidence} of 100), so its OCR text was not analysed.`);
-          else src.notes.push(`${f.name}: no readable text was found in the image.`);
-          if (o.confidence < 70 && body) src.notes.push(`${f.name}: OCR confidence is low (${o.confidence} of 100); check the text against the image.`);
+          if (o.confidence >= 70 && body.replace(/\s/g, "").length >= 15 && (wordy >= 0.6 || !P)) { parts.push(body); src.method.push(`text read from ${f.name} by OCR (Tesseract, English and Kiswahili)`); }
+          else {
+            try { f.visual = await mediacheck.recoverImage(f.path); }
+            catch (e) { src.notes.push(`${f.name}: automatic visual reading could not finish; archive and metadata checks continue.`); }
+            const recovered = String(f.visual?.visible_text || "").trim();
+            if (recovered.replace(/\s/g, "").length >= 15) {
+              parts.push(recovered);
+              src.method.push(`AI-assisted image transcription from ${f.name} (${f.visual.model}, unverified)`);
+              src.notes.push(`${f.name}: weak OCR was followed by automatic visual reading. AI-transcribed words remain unverified and are checked against evidence.`);
+            } else src.notes.push(`${f.name}: no reliable written claim was recovered. ${f.visual ? "Automatic visual analysis was completed;" : "A vision-capable model is not available for automatic text recovery;"} visual matching and metadata checks continue.`);
+          }
           if (post.platform && !src.platform) src.platform = post.platform;
           if (post.account && !src.account) Object.assign(src, { account: post.account, author: src.author || post.account, author_basis: src.author_basis || post.account_basis });
           if (post.posted_at && !src.published_at) Object.assign(src, { published_at: new Date(post.posted_at).toISOString(), published_basis: post.time_basis });
@@ -442,7 +449,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
 
     // create the case (only when there is content to investigate)
     check();
-    let caseId = inv.case_id || null; const linkByMedia = {};
+    let caseId = inv.case_id || null; const linkByMedia = {}, recoveredVision = {};
     if (content && !caseId) {
       const sg = suggestSource({ text: content, url: input.url || undefined });
       caseId = cases.create(user, { title: String(src.title || "").slice(0, 200) || undefined, claim_text: content, received_at: inv.created_at, priority: "routine", is_training: training,
@@ -457,7 +464,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       for (const f of input.files) {
         if (!fs.existsSync(f.path)) continue;
         try {
-          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.temp) safeRm(f.path);
+          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.visual) recoveredVision[m.id] = f.visual; if (f.temp) safeRm(f.path);
           if (f.link) { linkByMedia[m.id] = { url: f.link.url, source: "video file from the submitted link" }; audit(user, "Video retrieved from the link and kept with the case", "case", caseId, { media: m.id, url: f.link.url, final_url: f.link.final_url, sha256: m.sha256 }); }
           if (f.video && m.kind === "video") { try { f.videoAnalysis = await videoCheck.persist(user, { caseId, mediaId: m.id, extracted: f.video, investigationId: id, contextText: input.text || null }); } catch (e) { src.notes.push(`${f.name}: the keyframes could not be kept (${e.message}).`); } }
           const o = ocrs.find(x => x.file === f); if (o?.text && m.kind === "image") cases.addOcr(user, m.id, { text: o.text, lang: "eng+swa", confidence: o.confidence, engine: "tesseract.js (server, automatic investigation)" });
@@ -559,7 +566,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     check(); setStage(id, "media", "running");
     let mediaRes = { images: [], reuse: [], services: mediacheck.status(), note: "No image was available for this investigation." };
     let mediaFailed = false;
-    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, geminiPublicImages: input.gemini_public_images === true, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
+    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, recoveredVision, geminiPublicImages: input.gemini_public_images === true, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
     // video verification (1.35): local similarity, reverse search of keyframes, earlier versions, findings; verified recycled footage
     // counts as reuse in the overall verdict, possible similarities do not
     mediaRes.videos = [];
@@ -916,6 +923,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const fresh = buildAssessment(res, { priority: res.priority || (r.case_id ? db.prepare("SELECT priority FROM cases WHERE id = ?").get(r.case_id)?.priority : null) });
     const saved = res.io_assessment;
     const a = saved && (saved.written_by === "ai" || saved.written_by === "analyst" || saved.frozen) && saved.background ? { ...fresh, background: saved.background, analysis: saved.analysis, assessment: saved.assessment, recommendations: saved.recommendations, written_by: saved.written_by || fresh.written_by } : fresh;
+    const preparer = db.prepare("SELECT rank, display_name, appointment FROM users WHERE id=?").get(r.created_by);
+    a.preparer = {rank:preparer?.rank || "",name:preparer?.display_name || "",appointment:preparer?.appointment || ""};
     if (raw || !approvals) return a;
     const ap = approvals.info("investigation", r.id, a), reviewed = res.review?.status === "reviewed" ? `reviewed by ${res.review.by}` : null;
     return applyApproval(a, ap.approved ? ap : { ...ap, label: [ap.label, reviewed].filter(Boolean).join("; ") });
@@ -929,7 +938,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       if (fmt === "pdf") { const fin = a.approval && approvals?.finalPdf("investigation", r.id, assessmentOf(res, r, { raw: true }));
         if (fin) return { body: fin, type: "application/pdf", name: `${r.report_id}-approved.pdf`, approved: true };
         const p = await assessmentPdf(a); return { body: p.buf, type: "application/pdf", name: `${r.report_id}-draft.pdf`, pages: p.pages }; }
-      if (fmt === "docx") return { body: docxFromBody(assessmentDocxXml(a)), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}-assessment.docx` };
+      if (fmt === "docx") return { body: assessmentDocx(a), type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `${r.report_id}-assessment.docx` };
       if (fmt === "json") return { body: JSON.stringify(a, null, 2), type: "application/json", name: `${r.report_id}-assessment.json` };
     }
     const r = row(id); if (!r) throw new HttpError(404, "No such investigation.");

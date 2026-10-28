@@ -1,3 +1,4 @@
+import { serviceWritingReport as serviceReport, buildAssessment as serviceAssessment } from "./lib/ioassessment.js";
 import { makeFormalReports, fromCase as formalFromCase, fromDataset as formalFromDataset, normalise as formalNormalise, check as formalCheck, tooLong as formalTooLong } from "./lib/formal-report.js";
 import { docx as formalDocx, pdf as formalPdf, html as formalHtml } from "./lib/formal-print.js";
 import { makeCaseTasks } from "./lib/case-tasks.js";
@@ -1372,9 +1373,16 @@ export function createApp(config) {
   // and printing are refused until every required field is filled and the text is measured to fit one A4 page.
   const formal = makeFormalReports(db, { audit });
   // "Prepared by" is left blank in the draft (completed by hand on the printed copy); the author may type it in
-  const preparerOf = () => ({ rank: "", name: "", appointment: "" });
+  const preparerOf = user => { const p = db.prepare("SELECT rank, display_name, appointment FROM users WHERE id=?").get(user.id); return { rank: p?.rank || "", name: p?.display_name || "", appointment: p?.appointment || "" }; };
   function formalSource(req) {
     const { kind, id } = req.params;
+    if (kind === "investigation") {
+      const inv = investigations.get(id, req.user);
+      if (inv.case_id && !can(req.user,"case.read")) throw new HttpError(403,"You cannot read investigations.");
+      else if (inv.created_by !== req.user.id && !can(req.user,"case.approve")) throw new HttpError(403,"You cannot read this investigation.");
+      if (!inv.result || inv.status !== "done") throw new HttpError(409,"Wait for the investigation to complete.");
+      return { kind, id, title: inv.subject || inv.report_id, canEdit: can(req.user,"case.create") && (inv.created_by === req.user.id || can(req.user,"case.approve")), draft: () => ({...serviceReport(serviceAssessment(inv.result)),preparer:preparerOf(req.user)}) };
+    }
     if (kind === "case") {
       const c = cases.mustCase(id);
       return { kind, id: c.id, title: c.title, canEdit: cases.canEditCase(req.user, c) || can(req.user, "case.approve"), draft: () => formalFromCase(reports.render(c.id).data, preparerOf(req.user)) };
@@ -1386,8 +1394,8 @@ export function createApp(config) {
     throw new HttpError(404, "Unknown report source.");
   }
   const formalView = (src, row) => { const content = row?.content || null; return { source: { kind: src.kind, id: src.id, title: src.title }, can_edit: src.canEdit, saved: !!row, revision: row?.revision || 0, updated_at: row?.updated_at || null, content, ...(content ? formalCheck(content) : { problems: [], layout: null, ready: false }) }; };
-  api.get("/formal/:kind(case|dataset)/:id", h((req, res) => { const src = formalSource(req); res.json(formalView(src, formal.get(src.kind, src.id))); }));
-  api.post("/formal/:kind(case|dataset)/:id/generate", h((req, res) => {
+  api.get("/formal/:kind(case|dataset|investigation)/:id", h((req, res) => { const src = formalSource(req); res.json(formalView(src, formal.get(src.kind, src.id))); }));
+  api.post("/formal/:kind(case|dataset|investigation)/:id/generate", h((req, res) => {
     const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot prepare the report for this record.");
     const cur = formal.get(src.kind, src.id), d = src.draft();
     // regenerating keeps what the author already typed for the subject and the "Prepared by" details, unless asked to replace everything
@@ -1395,7 +1403,7 @@ export function createApp(config) {
     const row = formal.save(req.user, src.kind, src.id, formalNormalise({ ...d, ...keep }, d), "Formal report generated from the records");
     res.status(201).json(formalView(src, row));
   }));
-  api.put("/formal/:kind(case|dataset)/:id", h((req, res) => {
+  api.put("/formal/:kind(case|dataset|investigation)/:id", h((req, res) => {
     const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot edit the report for this record.");
     const cur = formal.get(src.kind, src.id); if (!cur) throw new HttpError(409, "Generate the report first.");
     if (req.body?.revision != null && Number(req.body.revision) !== cur.revision) throw new HttpError(409, "Someone else saved this report since you opened it. Reload it, then make your changes again.");
@@ -1403,7 +1411,7 @@ export function createApp(config) {
     const row = formal.save(req.user, src.kind, src.id, formalNormalise(req.body?.content || {}, cur.content), "Formal report edited");
     res.json(formalView(src, row));
   }));
-  api.get("/formal/:kind(case|dataset)/:id/report.:fmt(docx|pdf|html)", h(async (req, res) => {
+  api.get("/formal/:kind(case|dataset|investigation)/:id/report.:fmt(docx|pdf|html)", h(async (req, res) => {
     const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
     const { problems, layout, ready } = formalCheck(row.content), fmt = req.params.fmt, name = `AIVS-${src.kind}-${String(src.id).replace(/[^\w-]/g, "")}-formal-report`;
     if (fmt === "html") { res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'"); res.setHeader("X-Frame-Options", "SAMEORIGIN"); return res.type("html").send(formalHtml(row.content, layout, { problems, fits: layout.fits })); }
@@ -1414,7 +1422,7 @@ export function createApp(config) {
     res.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document").send(formalDocx(row.content, layout));
   }));
   // print: recorded in the audit log when the author presses Print Report (the browser does the printing)
-  api.post("/formal/:kind(case|dataset)/:id/printed", h((req, res) => {
+  api.post("/formal/:kind(case|dataset|investigation)/:id/printed", h((req, res) => {
     const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
     const { ready } = formalCheck(row.content); if (!ready) throw new HttpError(409, "The report is not ready to print.");
     audit(req.user, "Formal report printed", src.kind === "case" ? "case" : "io_dataset", String(src.id), { revision: row.revision }); res.json({ ok: true });

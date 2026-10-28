@@ -68,9 +68,9 @@ test("KDF recruitment case: at most two principal claims, automatic evidence wit
   assert.match(a.assessment, /misinformation/); assert.match(a.assessment, /KDF/); assert.doesNotMatch(a.assessment, /\bis disinformation\b|hostile|coordinated campaign/i);
   assert.ok(a.recommendations.length >= 3 && a.recommendations.length <= 5 && a.recommendations.every(x => x.startsWith("There is a need to ")));
   assert.ok(a.claims.length <= 2 && a.claims[0].contradicting.length, "the claim's contradicting evidence is cited");
-  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.equal((html.match(/<h2>/g) || []).length, 4); assert.match(html, /DRAFT — NOT APPROVED/); assert.doesNotMatch(html, /APPROVED BY HEAD OF DEPARTMENT/);
-  const p = await pdfText(ana, `/api/investigations/${inv.id}/report.pdf`); assert.equal(p.pages, 1, "one A4 page"); assert.match(p.text, /DRAFT - NOT APPROVED/);
-  for (const h of ["EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "ANALYSIS", "ASSESSMENT", "RECOMMENDATIONS"]) assert.ok(p.text.includes(h), h);
+  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; for (const h of ["1. PURPOSE","2. BACKGROUND","3. ANALYSIS","5. ASSESSMENT","6. RECOMMENDATIONS","7. CONCLUSION"]) assert.ok(html.includes(h)); assert.match(html, /DRAFT — NOT APPROVED/); assert.doesNotMatch(html, /APPROVED BY HEAD OF DEPARTMENT/);
+  const p = await pdfText(ana, `/api/investigations/${inv.id}/report.pdf`); assert.equal(p.pages, 1, "one A4 page"); assert.match(p.text, /DRAFT [-—] NOT APPROVED/);
+  for (const h of ["PURPOSE", "BACKGROUND", "ANALYSIS", "ASSESSMENT", "RECOMMENDATIONS", "CONCLUSION"]) assert.ok(p.text.includes(h), h);
   assert.ok(!/KEY REFERENCES|LIMITATIONS|REPORT STATUS|METHODOLOGY/.test(p.text), "no extra body sections");
 });
 
@@ -141,7 +141,7 @@ test("HOD approval: permissions, return for revision, revision rules, approval, 
   const html = (await ana.get(`/api/investigations/${invId}/report.html`)).body; assert.match(html, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(html, /Head of Department, Information Operations/); assert.doesNotMatch(html, /DRAFT — NOT APPROVED/);
   const p1 = await pdfText(ana, `/api/investigations/${invId}/report.pdf`), p2 = await pdfText(rev, `/api/investigations/${invId}/report.pdf`);
   assert.equal(p1.pages, 1); assert.ok(p1.buf.equals(p2.buf), "the stored approved PDF is served unchanged");
-  assert.match(p1.text, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(p1.text, /Approved by HOD, Head of Department, Information Operations/); assert.match(p1.text, new RegExp(ap.body.approval_ref)); assert.doesNotMatch(p1.text, /DRAFT - NOT APPROVED/);
+  assert.match(p1.text, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(p1.text, /Approved by HOD, Head of Department, Information Operations/); assert.match(p1.text, new RegExp(ap.body.approval_ref)); assert.doesNotMatch(p1.text, /DRAFT [-—] NOT APPROVED/);
   const code = /Verification code ([0-9A-F-]{19})/.exec(p1.text)?.[1]; assert.ok(code, p1.text.slice(-400));
   const v = (await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=${code}`).then(r => r.json())); assert.equal(v.valid, true); assert.equal(v.approved_by, "HOD"); assert.equal(v.analysis, undefined, "no report content is exposed");
   assert.equal((await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=0000-0000-0000-0000`).then(r => r.json())).valid, false);
@@ -149,7 +149,7 @@ test("HOD approval: permissions, return for revision, revision rules, approval, 
   // a material change after approval invalidates it
   const edit = await ana.put(`/api/investigations/${invId}/assessment`, { assessment: `${cur.assessment} The post remains in circulation.` }); assert.equal(edit.status, 200); assert.equal(edit.body.status, "draft");
   assert.match((await ana.get(`/api/investigations/${invId}/report.html`)).body, /DRAFT — NOT APPROVED/);
-  assert.match((await pdfText(ana, `/api/investigations/${invId}/report.pdf`)).text, /DRAFT - NOT APPROVED/);
+  assert.match((await pdfText(ana, `/api/investigations/${invId}/report.pdf`)).text, /DRAFT [-—] NOT APPROVED/);
   assert.equal((await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=${code}`).then(r => r.json())).valid, false, "the old approval no longer verifies");
   // the record: events, versions, audit and an intact hash chain
   const st = (await ana.get(`/api/investigations/${invId}/approval`)).body;

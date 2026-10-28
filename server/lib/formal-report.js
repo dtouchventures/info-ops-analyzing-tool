@@ -12,7 +12,7 @@ export const dtg = (d = new Date()) => `${String(d.getUTCDate()).padStart(2, "0"
 export const DTG_RE = /^\d{6}[A-IK-Z] (JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC) \d{2}$/;
 export const LIMITS = { date: 40, subject: 200, section: 6000, recommendation: 600, recommendations: 12, preparer: 120 };
 const SECTION_KEYS = ["purpose", "background", "analysis", "assessment", "conclusion"];
-const LABELS = { date: "Date-time group", subject: "Subject", purpose: "1. Purpose", background: "2. Background", analysis: "3. Analysis", assessment: "4. Assessment", recommendations: "5. Recommendations", conclusion: "6. Conclusion", rank: "Rank", name: "Name", appointment: "Appointment" };
+const LABELS = { date: "Date-time group", subject: "Subject", purpose: "1. Purpose", background: "2. Background", analysis: "3. Analysis", assessment: "5. Assessment", recommendations: "6. Recommendations", conclusion: "7. Conclusion", rank: "Rank", name: "Name", appointment: "Appointment" };
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const day = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? `${String(d.getUTCDate()).padStart(2, "0")} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}` : null; };
 const clip = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? `${s.slice(0, n - 1).replace(/\s+\S*$/, "")}…` : s; };

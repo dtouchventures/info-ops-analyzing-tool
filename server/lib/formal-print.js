@@ -16,8 +16,8 @@ const CM = 28.3465;                                     // points per centimetre
 const LINE = 1.15;                                      // line height as a multiple of the font size
 const SAFETY = 0.97;                                    // use at most 97% of the usable height (rounding in Word)
 export const UNIT_LINE = "UNIT: STRATEGIC COMMUNICATION";
-export const CLASSIFICATION = "";
-export const SECTIONS = [["purpose", "1. PURPOSE"], ["background", "2. BACKGROUND"], ["analysis", "3. ANALYSIS"], ["assessment", "4. ASSESSMENT"], ["recommendations", "5. RECOMMENDATIONS"], ["conclusion", "6. CONCLUSION"]];
+export const CLASSIFICATION = "RESTRICTED";
+export const SECTIONS = [["purpose", "1. PURPOSE"], ["background", "2. BACKGROUND"], ["analysis", "3. ANALYSIS"], ["assessment", "5. ASSESSMENT"], ["recommendations", "6. RECOMMENDATIONS"], ["conclusion", "7. CONCLUSION"]];
 // tried in this order; the first that fits is used
 const STEPS = [];
 for (const m of [1.5, 1.27, 1.0]) for (const size of [10, 9.5, 9]) for (const gap of [4, 3, 2, 1]) STEPS.push({ marginCm: m, size, gap });

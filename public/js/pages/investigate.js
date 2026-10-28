@@ -1,3 +1,4 @@
+import { formalPanel } from "../formal.js";
 // Verify Information (1.24): paste a link, press Analyse Automatically. AIVS extracts the post or article (text,
 // headline, images, author, date, hashtags, engagement, video details), detects the claims, searches for evidence,
 // compares sources, checks the images, assesses each claim and writes the report. The extracted content is shown as
@@ -6,7 +7,7 @@
 import { videoResultHtml } from "../lib/videoview.js";
 import { api, newTaskKey } from "../api.js";
 import { App, crumbs } from "../app.js";
-import { $, esc, errMsg, kb } from "../ui.js";
+import { $, esc, errMsg, kb, fail } from "../ui.js";
 
 // the automated workflow (1.33): each stage runs by itself; the list a saved investigation recorded is shown as it was
 const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (maximum two per case)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
@@ -48,7 +49,7 @@ export async function render(el, params = []) {
       <div id="ires"></div>
       <div id="invOut" hidden>
         <div class="row" style="margin:12px 0 8px;flex-wrap:wrap;gap:8px" id="iacts"></div>
-        <div id="iappr"></div>
+        <div id="iappr"></div><div id="formalInvestigation" style="margin:12px 0"></div>
         <div class="card"><div class="hd"><h3>Information Operations Assessment</h3><span class="small muted">One-page assessment · full evidence in Supporting evidence</span></div><div class="bd" style="padding:0">
           <iframe id="irep" title="Information Operations Assessment" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" style="width:100%;height:78vh;min-height:520px;border:0;border-radius:0 0 10px 10px;background:#fff"></iframe></div></div>
       </div>
@@ -289,6 +290,7 @@ async function follow(el, id) {
       <a class="btn sm ghost" id="idet" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Supporting evidence</a><a class="btn sm ghost" href="${base.replace(/report$/, "details")}.pdf" download>Evidence (PDF)</a>
       ${inv.case_id ? `<a class="btn sm ghost" href="#/case/${esc(inv.case_id)}">Open case ${esc(inv.case_id)}</a>` : ""}<a class="btn sm ghost" href="#/investigate">New investigation</a>
       ${App.can("case.approve") && !r.review?.at && inv.created_by !== App.me.id ? `<button class="btn sm ghost" id="irev">Record a review</button>` : ""}`;
+    if (!r.blocked) formalPanel($("#formalInvestigation",el), "investigation", inv.id).catch(fail);
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();
     if (!r.blocked) approvalPanel(inv, base, () => follow(el, id)).catch(e => { $("#iappr").innerHTML = `<div class="callout bad"><div>${esc(errMsg(e))}</div></div>`; });
     $("#invOut").hidden = false;

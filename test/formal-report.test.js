@@ -65,7 +65,7 @@ test("Generate Report: the exact structure, filled from the case records only, r
   assert.match(c.analysis, /Claim 1 \(Verified\)/); assert.match(c.analysis, /verdict: Contradicted \(1 source contradicts, 0 support\)/); assert.equal(c.analysis.split("The county statement and the 2018 copy").length - 1, 1, "the shared rationale is written once"); assert.match(c.analysis, /Analytical assumptions and uncertainties: The original 2018 photographer/);
   assert.match(c.assessment, /Overall assessment: CONTRADICTED\./); assert.match(c.assessment, /approved by REV/);
   assert.ok(c.recommendations.length >= 3 && c.recommendations.every(x => !/^\(?[a-z]\)/.test(x)), "lettered when printed, stored without letters");
-  assert.deepEqual(c.preparer, { rank: "", name: "", appointment: "" }, "Prepared by is left blank, to be completed by hand");
+  assert.deepEqual(c.preparer, { rank: "Captain", name: "ANA", appointment: "Staff Officer Information Operations" });
   assert.deepEqual(r.body.problems, []); assert.equal(r.body.layout.fits, true); assert.equal(r.body.ready, true);
   assert.equal(r.body.layout.marginCm, 1.5); assert.ok(r.body.layout.size >= 9 && r.body.layout.size <= 10);
 });
@@ -79,12 +79,12 @@ test("Download Word: A4 portrait, 1.5 cm margins, Arial 9–10 pt, headings in t
   assert.match(doc, /w:ascii="Arial"/); const sizes = [...doc.matchAll(/<w:sz w:val="(\d+)"\/>/g)].map(m => +m[1] / 2); assert.ok(Math.min(...sizes) >= 9 && Math.min(...sizes) <= 10, String(sizes[0]));
   const text = [...doc.matchAll(/<w:t xml:space="preserve">([^<]*)<\/w:t>/g)].map(m => m[1]).join("|");
   assert.match(doc, /<w:tab w:val="right"/, "the date-time group sits at the right margin of the top line");
-  const order = ["UNIT: STRATEGIC COMMUNICATION", "Z ", "SUBJECT: ", "1. PURPOSE", "2. BACKGROUND", "3. ANALYSIS", "4. ASSESSMENT", "5. RECOMMENDATIONS", "6. CONCLUSION", "Prepared by:", "Rank: ", "Name: ", "Appointment: "];
+  const order = ["UNIT: STRATEGIC COMMUNICATION", "Z ", "RESTRICTED", "SUBJECT: ", "1. PURPOSE", "2. BACKGROUND", "3. ANALYSIS", "5. ASSESSMENT", "6. RECOMMENDATIONS", "7. CONCLUSION", "Prepared by:", "Rank: ", "Name: ", "Appointment: "];
   let at = -1; for (const h of order) { const i = text.indexOf(h, at + 1); assert.ok(i > at, `${h} after the previous heading`); at = i; }
-  assert.ok(text.includes("4. ASSESSMENT"), "sections are numbered consecutively");
+  assert.ok(!text.includes("4. "), "specified numbering gap is preserved");
   assert.match(text, /\(a\)\|.*\(b\)\|.*\(c\)/, "recommendations lettered (a), (b), (c)");
-  assert.match(text, /\|Rank: \|Name: \|Appointment: $/, "Rank, Name and Appointment printed blank");
-  assert.doesNotMatch(foot, /ACADEMIC|UNOFFICIAL|RESTRICTED/); assert.match(text, /\|CONVOY PHOTO CLAIMED TO SHOW TRUCKS IN GARISSA TODAY\|/);
+  assert.ok(text.includes("Captain") && text.includes("Staff Officer Information Operations"), "authorised profile details populated");
+  assert.match(foot, /RESTRICTED/); assert.match(text, /\|CONVOY PHOTO CLAIMED TO SHOW TRUCKS IN GARISSA TODAY\|/);
 });
 
 test("one A4 page, measured on the produced files: the PDF, and the Word file rendered by LibreOffice", async (t) => {
@@ -105,8 +105,8 @@ test("print preview, edits, validation of missing fields, and the one-page limit
   let cur = (await ana.get(`/api/formal/case/${caseId}`)).body;
   // edit: a missing name blocks downloads and printing, with the missing field named
   let r = await ana.put(`/api/formal/case/${caseId}`, { revision: cur.revision, content: { ...cur.content, subject: "Edited subject: convoy photo", conclusion: "" } });
-  assert.equal(r.status, 200); assert.equal(r.body.content.subject, "Edited subject: convoy photo"); assert.equal(r.body.ready, false); assert.match(r.body.problems.join(" "), /Complete: 6\. Conclusion\./); assert.doesNotMatch(r.body.problems.join(" "), /Rank|Name|Appointment/, "blank Prepared by is allowed");
-  let d = await ana.get(`/api/formal/case/${caseId}/report.docx`); assert.equal(d.status, 409); assert.match(d.body.error || JSON.stringify(d.body), /6\. Conclusion/);
+  assert.equal(r.status, 200); assert.equal(r.body.content.subject, "Edited subject: convoy photo"); assert.equal(r.body.ready, false); assert.match(r.body.problems.join(" "), /Complete: 7\. Conclusion\./); assert.doesNotMatch(r.body.problems.join(" "), /Rank|Name|Appointment/, "blank Prepared by is allowed");
+  let d = await ana.get(`/api/formal/case/${caseId}/report.docx`); assert.equal(d.status, 409); assert.match(d.body.error || JSON.stringify(d.body), /7\. Conclusion/);
   assert.equal((await ana.post(`/api/formal/case/${caseId}/printed`, {})).status, 409);
   assert.match((await ana.get(`/api/formal/case/${caseId}/report.html`)).body, /Not ready to print/);
   assert.equal((await ana.put(`/api/formal/case/${caseId}`, { revision: cur.revision, content: cur.content })).status, 409, "a stale revision is refused");
@@ -152,6 +152,6 @@ test("text clean-up and validation rules", () => {
   assert.match(validate(n).join(" "), /Complete: Date-time group/);
   assert.match(validate({ ...n, date: "28 October" }).join(" "), /DDHHMM, zone letter/); assert.doesNotMatch(validate({ ...n, date: "281430c oct 26".toUpperCase() }).join(" "), /DDHHMM/);
   assert.match(validate(n).join(" "), /square brackets/);
-  assert.match(validate(normalise({})).join(" "), /Subject, 1\. Purpose, 2\. Background, 3\. Analysis, 4\. Assessment, 6\. Conclusion, 5\. Recommendations/);
+  assert.match(validate(normalise({})).join(" "), /Subject, 1\. Purpose, 2\. Background, 3\. Analysis, 5\. Assessment, 7\. Conclusion, 6\. Recommendations/);
   assert.equal(fit(n).fits, true);
 });
