@@ -17,6 +17,7 @@ const ajv = new Ajv({ allErrors: true, strict: false });
 const validate = ajv.compile(AI_OUTPUT_SCHEMA);
 
 export function makeAI(db, { config, cases, storage, audit }) {
+  db.prepare("UPDATE ai_runs SET status='failed',error='The server stopped during this AI run. Retry from Background tasks.' WHERE status='running'").run();
   const setting = k => db.prepare("SELECT value FROM settings WHERE key = ?").get(k)?.value;
   function status() {
     const c = config.ai, prov = c.provider === "mock" && config.isTest ? { label: "Test double" } : providers[c.provider];
@@ -113,9 +114,15 @@ export function makeAI(db, { config, cases, storage, audit }) {
     if (st.trainingOnly && !c.is_training) throw new HttpError(403, "AI is limited to training cases on this server (AI_TRAINING_ONLY). Use a training case, or ask the administrator.");
     if (db.prepare("SELECT 1 FROM ai_runs WHERE case_id = ? AND status = 'running'").get(caseId)) throw new HttpError(409, "An AI request is already running for this case.");
     const p = await buildPayload(caseId, opts);
-    const id = nextId(db, "airun", n => `AI-${String(n).padStart(6, "0")}`), started = nowISO(), t0 = Date.now();
-    db.prepare("INSERT INTO ai_runs(id,case_id,provider,model,prompt_version,status,requested_by,started_at,sent_json,injection_flags) VALUES (?,?,?,?,?,'running',?,?,?,?)")
-      .run(id, caseId, config.ai.provider, config.ai.model, PROMPT_VERSION, user.id, started, JSON.stringify(p.sent), JSON.stringify(p.flags));
+    const t0 = Date.now();
+    const { id, started } = db.transaction(() => {
+      cases.requireEdit(user, cases.mustCase(caseId));
+      if (db.prepare("SELECT 1 FROM ai_runs WHERE case_id=? AND status='running'").get(caseId)) throw new HttpError(409, "An AI request is already running for this case.");
+      const id = nextId(db, "airun", n => `AI-${String(n).padStart(6, "0")}`), started = nowISO();
+      db.prepare("INSERT INTO ai_runs(id,case_id,provider,model,prompt_version,status,requested_by,started_at,sent_json,injection_flags) VALUES (?,?,?,?,?,'running',?,?,?,?)")
+        .run(id, caseId, config.ai.provider, config.ai.model, PROMPT_VERSION, user.id, started, JSON.stringify(p.sent), JSON.stringify(p.flags));
+      return { id, started };
+    }).immediate();
     audit(user, "Case content sent to AI service", "case", caseId, { run: id, destination: p.sent.destination, model: config.ai.model, images: p.sent.images.length, evidence: p.sent.evidence_ids.length, payload_sha256: p.sent.payload_sha256 });
     const finish = (fields) => {
       const cols = Object.keys(fields);

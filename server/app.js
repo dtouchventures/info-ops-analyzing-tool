@@ -1,3 +1,5 @@
+import { makeCaseTasks } from "./lib/case-tasks.js";
+import { CLAIM_LIMIT_MESSAGE } from "../shared/claim-limit.js";
 // Express application factory. `createApp(config)` is used by server/index.js and the test suite.
 import express from "express";
 import multer from "multer";
@@ -109,7 +111,32 @@ export function createApp(config) {
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
   const screenshots = makeScreenshots(db, { config, storage, audit, investigations, io, social, fetchPage, notify });
-  const ctx = { videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const tasks = makeCaseTasks(db, { cases, audit });
+  tasks.register("analysis", async (user, id) => {
+    await cases.startAnalysis(user, id);
+    const c = cases.mustCase(id); if (c.status === "analysis_failed") throw new HttpError(422, c.analysis_error);
+    return { case_id: id, claims: cases.claimCapacity(id) };
+  });
+  tasks.register("collection", async (user, id, b) => {
+    const result = await retrieval.retrieve(user, id, { claimIds: b.claim_ids, use: b.use }, cases);
+    const configured = (result.connectors || []).filter(c => c.configured);
+    if (configured.length && configured.every(c => c.errors?.length)) throw new HttpError(422, "Evidence collection failed for the configured services. Existing evidence was retained. Retry or check service status.");
+    return result;
+  });
+  tasks.register("verification", async (user, id, b) => {
+    const r = await ai.request(user, id, b); await r.job;
+    const run = db.prepare("SELECT status,error FROM ai_runs WHERE id=?").get(r.id);
+    if (run.status !== "completed") throw new HttpError(422, run.error || "AI verification failed. Retry the task.");
+    return { run_id: r.id };
+  });
+  tasks.register("report", async (user, id, b) => {
+    cases.assertReportClaims(id);
+    const r = automaticReports.start(user, id, b); await r.job;
+    const result = automaticReports.get(id); if (result.status !== "completed") throw new HttpError(422, result.error);
+    return { case_id: id, report_url: `/api/cases/${id}/automatic-report.html` };
+  });
+  tasks.start();
+  const ctx = { tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -947,21 +974,36 @@ export function createApp(config) {
       FROM cases c LEFT JOIN users u ON u.id = c.assigned_to WHERE ${w.join(" AND ")} ORDER BY c.updated_at DESC LIMIT 500`).all(p);
     res.json({ cases: rows });
   });
+  api.get("/tasks", h((req, res) => res.json({ tasks: tasks.list(req.user, req.query.case_id || null), investigations: db.prepare("SELECT id,report_id,case_id,status FROM investigations WHERE created_by=? ORDER BY created_at DESC LIMIT 30").all(req.user.id).map(t => ({ ...t, status_label: ({ queued: "Pending", running: "Processing", done: "Completed", failed: "Failed" })[t.status] || t.status })) })));
+  api.get("/tasks/:tid", h((req, res) => res.json(tasks.get(req.user, +req.params.tid))));
+  api.post("/tasks/:tid/retry", h((req, res) => res.status(202).json(tasks.retry(req.user, +req.params.tid))));
+  api.post("/cases/:id/tasks", heavy, h((req, res) => res.status(202).json(tasks.enqueue(req.user, req.params.id, req.body?.kind, req.body?.input || {}, { requestKey: req.body?.request_key || null }))));
+  api.post("/cases/:id/claims/select", requirePerm("case.edit"), h((req, res) => { cases.selectClaims(req.user, req.params.id, req.body?.claim_ids); res.json({ ok: true }); }));
   api.post("/cases", requirePerm("case.create"), h((req, res) => res.status(201).json({ id: cases.create(req.user, req.body || {}) })));
   api.get("/cases/:id", (req, res) => res.json(cases.aggregate(req.params.id, { forUser: req.user })));
   api.patch("/cases/:id", requirePerm("case.edit"), h((req, res) => res.json({ version: cases.update(req.user, req.params.id, req.body || {}, req.headers["if-match"]) })));
   api.post("/cases/:id/assign", h((req, res) => { cases.assign(req.user, req.params.id, req.body?.user_id || null); res.json({ ok: true }); }));
   api.post("/cases/:id/analyse", requirePerm("case.edit"), h(async (req, res) => {
-    const done = cases.startAnalysis(req.user, req.params.id);
-    if (req.query.wait === "1") await done;
-    res.status(202).json({ status: cases.getCase(req.params.id).status });
+    if (req.query.wait === "1") {
+      await cases.startAnalysis(req.user, req.params.id);
+      return res.status(202).json({ status: cases.getCase(req.params.id).status });
+    }
+    const task = tasks.enqueue(req.user, req.params.id, "analysis", {}, { requestKey: req.body?.request_key || null });
+    res.status(202).json({ task, status: cases.getCase(req.params.id).status });
   }));
   api.get("/cases/:id/readiness", (req, res) => res.json(cases.readiness(cases.mustCase(req.params.id).id)));
   api.post("/cases/:id/automatic-report", requirePerm("case.edit"), heavy, h((req, res) => {
-    automaticReports.start(req.user, req.params.id, { search_external: req.body?.search_external === true, confirm_external: req.body?.confirm_external === true });
-    res.status(202).json({ status: 'running' });
+    const task = tasks.enqueue(req.user, req.params.id, "report", { search_external: req.body?.search_external === true, confirm_external: req.body?.confirm_external === true }, { requestKey: req.body?.request_key || null });
+    res.status(202).json({ status: task.status, task });
   }));
-  api.get("/cases/:id/automatic-report", (req, res) => res.json(automaticReports.get(req.params.id)));
+  api.get("/cases/:id/automatic-report", (req, res) => {
+    cases.mustCase(req.params.id);
+    const latest = db.prepare("SELECT id,status,error FROM case_tasks WHERE case_id=? AND kind='report' AND (created_by=? OR ?='admin') ORDER BY id DESC LIMIT 1").get(req.params.id, req.user.id, req.user.role);
+    const saved = automaticReports.get(req.params.id);
+    if (latest && ['pending','processing'].includes(latest.status)) return res.json({ ...saved, task: latest, status: 'running', stage: saved?.status === 'running' ? saved.stage : latest.status });
+    if (latest?.status === 'failed') return res.json({ ...saved, task: latest, status: 'failed', error: latest.error });
+    res.json(saved ? { ...saved, task: latest || null } : null);
+  });
   api.get("/cases/:id/automatic-report.:fmt(html|json)", h((req, res) => {
     const saved = automaticReports.get(req.params.id);
     if (!saved?.report) throw new HttpError(404, 'No automatic report has been generated yet.');
@@ -1210,7 +1252,7 @@ export function createApp(config) {
   // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
   api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     const b = req.body || {};
-    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
+    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true, requestKey: b.request_key || null })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   // ---------------------------------------------------------------- reverse video search and verification (1.35)
@@ -1256,6 +1298,7 @@ export function createApp(config) {
   api.post("/monitor/reports/:id/decision", requirePerm("report.hod"), h(async (req, res) => res.json(await keywords.decideReport(req.user, +req.params.id, req.body || {}))));
   api.put("/monitor/reports/:id/assessment", requirePerm("report.submit"), h((req, res) => res.json(keywords.editAssessment(req.user, +req.params.id, req.body || {}))));
   api.post("/investigations/capture", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.capture(req.user, req.body || {}))));
+  api.post("/investigations/:id/retry", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.retry(req.user, req.params.id))));
   api.post("/investigations/:id/report", requirePerm("case.create"), h(async (req, res) => res.json(await investigations.regenerate(req.user, req.params.id))));
   api.post("/investigations/:id/rerun", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     try { res.status(202).json(investigations.rerun(req.user, req.params.id, { text: req.body?.text, files: req.files || [], source_url: req.body?.source_url })); } catch (e) { cleanup(req.files || []); throw e; }
@@ -1400,6 +1443,7 @@ export function createApp(config) {
   // errors: JSON for the API, never stack traces
   app.use((err, req, res, _next) => {
     let status = err.status || 500, message = err.message || "Unexpected error.";
+    if (err.message === CLAIM_LIMIT_MESSAGE) { status = 409; audit(req.user, "Claim creation rejected: database limit", "case", req.params?.id || null); }
     if (err instanceof multer.MulterError) { status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400; message = err.code === "LIMIT_FILE_SIZE" ? `A file is larger than the ${config.maxUploadMb} MB limit.` : `Upload problem: ${err.message}.`; }
     if (err.type === "entity.too.large") { status = 413; message = "Request too large."; }
     if (status >= 500 && !(err instanceof HttpError)) { console.error(err); message = "Something went wrong on the server. The error has been logged."; }

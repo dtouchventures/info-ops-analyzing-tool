@@ -4,12 +4,12 @@
 // soon as it is available. Text, screenshots and files can still be given when there is no link, or to correct an
 // incomplete extraction. Everything is labelled as an AI-generated preliminary assessment.
 import { videoResultHtml } from "../lib/videoview.js";
-import { api } from "../api.js";
+import { api, newTaskKey } from "../api.js";
 import { App, crumbs } from "../app.js";
 import { $, esc, errMsg, kb } from "../ui.js";
 
 // the automated workflow (1.33): each stage runs by itself; the list a saved investigation recorded is shown as it was
-const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (at most two principal claims)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
+const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (maximum two per case)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
 const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "warn", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
@@ -55,11 +55,13 @@ export async function render(el, params = []) {
   const files = $("#ifile"), err = $("#ierr");
   files.onchange = () => { $("#ifiles").textContent = [...files.files].map(f => `${f.name} (${kb(f.size)})`).join(", "); };
   $("#iv").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#igo").click(); } };
+  const submissionKey = newTaskKey();
   $("#igo").onclick = async () => {
     err.hidden = true;
     const v = $("#iv").value.trim(), t = $("#itext").value.trim();
     if (!v && !t && !files.files.length) { err.innerHTML = "<div>Paste a link or some text, or add a file.</div>"; err.hidden = false; return; }
-    const fd = new FormData();
+    if ($("#igo").disabled) return;
+    const fd = new FormData(); fd.append("request_key", submissionKey);
     if (/^https?:\/\/\S+$/i.test(v)) fd.append("url", v);
     else if (v && /^(www\.|[\w-]+\.[a-z]{2,}\/)/i.test(v)) { err.innerHTML = "<div>Links must start with https:// or http://.</div>"; err.hidden = false; return; }
     else if (v) fd.append("text", v);
@@ -256,8 +258,13 @@ async function follow(el, id) {
   const tick = async () => {
     if (!el.isConnected || !location.hash.includes(id)) return;
     let inv; try { inv = await api.get(`/api/investigations/${encodeURIComponent(id)}`); } catch (e) { $("#istages").innerHTML = `<li class="warning">${esc(errMsg(e))}</li>`; return; }
+    if (!el.isConnected || !location.hash.includes(id)) return;
     $("#irid").textContent = inv.report_id; stages(inv.stages); preview(inv.preview);
-    if (inv.status === "failed") { $("#ires").innerHTML = `<div class="callout bad" style="margin-top:10px"><div>The investigation stopped: ${esc(inv.error || "unknown error")}. <a href="#/investigate">Start again</a>.</div></div>`; return; }
+    if (inv.status === "failed") {
+      $("#ires").innerHTML = `<div class="callout bad" style="margin-top:10px"><div>The investigation stopped: ${esc(inv.error || "unknown error")}. ${inv.case_id ? `<a href="#/case/${encodeURIComponent(inv.case_id)}/claims">Open the existing case</a>` : ""} <button class="btn sm" id="retryInvestigation">Retry</button></div></div>`;
+      $("#retryInvestigation").onclick = async e => { e.target.disabled = true; try { await api.post(`/api/investigations/${encodeURIComponent(id)}/retry`); await tick(); } catch (er) { e.target.disabled = false; const msg = document.createElement("p"); msg.setAttribute("role", "alert"); msg.textContent = er.message; $("#ires").append(msg); } };
+      return;
+    }
     if (inv.status !== "done") { timer = setTimeout(tick, 1200); return; }
     const r = inv.result, base = `/api/investigations/${encodeURIComponent(inv.id)}/report`;
     if (!inv.preview) preview({ platform: r.source.platform, url: r.source.url, title: r.source.title, text: r.content, claims: r.claims, notes: r.source.notes });

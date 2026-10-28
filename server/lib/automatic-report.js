@@ -1,3 +1,4 @@
+import { MAX_CASE_CLAIMS } from "../../shared/claim-limit.js";
 // Public-content fact-checking reports. Automated output never changes reviewer decisions.
 import { HttpError, can } from './auth.js';
 import { nowISO } from './db.js';
@@ -13,6 +14,7 @@ const normal = s => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' 
 
 export function buildAutomaticReport(agg, { generatedAt = nowISO(), timezone = 'Africa/Nairobi', checks = [], research = [], ai = { status: 'not_requested' }, warnings = [] } = {}) {
   const claims = agg.claims.filter(c => !c.removed);
+  if (claims.length > MAX_CASE_CLAIMS) throw new HttpError(409, "Choose at most two claims for this older case before generating a new report.");
   const evidence = agg.evidence.filter(e => e.status !== 'dismissed');
   const citations = evidence.filter(e => http(e.source_url) || e.status === 'accepted').map(e => ({ id: e.id, url: http(e.source_url), title: e.source_title || e.reference || e.source_url || e.id,
     publisher: e.source_publisher, published_at: e.source_published_at, retrieved_at: e.retrieved_at, status: e.status,
@@ -90,16 +92,13 @@ export function makeAutomaticReports(db, { cases, retrieval, ai, storage, config
     while (cases.isRunning(id)) await new Promise(resolve => setTimeout(resolve, 100));
     cases.requireEdit(user, cases.mustCase(id));
     stage(id, 'extraction');
-    for (const m of cases.aggregate(id).media.filter(m => m.kind === 'document')) {
-      try { cases.claimsFromDocument(user, m.id); } catch (e) { warnings.push(`Document extraction: ${e.message}`); }
-    }
-    let extracted = cases.aggregate(id);
-    const have = new Set(extracted.claims.map(c => c.text.toLowerCase()));
-    for (const o of extracted.ocr) {
-      for (const cl of extractClaims(o.current_text, false).slice(0, 15)) {
-        if (!have.has(cl.text.toLowerCase())) { cases.addClaim(user, id, { text: cl.text, kind: cl.kind, origin: 'extracted' }); have.add(cl.text.toLowerCase()); }
-      }
-      if (/\d+\/\d+ pages/.test(o.engine)) warnings.push(`OCR coverage: ${o.engine}.`);
+    const extracted = cases.aggregate(id);
+    cases.assertReportClaims(id);
+    // Additional document/OCR statements are proposals, never extra case claims.
+    for (const o of extracted.ocr) cases.proposeClaims(id, extractClaims(o.current_text, false), `ocr:${o.id}`);
+    for (const m of extracted.media.filter(m => m.kind === 'document')) {
+      const doc = db.prepare('SELECT text FROM document_texts WHERE media_id = ?').get(m.id);
+      if (doc?.text) cases.proposeClaims(id, extractClaims(doc.text, false), `document:${m.id}`);
     }
     for (const m of extracted.media.filter(m => m.kind === 'image' && !extracted.ocr.some(o => o.media_id === m.id))) warnings.push(`No OCR text is recorded for ${m.original_name}. Read its text from the case's media tools.`);
     stage(id, 'local_analysis'); await cases.startAnalysis(user, id);

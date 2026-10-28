@@ -1,3 +1,4 @@
+import { MAX_CASE_CLAIMS, CLAIM_LIMIT_MESSAGE } from "/shared/claim-limit.js";
 // Case workspace: header with workflow state and actions; tabs for overview, media, claims, evidence, AI, report, history.
 import { api } from "../api.js";
 import { App, crumbs, refreshNavCounts } from "../app.js";
@@ -42,6 +43,10 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   const reload = async () => { await load(); if (isCurrent()) draw(); };
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) toast(okMsg); await reload(); refreshNavCounts(); } catch (e) { fail(e); } };
 
+  function taskSummary() {
+    const cap = A.claimCapacity || { active: A.claims.filter(x => !x.removed).length }, ongoing = (A.tasks || []).filter(t => ["pending", "processing"].includes(t.status));
+    return `<div class="row case-task-summary" style="margin-bottom:12px"><b>Claims: ${Math.min(cap.used ?? cap.active, MAX_CASE_CLAIMS)}/${MAX_CASE_CLAIMS}</b><a href="#/tasks">Background tasks${ongoing.length ? ` (${ongoing.length} active)` : ""}</a>${cap.selection_required ? `<a href="#/case/${encodeURIComponent(id)}/claims">Choose two claims for this older case</a>` : ""}</div>`;
+  }
   function draw() {
     const c = A.case, P = A.perms;
     crumbs(`<a href="#/cases">Cases</a> / <b>${esc(c.id)}</b>`);
@@ -54,9 +59,10 @@ export async function render(el, [id, tabArg], { isCurrent }) {
       if (n === 1 && lastStatus === "analysing" && c.status === "analyst_review") { lastStatus = c.status; location.hash = `#/case/${encodeURIComponent(c.id)}/step2`; return; }
       const view = `step${n}`, y = view === lastView ? window.scrollY : 0; lastView = view; lastStatus = c.status;
       renderSteps(el, n, { A, act, reload, linkEvidence, runSearch, timeline, refresh: async () => { await load(); } });
+      el.insertAdjacentHTML("afterbegin", taskSummary());
       if (y) window.scrollTo(0, y);
       clearTimeout(pollT);
-      if (c.status === "analysing") pollT = setTimeout(() => isCurrent() && reload(), 1500);
+      if (c.status === "analysing" || A.tasks?.some(t => ["pending", "processing"].includes(t.status))) pollT = setTimeout(() => isCurrent() && reload(), 1500);
       return;
     }
     // a step address opened in Advanced mode shows the matching full tool
@@ -64,14 +70,14 @@ export async function render(el, [id, tabArg], { isCurrent }) {
     lastView = tab; lastStatus = c.status;
     const pending = A.evidence.filter(e => e.status === "suggested").length, unassessed = A.claims.filter(x => !x.removed && x.assessment === "unassessed").length;
     const counts = { media: A.media.length, claims: unassessed, evidence: pending, ai: A.aiRuns.length, notes: A.notes.filter(n => !n.deleted).length, coverage: needAttention().length };
-    el.innerHTML = `${header(c, P)}${App.guided() ? `<div class="gback"><a class="btn sm" href="#/case/${esc(c.id)}/step${currentStep(A)}">← Back to the steps</a><span class="small sub">More tools. Everything you change here is saved and counts in the steps.</span>${moreTools(c)}</div>` : ""}
+    el.innerHTML = `${taskSummary()}${header(c, P)}${App.guided() ? `<div class="gback"><a class="btn sm" href="#/case/${esc(c.id)}/step${currentStep(A)}">← Back to the steps</a><span class="small sub">More tools. Everything you change here is saved and counts in the steps.</span>${moreTools(c)}</div>` : ""}
       <nav class="tabs" aria-label="Case sections">${TABS.map(([k, l]) => `<a href="#/case/${esc(c.id)}/${k}" class="${k === tab ? "on" : ""}">${l}${k === "claims" && counts.claims ? `<span class="count" title="Claims not yet assessed">${counts.claims}</span>` : ""}${k === "evidence" && counts.evidence ? `<span class="count" title="Suggestions to review">${counts.evidence}</span>` : ""}${k === "notes" && counts.notes ? `<span class="count grey" title="Team notes">${counts.notes}</span>` : ""}${k === "coverage" && counts.coverage ? `<span class="count" title="Claims that block submission">${counts.coverage}</span>` : ""}</a>`).join("")}</nav>
       <div id="tabBody"></div>`;
     bindHeader(c, P);
     const body = $("#tabBody");
     Promise.resolve(({ overview, media, claims, evidence, coverage: (b, cc, pp) => coverageTab(b, cc, pp, { reload }), assistant, ai, report, notes, history })[tab](body, c, P)).catch(e => { body.innerHTML = `<div class="callout bad"><div>${esc(errMsg(e))}</div></div>`; console.error(e); });
     clearTimeout(pollT);
-    if (c.status === "analysing" || A.aiRuns.some(r => r.status === "running")) pollT = setTimeout(() => isCurrent() && reload(), 1500);
+    if (c.status === "analysing" || A.aiRuns.some(r => r.status === "running") || A.tasks?.some(t => ["pending", "processing"].includes(t.status))) pollT = setTimeout(() => isCurrent() && reload(), 1500);
   }
 
   // ---------------------------------------------------------------- guided mode: see steps.js
@@ -110,7 +116,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   function bindHeader(c, P) {
     [...el.querySelectorAll(".casehead [data-a], .nextstep [data-a]")].forEach(b => b.onclick = async () => {
       const a = b.dataset.a;
-      if (a === "analyse") return act(() => api.post(`/api/cases/${c.id}/analyse`), "Analysis started.");
+      if (a === "analyse") return act(() => api.queueTask(c.id, "analysis"), "Analysis started.");
       if (a === "archive") { if (await confirmBox("Archive this case?", "Archived cases stay searchable and can be reopened as a new revision.", "Archive")) act(() => api.post(`/api/cases/${c.id}/archive`), "Case archived."); }
       if (a === "revise") {
         const r = await modal("Open a new revision", `<p class="small">The approved report stays on record unchanged. The case returns to analyst review as revision ${c.revision + 1}.</p><label class="f" for="rr">Reason <span class="req">*</span></label><textarea id="rr" rows="3" placeholder="e.g. new source found, reviewer request"></textarea>`,
@@ -284,7 +290,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
         <div style="margin-top:8px"><b class="small">Document properties</b> <span class="tiny sub">(leads only: easy to edit, often left over from templates)</span>${meta.length ? `<dl class="kv small" style="margin-top:4px">${meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : `<div class="small muted">None recorded.</div>`}</div>
         <details style="margin-top:8px" ${d.chars && d.chars < 4000 ? "open" : ""}><summary class="small"><b>Text</b> <span class="sub">(${(d.chars || 0).toLocaleString()} characters, ${esc(d.extractor || "")})</span></summary><pre class="box" style="max-height:360px;overflow:auto">${esc(d.preview || "(no text layer)")}${(d.chars || 0) > 6000 ? "\n\n… (download the full text)" : ""}</pre></details>
         ${ocr.map(o => `<div class="ocrbox" style="margin-top:8px"><b class="small">Text read from the pages (OCR, ${esc(o.lang)})</b><textarea data-ocrtext="${o.id}" rows="6" ${P.edit ? "" : "disabled"}>${esc(o.current_text)}</textarea>${P.edit ? `<button class="btn sm" data-ocrsave="${o.id}">Save correction</button>` : ""}</div>`).join("")}
-        <div class="row" style="margin-top:10px">${P.edit ? `<button class="btn sm primary" data-docclaims="${esc(m.id)}">Add claims from this document</button>${scanned || !d.chars ? `<button class="btn sm" data-dococr="${esc(m.id)}" ${App.meta.ocr.length ? "" : "disabled"}>Read text from pages (OCR)</button>` : ""}` : ""}<a class="btn sm ghost" href="/api/media/${esc(m.id)}/text">Download text</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download original</a></div>
+        <div class="row" style="margin-top:10px">${P.edit ? `<button class="btn sm primary" data-docclaims="${esc(m.id)}" ${A.claimCapacity.remaining < 1 ? "disabled" : ""}>Add claims from this document</button>${scanned || !d.chars ? `<button class="btn sm" data-dococr="${esc(m.id)}" ${App.meta.ocr.length ? "" : "disabled"}>Read text from pages (OCR)</button>` : ""}` : ""}<a class="btn sm ghost" href="/api/media/${esc(m.id)}/text">Download text</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download original</a></div>
         <div class="hint">AIVS never opens documents inside the app and does not run macros or scripts in them.</div></div></div>`;
   }
   function bindUpload(c) {
@@ -437,7 +443,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
       ${!active.length ? `<div class="card"><div class="bd">${empty(c.status === "draft" ? "Claims appear after analysis" : "No claims", c.status === "draft" ? "Run local analysis to split the post into checkable claims, or add claims yourself." : "Add the specific, checkable statements the content makes.")}</div></div>` : ""}
       <div style="margin-top:14px">${active.map(cl => { const L = linked(cl); return `<div class="claim a-${cl.assessment}"><div class="no" aria-label="Claim ${cl.seq}">${cl.seq}</div><div style="min-width:0">
         <div class="row" style="margin-bottom:6px"><span class="chip grey">${esc(cl.kind)}</span>${cl.claim_type && cl.claim_type !== "factual" ? `<span class="chip warn" title="Rule-based hint${cl.claim_type_cue ? `: triggered by “${esc(cl.claim_type_cue)}”` : ""}. You decide.">${esc(STYPE[cl.claim_type] || cl.claim_type)}</span>` : cl.claim_type === "factual" ? `<span class="chip teal adv" title="Rule-based hint">checkable statement</span>` : ""}<span class="chip ${cl.origin === "ai" ? "info" : cl.origin === "extracted" ? "teal" : "grey"}">${cl.origin === "ai" ? "suggested by AI" : cl.origin === "extracted" ? "extracted automatically" : "added by analyst"}</span>
-          ${ed ? `<span style="margin-left:auto" class="row"><select data-ckind="${cl.id}" style="width:auto;padding:3px 6px;font-size:12.5px" aria-label="Claim type">${["statement", "timing", "media", "location", "attribution"].map(k => `<option ${k === cl.kind ? "selected" : ""}>${k}</option>`).join("")}</select><button class="btn sm ghost" data-split="${cl.id}">Split</button><button class="btn sm ghost" data-rm="${cl.id}">Remove</button></span>` : ""}</div>
+          ${ed ? `<span style="margin-left:auto" class="row"><select data-ckind="${cl.id}" style="width:auto;padding:3px 6px;font-size:12.5px" aria-label="Claim type">${["statement", "timing", "media", "location", "attribution"].map(k => `<option ${k === cl.kind ? "selected" : ""}>${k}</option>`).join("")}</select><button class="btn sm ghost" data-split="${cl.id}" ${A.claimCapacity.remaining < 1 ? "disabled" : ""}>Split</button><button class="btn sm ghost" data-rm="${cl.id}">Remove</button></span>` : ""}</div>
         ${cl.claim_type && cl.claim_type !== "factual" ? `<div class="hint" style="margin:-2px 0 6px">${esc(STYPE_HELP[cl.claim_type] || "")}</div>` : ""}<textarea class="ct" data-ctext="${cl.id}" rows="2" ${ed ? "" : "disabled"} aria-label="Claim ${cl.seq} text">${esc(cl.text)}</textarea>
         ${suggestBlock(cl, ed)}<div class="row" style="margin-top:8px"><div class="seg wrap" role="group" aria-label="Verdict for claim ${cl.seq}">${[...ACTIVE_VERDICTS, ...["partially_supported", "misleading_context"].filter(k => cl.assessment === k), "unassessed"].map(k => `<button data-v="${k}" data-assess="${cl.id}" class="${cl.assessment === k ? "on" : ""}" title="${esc(App.meta.verdictHelp?.[k] || "Not assessed yet")}" ${ed ? "" : "disabled"}>${ASSESS[k][0]}</button>`).join("")}</div>
           ${strengthChip(cl)}
@@ -445,8 +451,15 @@ export async function render(el, [id, tabArg], { isCurrent }) {
         <label class="f" for="r-${cl.id}">Rationale for this claim</label><textarea id="r-${cl.id}" data-rat="${cl.id}" rows="2" ${ed ? "" : "disabled"} placeholder="What the evidence shows for this claim, and what it does not">${esc(cl.rationale || "")}</textarea>
         <div class="links">${L.map(({ e, s }) => `<span class="chip ${s === "supports" ? "sup" : s === "contradicts" ? "con" : "grey"}" title="${esc(e.text)}">${esc(e.id)} ${s}</span>`).join("") || `<span class="tiny sub">No evidence linked.</span>`}${ed ? `<button class="btn sm ghost" data-link="${cl.id}">Link evidence</button>${cl.kind !== "media" && (!cl.claim_type || cl.claim_type === "factual") ? `<button class="btn sm ghost" data-find="${cl.id}" title="Search the knowledge base, earlier cases and any configured search services for this claim">Search for evidence</button>` : ""}` : ""}</div>
       </div></div>`; }).join("")}</div>
-      ${ed ? `<div class="card" style="margin-top:14px"><div class="bd"><label class="f" for="nc" style="margin-top:0">Add a claim</label><div class="row"><input type="text" id="nc" placeholder="One specific, checkable statement" style="flex:1;min-width:240px"><select id="nck" style="width:auto">${["statement", "timing", "media", "location", "attribution"].map(k => `<option>${k}</option>`).join("")}</select><button class="btn primary" id="ncAdd">Add claim</button></div></div></div>` : ""}
-      ${removed.length ? `<details style="margin-top:14px"><summary class="small sub">Removed or split claims (${removed.length}) — kept for the record</summary>${removed.map(cl => `<div class="panel small" style="margin-top:6px"><s>${esc(cl.text)}</s></div>`).join("")}</details>` : ""}`;
+      ${ed && A.claimCapacity.remaining > 0 ? `<div class="card" style="margin-top:14px"><div class="bd"><label class="f" for="nc" style="margin-top:0">Add a claim</label><div class="row"><input type="text" id="nc" placeholder="One specific, checkable statement" style="flex:1;min-width:240px"><select id="nck" style="width:auto">${["statement", "timing", "media", "location", "attribution"].map(k => `<option>${k}</option>`).join("")}</select><button class="btn primary" id="ncAdd">Add claim</button></div></div></div>` : ""}
+      ${removed.length ? `<details style="margin-top:14px"><summary class="small sub">Historical claims (${removed.length}) — kept for the record</summary>${removed.map(cl => `<div class="panel small" style="margin-top:6px"><s>${esc(cl.text)}</s></div>`).join("")}</details>` : ""}`;
+    if (A.claimCapacity.remaining === 0) body.insertAdjacentHTML("beforeend", `<p class="callout info" role="status">${CLAIM_LIMIT_MESSAGE} Edit the existing claims as needed. Removing a claim does not reopen a slot.</p>`);
+    if (ed && A.claimCapacity.selection_required) {
+      body.insertAdjacentHTML("afterbegin", `<div class="card"><div class="bd"><h3>Select claims for this older case</h3><p>Choose at most two. Unselected claims and their evidence links remain in history; existing report snapshots stay unchanged.</p>${active.map(cl => `<label class="check"><input type="checkbox" data-legacy-claim="${esc(cl.id)}"> ${esc(cl.text)}</label>`).join("")}<button class="btn primary" id="selectLegacyClaims">Keep selected claims</button></div></div>`);
+      $("#selectLegacyClaims").onclick = () => act(() => api.post(`/api/cases/${c.id}/claims/select`, { claim_ids: $$("[data-legacy-claim]:checked").map(x => x.dataset.legacyClaim) }), "Claim selection saved.");
+    }
+    const candidates = (A.claimCandidates || []).filter(x => !A.claims.some(cl => cl.text === x.text));
+    if (candidates.length) body.insertAdjacentHTML("beforeend", `<details><summary>Additional extracted statements (${candidates.length}) — not case claims</summary><p class="small">The original text is preserved. These candidates do not appear as assessed claims in a report.</p>${candidates.map(x => `<p class="small">${esc(x.text)}</p>`).join("")}</details>`);
     if (!ed) return;
     $$("[data-assess]").forEach(b => b.onclick = () => act(() => api.patch(`/api/claims/${b.dataset.assess}`, { assessment: b.dataset.v, rationale: $(`[data-rat="${b.dataset.assess}"]`).value })));
     $$("[data-rat]").forEach(t => t.onchange = () => act(() => api.patch(`/api/claims/${t.dataset.rat}`, { rationale: t.value })));
@@ -457,12 +470,12 @@ export async function render(el, [id, tabArg], { isCurrent }) {
       const r = await modal("Split claim", `<p class="small muted">Put each separate statement on its own line. Leave as is to split automatically at sentences and conjunctions.</p><textarea id="sp" rows="5">${esc(cl.text)}</textarea>`, [{ label: "Cancel", value: null }, { label: "Split", kind: "primary", value: el => $("#sp", el).value }]);
       if (r.value != null) { const parts = r.value.split(/\n+/).map(s => s.trim()).filter(Boolean); act(() => api.post(`/api/claims/${cl.id}/split`, { parts: parts.length > 1 ? parts : undefined }), "Claim split."); }
     });
-    $$("[data-rm]").forEach(b => b.onclick = async () => { if (await confirmBox("Remove this claim?", "It stays in the record as removed, with its evidence links cleared.", "Remove", "danger")) act(() => api.del(`/api/claims/${b.dataset.rm}`), "Claim removed."); });
+    $$("[data-rm]").forEach(b => b.onclick = async () => { if (await confirmBox("Remove this claim?", "It stays in the record as removed, with its evidence links preserved. This does not free a claim slot.", "Remove", "danger")) act(() => api.del(`/api/claims/${b.dataset.rm}`), "Claim removed."); });
     $$("[data-link]").forEach(b => b.onclick = () => linkEvidence(b.dataset.link));
     $$("[data-find]").forEach(b => b.onclick = () => runSearch(c, [b.dataset.find]));
     $$("[data-apply]").forEach(b => b.onclick = async () => { if (await confirmBox("Adopt this suggested verdict?", "You are taking responsibility for it. Check the cited fact-checks first; the suggestion is based only on published ratings that matched this claim's wording.", "Adopt")) act(() => api.post(`/api/claims/${b.dataset.apply}/apply-suggestion`), "Verdict set. Edit the rationale in your own words."); });
     if ($("#srchAll")) $("#srchAll").onclick = () => runSearch(c);
-    $("#ncAdd").onclick = () => { const t = $("#nc").value.trim(); if (!t) return toast("Write the claim first.", "err"); act(() => api.post(`/api/cases/${c.id}/claims`, { text: t, kind: $("#nck").value }), "Claim added."); };
+    if ($("#ncAdd")) $("#ncAdd").onclick = () => { const t = $("#nc").value.trim(); if (!t) return toast("Write the claim first.", "err"); act(() => api.post(`/api/cases/${c.id}/claims`, { text: t, kind: $("#nck").value }), "Claim added."); };
   }
   function strengthChip(cl) {
     const st = cl.strength; if (!st) return "";
@@ -475,7 +488,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   }
   function searchCard(c, P, active) {
     const svc = App.meta.search || [], ext = svc.filter(s => s.sends_to), last = (A.retrievals || []).slice(0, 8);
-    return `<div class="card" style="margin-top:14px"><div class="hd"><h3>Evidence search</h3><span class="small sub right">Results arrive as suggestions on the Evidence tab, with their links. Nothing is accepted automatically.</span></div><div class="bd">
+    return `<div class="card case-search" style="margin-top:14px"><div class="hd"><h3>Evidence search</h3><span class="small sub right">Results arrive as suggestions on the Evidence tab, with their links. Nothing is accepted automatically.</span></div><div class="bd">
       <div class="row small" style="gap:6px">${svc.map(s => `<span class="chip ${s.configured ? "teal" : "grey"}" title="${esc(s.configured ? (s.sends_to ? `Sends the claim wording to ${s.sends_to}` : "Runs inside AIVS") : `Not configured: ${s.needs || ""}`)}">${esc(s.label)}${s.configured ? "" : " · not configured"}</span>`).join("")}</div>
       ${ext.some(s => !s.configured) ? `<div class="hint">Services marked “not configured” need an API key set by the administrator on the server (see README, “Evidence search”). AIVS does not invent results when a service is unavailable.</div>` : ""}
       ${P.edit && active.length ? `<div class="row" style="margin-top:10px"><label class="small"><input type="checkbox" id="srchExt" ${ext.some(s => s.configured) ? "checked" : "disabled"}> Include external services${ext.some(s => s.configured) ? ` (${esc(ext.filter(s => s.configured).map(s => s.label).join(", "))})` : " (none configured)"}</label><button class="btn primary sm" id="srchAll" style="margin-left:auto">Search for evidence for all claims</button></div>` : ""}
@@ -485,15 +498,13 @@ export async function render(el, [id, tabArg], { isCurrent }) {
   async function runSearch(c, claimIds) {
     const extOn = $("#srchExt")?.checked, svc = App.meta.search || [];
     const use = ["kb", "holdings", ...(extOn !== false ? svc.filter(s => s.sends_to && s.configured).map(s => s.key) : [])];
-    toast("Searching…");
     try {
-      const r = await api.post(`/api/cases/${c.id}/retrieve`, { claim_ids: claimIds, use });
-      const rows = r.connectors || [], stored = rows.reduce((a, b) => a + (b.stored || 0), 0);
-      const lines = rows.map(x => `<li><b>${esc(x.label)}</b>: ${!x.configured ? `not configured (${esc(x.needs || "")})` : x.errors?.length ? `<span style="color:var(--con)">${esc(x.errors.join("; "))}</span>` : `${x.results} result${x.results === 1 ? "" : "s"}, ${x.stored} new suggestion${x.stored === 1 ? "" : "s"}`}</li>`).join("");
-      await modal("Evidence search finished", `<ul class="small">${lines}</ul>${(r.skipped || []).length ? `<p class="small muted">Skipped: ${r.skipped.map(s => `claim ${s.claim} (${esc(s.reason)})`).join("; ")}</p>` : ""}<p class="small">${stored ? `${stored} item${stored > 1 ? "s were" : " was"} added to <b>Suggestions to review</b> on the Evidence tab. Open each link and decide.` : "Nothing new was found. That does not show the claim is true or false."}</p>`, [{ label: "OK", kind: "primary", value: 1 }]);
-      await reload(); refreshNavCounts();
+      const task = await api.queueTask(c.id, "collection", { ...(claimIds ? { claim_ids: claimIds } : {}), use });
+      toast(`Evidence collection ${task.status_label.toLowerCase()}. You can continue on another page; view Background tasks for results.`);
+      await reload();
     } catch (e) { fail(e); }
   }
+
   async function linkEvidence(claimId) {
     const acc = A.evidence.filter(e => e.status === "accepted");
     if (!acc.length) return toast("Accept or add evidence first (Evidence tab).", "err");
@@ -669,7 +680,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
           <label class="check" style="margin-top:10px"><input type="checkbox" id="aiOk"> I confirm this case content may be sent to ${esc(s.destination)} (${esc(s.provider)} / ${esc(s.model)}). The request and its fingerprint are recorded in the audit log.</label>
           <button class="btn primary" id="aiSend" style="margin-top:10px" disabled>Send to AI service</button></div>`;
         $("#aiOk").onchange = e => ($("#aiSend").disabled = !e.target.checked);
-        $("#aiSend").onclick = () => act(() => api.post(`/api/cases/${c.id}/ai/runs`, { ...opts, confirm_external: true }), "Sent. The result appears under AI runs when it arrives.");
+        $("#aiSend").onclick = () => act(() => api.queueTask(c.id, "verification", { ...opts, confirm_external: true }), "Sent. The result appears under AI runs when it arrives.");
       } catch (e) { fail(e); }
     };
     bindRuns(c, P);

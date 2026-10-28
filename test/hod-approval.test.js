@@ -57,8 +57,8 @@ const pdfText = async (client, url) => { const f = await fetch(`${S.base}${url}`
 test("KDF recruitment case: at most two principal claims, automatic evidence with the source read in full, False with a fact-check, AI used, KDF IO assessment, four sections, one page", async () => {
   const inv = await investigate(ana, TEXT), r = inv.result; invId = inv.id;
   assert.equal(inv.status, "done", inv.error);
-  assert.ok(r.claims.length >= 1 && r.claims.length <= 2, `principal claims: ${r.claims.map(c => c.text)}`); assert.equal(r.principal_by, "ai"); assert.ok(AI.calls.includes("rank"));
-  assert.ok(r.claims.some(c => /KSh 2,000/.test(c.text))); assert.ok(r.other_claims.length >= 1, "the other statements are kept"); assert.ok(!r.claims.some(c => /respected institution/.test(c.text)), "background is not a principal claim");
+  assert.ok(r.claims.length >= 1 && r.claims.length <= 2, `principal claims: ${r.claims.map(c => c.text)}`); assert.equal(r.principal_by, "case records");
+  assert.ok(r.claims.some(c => /KSh 2,000/.test(c.text))); assert.equal(r.other_claims.length, 0, "reports contain only the saved case claims"); assert.ok(S.ctx.db.prepare("SELECT COUNT(*) n FROM claim_candidates WHERE case_id=?").get(inv.case_id).n > 2, "additional statements are retained as review candidates"); assert.ok(!r.claims.some(c => /respected institution/.test(c.text)), "background is not a principal claim");
   assert.equal(inv.stages.find(s => s.key === "search").status, "done"); assert.ok(r.search.some(s => s.key === "factcheck" && s.status === "ok"), "evidence searched automatically");
   const fc = r.evidence.find(e => e.connector === "factcheck"); assert.ok(fc.page_read, "the fact-check article itself was read"); assert.match(fc.passage, /pay KSh 2,000|free of charge/);
   assert.equal(r.overall.verdict, "contradicted"); assert.equal(r.ai.used, true);
@@ -92,7 +92,8 @@ test("automatic completion and submission: the case is completed by AIVS (no man
   assert.equal(c.status, "awaiting_approval"); assert.equal(c.approval_route, "hod"); assert.ok(c.auto_completed_at);
   assert.equal(c.conclusion, "contradicted", JSON.stringify({ c: c.conclusion, cls: S.ctx.db.prepare("SELECT seq, assessment, removed, rationale FROM claims WHERE case_id = ?").all(c.id), st: c.status })); assert.match(c.conclusion_rationale, /Determined automatically from/); assert.match(c.conclusion_rationale, /Confidence: (High|Medium|Low)/); assert.ok(c.uncertainties.trim().length > 10);
   assert.ok(cls.length >= 1 && cls.length <= 2, "at most two principal claims stay in the case");
-  assert.ok(db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id = ? AND removed = 1 AND rationale LIKE 'Recorded but not prioritised%'").get(c.id).n >= 1, "the other statements are kept, not deleted");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id=?").get(c.id).n, cls.length, "automation never removes saved claims to make room");
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM claim_candidates WHERE case_id=?").get(c.id).n > 2, "additional statements remain candidates");
   for (const cl of cls) { assert.equal(cl.assessed_auto, 1); assert.notEqual(cl.assessment, "unassessed"); assert.match(cl.rationale, /^Observed: .*Interpretation \(AIVS rules\)/); assert.doesNotMatch(cl.rationale, /^ok$/i); }
   const ev = db.prepare("SELECT * FROM evidence WHERE case_id = ?").all(c.id);
   assert.equal(ev.filter(e => e.status === "suggested").length, 0, "every suggestion was decided by the rules");

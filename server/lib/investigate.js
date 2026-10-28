@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // One-click automatic investigation (AIVS 1.22):
 //   1 extract  links (web pages, PDFs, social posts through their public embeds), pasted text, images and screenshots
 //              (OCR on the server, English and Kiswahili, offline), PDF and Word documents
@@ -28,7 +29,7 @@ import { makeMediaCheck } from "./mediacheck.js";
 
 const require = createRequire(import.meta.url);
 // the automated workflow (1.33): every stage runs by itself, in this order; the analyst only submits the information
-export const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (at most two principal claims)"], ["search", "Evidence collection"],
+export const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (maximum two per case)"], ["search", "Evidence collection"],
   ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
 // thumbnails a platform returns for a post or video (oEmbed thumbnail_url; YouTube API thumbnails; X API media)
 function thumbsOf(lk) {
@@ -104,18 +105,28 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     } catch (e) { console.error("technical review record failed", id, e.message); }
   }
 
-  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null, supplied = null }) {
+  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null, supplied = null, requestKey = null }) {
     text = String(text || "").replace(/\r\n/g, "\n").trim(); url = String(url || "").trim();
     if (!url && /^https?:\/\/\S+$/i.test(text)) { url = text; text = ""; }
     if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "Links must start with http:// or https://.");
     if (!text && !url && !files.length) throw new HttpError(400, prefetched ? "The post has no text and no image that could be stored, so there is nothing to analyse." : "Paste text or a link, or add a file.");
     if (text.length > 20000) throw new HttpError(400, "That is more than 20,000 characters. Paste the part that contains the claims.");
     if (files.length > 5) throw new HttpError(400, "Add at most 5 files to one investigation.");
+    if (requestKey != null && (typeof requestKey !== "string" || requestKey.length > 160)) throw new HttpError(400, "Invalid request key.");
+    const contentKey = crypto.createHash("sha256").update(JSON.stringify([user.id, text, url, !!isTraining, corrects, origin,
+      files.map(f => [f.originalname, f.size, crypto.createHash("sha256").update(fs.readFileSync(f.path)).digest("hex")])])).digest("hex");
+    const submissionKey = crypto.createHash("sha256").update(JSON.stringify([contentKey, requestKey])).digest("hex");
+    const existing = db.prepare("SELECT id,input_json FROM investigations WHERE submission_key=? OR (content_key=? AND status IN ('queued','running')) ORDER BY created_at DESC LIMIT 1").get(submissionKey, contentKey);
+    if (existing) {
+      const paths = new Set((JSON.parse(existing.input_json).files || []).map(f => f.path));
+      for (const f of files) if (!paths.has(f.path)) safeRm(f.path);
+      return get(existing.id, user);
+    }
     const now = new Date(), ymd = new Date(now.getTime() + 3 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
     const id = nextId(db, "investigation", n => `INV-${String(n).padStart(6, "0")}`), reportId = nextId(db, `inv-${ymd}`, n => `AIVS-${ymd}-${String(n).padStart(3, "0")}`);
     const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}), ...(supplied ? { supplied } : {}) };
-    db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at,origin) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString(), origin);
+    db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at,origin,submission_key,content_key) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+      .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString(), origin, submissionKey, contentKey);
     audit(user, "Automatic investigation submitted", "investigation", id, { report_id: reportId, link: url || null, files: input.files.map(f => f.name), text_chars: text.length, training: !!isTraining });
     queue.push([id, user]); pump();
     return get(id);
@@ -129,7 +140,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         try { for (const n of fs.readdirSync(storage.tmpDir)) if (n.startsWith(`inv-${id}-link-`)) safeRm(path.join(storage.tmpDir, n)); } catch {} });
       withTimeout(job, opt.timeoutMs, "The investigation")
         .catch(e => { ctl.cancelled = true; if (!(e instanceof Cancelled)) console.error("investigation failed", id, e.message); markFailed(id, user, String(e.message || e)); })
-        .finally(() => { running.delete(id); pump(); });
+        .finally(() => { job.finally(() => { running.delete(id); pump(); }).catch(() => {}); });
     }
   }
 
@@ -236,7 +247,19 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   // ---------------------------------------------------------------- the pipeline
   async function run(id, user, ctl = { cancelled: false }) {
     const inv = row(id), input = JSON.parse(inv.input_json), training = !!input.is_training, t0 = Date.now();
-    const left = () => opt.timeoutMs - (Date.now() - t0), check = () => { if (ctl.cancelled) throw new Cancelled(); };
+    if (inv.case_id) {
+      const saved = cases.mustCase(inv.case_id); cases.requireEdit(user, saved);
+      input.text = saved.claim_text; input.files = [];
+      input.supplied = { by: user.display_name || user.username, at: nowISO(), items: ["content already preserved in the case"], continues: inv.report_id, ...(input.supplied || {}), skip_link: true, retry_saved: true };
+      input.prefetched = { ...(input.prefetched || {}), url: saved.source_url, platform: saved.source_platform, account: saved.source_account, title: saved.title, published_at: saved.published_at, published_basis: saved.published_basis, retry_saved: true, method: "saved case content reused after retry" };
+    }
+    const left = () => opt.timeoutMs - (Date.now() - t0), check = () => {
+      if (ctl.cancelled) throw new Cancelled();
+      const activeUser = db.prepare("SELECT * FROM users WHERE id=? AND active=1").get(user.id);
+      if (!activeUser || !can(activeUser, "case.create")) throw new HttpError(403, "The requesting account no longer has permission to run this investigation.");
+      const current = row(id);
+      if (current?.case_id && !cases.canEditCase(activeUser, cases.mustCase(current.case_id))) throw new HttpError(403, "This case is no longer editable by the requesting account.");
+    };
     // time for one step: never more than its own ceiling, and always leaving 30 s to write the report
     const budget = cap => Math.min(cap, left() - 30000);
     // 0 ---- source detection: platform, kind of content, post or video identifier, earlier investigations of the same link
@@ -262,7 +285,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     let fb = null;
     const S = input.supplied || null;
     if (S) { src.provenance = { original_link: input.url || null, platform: null, supplied_by: S.by, supplied_at: S.at, items: S.items, continues: S.continues, earlier_reason: S.earlier_reason || null };
-      if (S.skip_link) src.notes.push(`Automatic extraction was not tried again: it was restricted in report ${S.continues}${S.earlier_reason ? ` (${String(S.earlier_reason).slice(0, 200)})` : ""}. The original link is kept.`); }
+      if (S.retry_saved) src.notes.push("Retry reused the saved case content and evidence; no new case was created.");
+      else if (S.skip_link) src.notes.push(`Automatic extraction was not tried again: it was restricted in report ${S.continues}${S.earlier_reason ? ` (${String(S.earlier_reason).slice(0, 200)})` : ""}. The original link is kept.`); }
     if (S?.skip_link && input.url) { const L = parseSourceLink(input.url); src.platform = L?.platform?.replace(/ \(website\)$/, "") || (/facebook\.com|fb\.watch/i.test(input.url) ? "Facebook" : /instagram\.com/i.test(input.url) ? "Instagram" : null); src.account = L?.account || null; src.access = "restricted"; src.method.push("original link kept; content not retrievable automatically"); }
     else if (input.url && facebook && /(^|\.)facebook\.com$|^fb\.watch$/i.test((() => { try { return new URL(input.url).hostname; } catch { return ""; } })())) {
       fb = await withTimeout(facebook(input.url), 120000, "Facebook lookup").catch(e => ({ status: "failed", attempts: [], message: e.message }));
@@ -376,7 +400,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       } else if (avOf(buf, f.name)) src.notes.push(`${f.name}: video or audio evidence is kept with the case; its frames and speech can be checked from the case (capture frames, transcribe). Its content is not read automatically here.`);
       else src.notes.push(`${f.name}: this file type is not supported here (use an image, video, PDF or Word .docx).`);
     }
-    if (input.text) { parts.unshift(input.text); src.method.push(P?.screenshot ? "main post text read from the screenshot by OCR (comments, advertisements and interface text left out)" : P ? "post text as returned by the platform API" : S ? "post text pasted by the analyst (not retrieved automatically)" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
+    if (input.text) { parts.unshift(input.text); src.method.push(P?.retry_saved ? "saved case content reused" : P?.screenshot ? "main post text read from the screenshot by OCR (comments, advertisements and interface text left out)" : P ? "post text as returned by the platform API" : S ? "post text pasted by the analyst (not retrieved automatically)" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
     if (!input.url && !input.files.length && !P) src.input_type = "text";
     // the original source named by the analyst (for example the article a post shares): retrieved and kept; its text is analysed
     // only when nothing else was supplied
@@ -411,8 +435,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
 
     // create the case (only when there is content to investigate)
     check();
-    let caseId = null; const linkByMedia = {};
-    if (content) {
+    let caseId = inv.case_id || null; const linkByMedia = {};
+    if (content && !caseId) {
       const sg = suggestSource({ text: content, url: input.url || undefined });
       caseId = cases.create(user, { title: String(src.title || "").slice(0, 200) || undefined, claim_text: content, received_at: inv.created_at, priority: "routine", is_training: training,
         source_platform: String(src.platform || sg.platform || (input.files.length ? "Uploaded file" : "Pasted text")).slice(0, 200), source_account: src.account || sg.account || null, source_url: src.url || input.url || sg.url || null,
@@ -465,8 +489,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           const norm = t => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(), C = norm(content), have = new Set(claims.map(c => norm(c.text)));
           const got = (Array.isArray(out?.claims) ? out.claims : []).map(x => String(x).replace(/\s+/g, " ").trim()).filter(x => x.length >= 12 && x.length <= 400);
           const kept = got.filter(x => C.includes(norm(x)) && ![...have].some(h => h.includes(norm(x)) || norm(x).includes(h)));
-          for (const t of kept.slice(0, 6)) cases.addClaim(user, caseId, { text: t, kind: "statement", origin: "ai" });
-          aiClaims = { model: aiC.model, proposed: got.length, kept: kept.length, rejected: got.length - kept.filter(x => C.includes(norm(x))).length };
+          cases.proposeClaims(caseId, kept.map(text => ({ text, kind: "statement", origin: "ai" })), "AI extraction");
+          aiClaims = { model: aiC.model, proposed: got.length, kept: 0, candidates_saved: kept.length, rejected: got.length - kept.filter(x => C.includes(norm(x))).length };
           if (kept.length) claims = cases.aggregate(caseId).claims.filter(c => !c.removed).map(c => { const e = extractEntities(c.text); return { ...c, names: [...e.locations, ...e.orgs] }; });
         } catch (e) { if (e instanceof Cancelled) throw e; src.notes.push(`AI claim extraction was not used (${e.message}).`); }
         // the AI's reading of the content: language, narratives, tone, possibly misleading claims, entities, places, dates and
@@ -477,15 +501,13 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         }
       }
     }
+    if (caseId) cases.assertReportClaims(caseId);
     if (src.video_only) claims = [];   // the description of the submission is not a claim
-    // at most two principal claims (1.32): the most significant, relevant and verifiable; duplicates combined; the others are
-    // kept in the case and listed in the report as further statements
+    // All saved case claims belong to the report scope; extra statements are candidates.
     let otherClaims = [], principalBy = "rules";
-    if (claims.length) {
-      const sel = await selectPrincipal(user, caseId, claims, content, training, () => budget(config.ai.timeoutMs || 90000));
-      principalBy = sel.by; otherClaims = claims.filter(c => !sel.ids.includes(c.id)); claims = sel.ids.map(id => claims.find(c => c.id === id));
-      if (sel.note) src.notes.push(sel.note);
-    }
+    // All saved case claims are in scope. Ranking may not silently remove one.
+    // Additional extracted statements remain in claim_candidates for review.
+    if (claims.length) principalBy = "case records";
     const flags = content ? redFlags(content) : [], inj = content ? injectionFlags(content) : [], ent = content ? extractEntities(content) : {}, tags = content ? extractHashtags(content) : [];
     const ioCtx = caseRow ? social.ioContext({ account: caseRow.source_account, text: caseRow.claim_text, training }) : null;
     const checkable = claims.filter(c => !["media", "timing", "location"].includes(c.kind) && (!c.claim_type || c.claim_type === "factual"));
@@ -656,6 +678,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   async function regenerate(user, id) {
     const rw = row(id); if (!rw) throw new HttpError(404, "No such investigation.");
     if (rw.status !== "done" || !rw.result_json) throw new HttpError(409, "The investigation has not finished yet.");
+    if (rw.case_id) cases.assertReportClaims(rw.case_id);
     const r = JSON.parse(rw.result_json); if (r.blocked) throw new HttpError(409, "There is no content to report on yet. Continue the investigation with the post's text or a screenshot first.");
     const aiState = await aiReady(user, r.training), notes = [];
     r.io_assessment = await writeAssessment(user, r, aiState, () => config.ai.timeoutMs || 90000, () => {}, notes);
@@ -909,6 +932,20 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   const idle = () => !running.size && !queue.length;
   async function close() { if (worker) { await worker.terminate().catch(() => {}); worker = null; } }
+  function retry(user, id) {
+    const inv = row(id); if (!inv) throw new HttpError(404, "No such investigation.");
+    if (inv.created_by !== user.id && user.role !== "admin") throw new HttpError(403, "Only the requester or an administrator can retry this investigation.");
+    if (!can(user, "case.create")) throw new HttpError(403, "Your role cannot start investigations.");
+    if (inv.case_id) cases.requireEdit(user, cases.mustCase(inv.case_id));
+    if (inv.status !== "failed") return get(id, user);
+    if (inv.content_key && db.prepare("SELECT 1 FROM investigations WHERE content_key=? AND id!=? AND status IN ('queued','running')").get(inv.content_key, inv.id)) throw new HttpError(409, "A matching investigation is already running.");
+    if (running.has(inv.id)) throw new HttpError(409, "The previous attempt is still stopping. Retry shortly.");
+    const input = JSON.parse(inv.input_json);
+    if (!inv.case_id && input.files?.some(f => !fs.existsSync(f.path))) throw new HttpError(409, "The original upload is no longer in temporary storage. Supply the original file again; no existing case will be replaced.");
+    db.prepare("UPDATE investigations SET status='queued',error=NULL,completed_at=NULL,stages_json=? WHERE id=? AND status='failed'").run(JSON.stringify(STAGES.map(([key,label]) => ({key,label,status:'pending',detail:null}))), inv.id);
+    audit(user, "Automatic investigation retried", "investigation", inv.id, { case_id: inv.case_id });
+    queue.push([inv.id, user]); pump(); return get(id, user);
+  }
   // continue an investigation whose content could not be read automatically (or was incomplete): the same link, plus what the
   // analyst supplies (pasted text, a screenshot, image or video evidence, the original source's link). The earlier investigation is
   // kept; the new one records that its content was supplied by the analyst, not retrieved.
@@ -925,5 +962,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
   const visionCheck = () => mediacheck.visionCheck();
-  return { useCaseReports, autoSubmit, ocr, useVideo, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
+  return { retry, useCaseReports, autoSubmit, ocr, useVideo, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
 }

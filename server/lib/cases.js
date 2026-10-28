@@ -1,3 +1,4 @@
+import { MAX_CASE_CLAIMS, CLAIM_LIMIT_MESSAGE } from "../../shared/claim-limit.js";
 // Case domain service: aggregate reads, versioned edits, workflow transitions, local analysis.
 import { nowISO, nextId } from "./db.js";
 import { HttpError, can } from "./auth.js";
@@ -34,8 +35,41 @@ export function autoTitle(t) { const s = String(t || "").trim(), first = s.repla
 export function cleanTags(v) { let a = v; if (typeof v === "string") { try { a = JSON.parse(v); } catch { a = v.split(/[\s,]+/); } } if (!Array.isArray(a)) a = [];
   return [...new Set(a.map(x => String(x).trim()).filter(Boolean).map(x => "#" + x.replace(/^#+/, "")).filter(x => /^#[\p{L}\p{N}_]{1,60}$/u.test(x)))].slice(0, 50); }
 export function makeCases(db, { audit, allowSelfApproval = false, isTest = false }) {
+  db.prepare("UPDATE cases SET status='analysis_failed', analysis_error='The server stopped during analysis. Retry the task; existing claims and evidence were retained.' WHERE status='analysing'").run();
   const getCase = id => db.prepare("SELECT * FROM cases WHERE id = ?").get(id);
   const mustCase = id => { const c = getCase(id); if (!c) throw new HttpError(404, `Case ${id} not found.`); return c; };
+
+  const claimCount = id => db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id = ?").get(id).n;
+  function claimCapacity(id) {
+    const total = claimCount(id), active = db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id = ? AND removed = 0").get(id).n;
+    return { used: total, active, max: MAX_CASE_CLAIMS, remaining: Math.max(0, MAX_CASE_CLAIMS - total), selection_required: active > MAX_CASE_CLAIMS };
+  }
+  function assertReportClaims(id) {
+    if (claimCapacity(id).selection_required) throw new HttpError(409, "Choose at most two claims for this older case before generating a new report. Existing claims and evidence are preserved.");
+  }
+  function requireRoom(user, id, count = 1) {
+    if (claimCount(id) + count > MAX_CASE_CLAIMS) {
+      audit(user, "Claim creation rejected: case limit", "case", id, { requested: count, maximum: MAX_CASE_CLAIMS });
+      throw new HttpError(409, CLAIM_LIMIT_MESSAGE);
+    }
+  }
+  function proposeClaims(id, items, source = "analysis") {
+    mustCase(id);
+    const ins = db.prepare("INSERT OR IGNORE INTO claim_candidates(case_id,text,kind,origin,source_ref,created_at) VALUES (?,?,?,?,?,?)");
+    db.transaction(() => { for (const x of items) {
+      const text = String(x.text || "").trim().slice(0, 2000); if (text) ins.run(id, text, x.kind || "statement", x.origin || "extracted", source, nowISO());
+    } })();
+  }
+  function selectClaims(user, id, ids) {
+    const c = mustCase(id); requireEdit(user, c);
+    if (!Array.isArray(ids) || !ids.length || ids.length > MAX_CASE_CLAIMS || new Set(ids).size !== ids.length) throw new HttpError(400, "Choose one or two existing claims.");
+    const active = db.prepare("SELECT id FROM claims WHERE case_id = ? AND removed = 0").all(id);
+    if (ids.some(cid => !active.some(cl => cl.id === cid))) throw new HttpError(400, "Choose claims belonging to this case.");
+    if (active.length <= MAX_CASE_CLAIMS) throw new HttpError(409, "This case does not need a legacy claim selection.");
+    change(user, id, "Legacy claim selection confirmed", () => {
+      for (const cl of active) if (!ids.includes(cl.id)) db.prepare("UPDATE claims SET removed = 1 WHERE id = ?").run(cl.id);
+    }, { selected: ids, note: "Other claims and their evidence links remain in the historical record." });
+  }
 
   function aggregate(id, { forUser } = {}) {
     const c = mustCase(id);
@@ -75,7 +109,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     return {
       case: { ...c, hashtags: JSON.parse(c.hashtags || "[]"), status_label: STATES[c.status], conclusion_label: CONCLUSIONS[c.conclusion] || null, assigned: u(c.assigned_to), creator: u(c.created_by), submitter: u(c.submitted_by), decider: u(c.decided_by), investigation: db.prepare("SELECT id, report_id FROM investigations WHERE case_id = ? ORDER BY created_at DESC LIMIT 1").get(id) || null },
       media, matches, claims, evidence, notes, ocr, transcripts, checklist, related, retrievals, aiRuns, reports, versions, users: Object.fromEntries(Object.entries(users).map(([k, v]) => [k, v.display_name])),
-      expectedConclusion: expectedConclusion(claims), perms, thresholds: THRESH
+      tasks: db.prepare("SELECT id,kind,status,error FROM case_tasks WHERE case_id=? ORDER BY id DESC LIMIT 10").all(id), claimCapacity: claimCapacity(id), claimCandidates: db.prepare("SELECT * FROM claim_candidates WHERE case_id = ? ORDER BY id").all(id), expectedConclusion: expectedConclusion(claims), perms, thresholds: THRESH
     };
   }
 
@@ -182,15 +216,15 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
   }
 
   // ---------------------------------------------------------------- analysis (local)
-  const running = new Set();
+  const running = new Map();
   function startAnalysis(user, id) {
     const c = mustCase(id);
+    if (!canEditCase(user, c)) throw new HttpError(403, "You cannot analyse this case.");
+    if (running.has(id)) return running.get(id);
     requireEdit(user, c);
-    if (running.has(id)) throw new HttpError(409, "Analysis is already running for this case.");
     const media = db.prepare("SELECT COUNT(*) n FROM media WHERE case_id = ?").get(id).n;
     change(user, id, c.status === "analysis_failed" ? "Analysis retried" : c.status === "analyst_review" ? "Analysis re-run" : "Analysis started", () =>
       db.prepare("UPDATE cases SET status = 'analysing', analysis_error = NULL, analysis_attempts = analysis_attempts + 1 WHERE id = ?").run(id), { media });
-    running.add(id);
     const done = new Promise(resolve => setImmediate(async () => {
       try { await analyse(user, id); change(user, id, "Analysis completed", () => db.prepare("UPDATE cases SET status = 'analyst_review' WHERE id = ?").run(id)); }
       catch (e) {
@@ -198,6 +232,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
         change(user, id, "Analysis failed", () => db.prepare("UPDATE cases SET status = 'analysis_failed', analysis_error = ? WHERE id = ?").run(String(e.message || e).slice(0, 500), id), { error: String(e.message || e) });
       } finally { running.delete(id); resolve(); }
     }));
+    running.set(id, done);
     return done;
   }
 
@@ -207,9 +242,11 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     const media = db.prepare("SELECT * FROM media WHERE case_id = ?").all(id);
     // claims: extract once, on first analysis, from the working claim text
     let claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(id);
-    if (!claims.length) {
+    if (!claimCount(id)) {
+      const candidates = extractClaims(c.claim_text, media.length > 0);
+      proposeClaims(id, candidates);
       const ins = db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)");
-      extractClaims(c.claim_text, media.length > 0).forEach((x, i) => ins.run(nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`), id, i + 1, x.text, "extracted", x.kind, null, nowISO()));
+      candidates.slice(0, MAX_CASE_CLAIMS).forEach((x, i) => ins.run(nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`), id, i + 1, x.text, "extracted", x.kind, null, nowISO()));
       claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(id);
     }
     const timing = claims.find(x => x.kind === "timing"), mediaClaim = claims.find(x => x.kind === "media");
@@ -307,22 +344,29 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     if (text.length < 20) throw new HttpError(409, "This document has no readable text yet. If it is scanned, read its pages with OCR first.");
     const have = new Set(db.prepare("SELECT lower(text) t FROM claims WHERE case_id = ? AND removed = 0").all(c.id).map(r => r.t));
     const found = extractClaims(text.slice(0, 30000), false).filter(x => x.kind !== "media" && x.text.length >= 20 && !have.has(x.text.toLowerCase())).slice(0, 15);
+    proposeClaims(c.id, found, `document:${m.id}`);
     if (!found.length) return { added: 0 };
+    requireRoom(user, c.id);
+    const eligible = found.slice(0, claimCapacity(c.id).remaining);
     change(user, c.id, `${found.length} claim(s) proposed from document ${m.id} (${m.original_name})`, () => {
       let seq = db.prepare("SELECT COALESCE(MAX(seq),0) s FROM claims WHERE case_id = ?").get(c.id).s;
       const ins = db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)");
-      for (const x of found) ins.run(nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`), c.id, ++seq, x.text.slice(0, 1000), "extracted", x.kind, user.id, nowISO());
+      for (const x of eligible) ins.run(nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`), c.id, ++seq, x.text.slice(0, 1000), "extracted", x.kind, user.id, nowISO());
     }, { media_id: m.id });
-    return { added: found.length };
+    return { added: eligible.length, proposed: found.length };
   }
   function addClaim(user, caseId, { text, kind = "statement", origin = "analyst" }) {
     const c = mustCase(caseId); requireEdit(user, c);
     if (!String(text || "").trim()) throw new HttpError(400, "Claim text is required.");
     if (!["statement", "timing", "media", "location", "attribution"].includes(kind)) throw new HttpError(400, "Unknown claim type.");
-    const seq = (db.prepare("SELECT MAX(seq) m FROM claims WHERE case_id = ?").get(caseId).m || 0) + 1;
-    const cid = nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`);
-    change(user, caseId, `Claim ${seq} added`, () => db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)").run(cid, caseId, seq, String(text).trim().slice(0, 2000), origin === "ai" ? "ai" : "analyst", kind, user.id, nowISO()));
-    return cid;
+    requireRoom(user, caseId);
+    return db.transaction(() => {
+      requireRoom(user, caseId);
+      const seq = (db.prepare("SELECT MAX(seq) m FROM claims WHERE case_id = ?").get(caseId).m || 0) + 1;
+      const cid = nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`);
+      change(user, caseId, `Claim ${seq} added`, () => db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)").run(cid, caseId, seq, String(text).trim().slice(0, 2000), origin === "ai" ? "ai" : "analyst", kind, user.id, nowISO()));
+      return cid;
+    }).immediate();
   }
   const mustClaim = id => { const x = db.prepare("SELECT * FROM claims WHERE id = ?").get(id); if (!x) throw new HttpError(404, "Claim not found."); return x; };
   function updateClaim(user, claimId, body) {
@@ -342,7 +386,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
   }
   function removeClaim(user, claimId) {
     const cl = mustClaim(claimId), c = mustCase(cl.case_id); requireEdit(user, c);
-    change(user, c.id, `Claim ${cl.seq} removed`, () => { db.prepare("UPDATE claims SET removed = 1 WHERE id = ?").run(claimId); db.prepare("DELETE FROM evidence_links WHERE claim_id = ?").run(claimId); });
+    change(user, c.id, `Claim ${cl.seq} removed`, () => { db.prepare("UPDATE claims SET removed = 1 WHERE id = ?").run(claimId); });
   }
   // split one claim into several (keeps the original as removed, for the record)
   function splitClaim(user, claimId, parts) {
@@ -350,12 +394,15 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     let list = Array.isArray(parts) && parts.length ? parts.map(p => String(p).trim()).filter(Boolean) : splitSentences(cl.text);
     if (list.length < 2) list = cl.text.split(/\s*(?:;|,? and |,? but | na | lakini )\s*/i).map(s => s.trim()).filter(s => s.split(/\s+/).length >= 3);
     if (list.length < 2) throw new HttpError(400, "This claim could not be split automatically. Edit it, or add the parts as separate claims.");
-    const ids = [];
+    if (cl.removed) throw new HttpError(409, "Removed claims cannot be split.");
+    requireRoom(user, c.id, list.length - 1);
+    const ids = [claimId];
     change(user, c.id, `Claim ${cl.seq} split into ${list.length} claims`, () => {
-      db.prepare("UPDATE claims SET removed = 1 WHERE id = ?").run(claimId);
+      requireRoom(user, c.id, list.length - 1);
+      db.prepare("UPDATE claims SET text = ?, assessment = 'unassessed', rationale = NULL, assessed_by = NULL, assessed_at = NULL WHERE id = ?").run(list[0].slice(0, 2000), claimId);
       let seq = db.prepare("SELECT MAX(seq) m FROM claims WHERE case_id = ?").get(c.id).m || 0;
-      for (const t of list) { const id = nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`); ids.push(id); db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)").run(id, c.id, ++seq, t, "analyst", cl.kind, user.id, nowISO()); }
-    });
+      for (const t of list.slice(1)) { const id = nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`); ids.push(id); db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)").run(id, c.id, ++seq, t.slice(0, 2000), "analyst", cl.kind, user.id, nowISO()); }
+    }, { original_text: cl.text, note: "Re-check evidence links after splitting; original claim identity and evidence are retained." });
     return ids;
   }
 
@@ -516,6 +563,7 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     const links = db.prepare("SELECT l.* FROM evidence_links l JOIN evidence e ON e.id = l.evidence_id WHERE e.case_id = ? AND e.status = 'accepted'").all(caseId);
     // items carry a code and parameters so other views (evidence coverage, Kiswahili labels) show the same rules
     const items = [], add = (code, text, extra = {}) => items.push({ code, text, scope: extra.claim_id ? "claim" : "case", ...extra });
+    if (claims.length > MAX_CASE_CLAIMS) add("claim_limit", "Choose at most two claims for this older case before approval.");
     if (!claims.length) add("no_claims", "Add at least one claim.");
     for (const cl of claims) {
       if (cl.assessment === "unassessed") add("unassessed", `Claim ${cl.seq} has no assessment.`, { claim_id: cl.id, seq: cl.seq });
@@ -610,6 +658,6 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
     audit(user, "Note deleted", "case", n.case_id, { note: n.id });
   }
 
-  return { claimsFromDocument, addNote, editNote, deleteNote, getCase, mustCase, aggregate, canEditCase, requireEdit, create, update, assign, startAnalysis, isRunning: id => running.has(id),
+  return { claimCapacity, assertReportClaims, proposeClaims, selectClaims, claimsFromDocument, addNote, editNote, deleteNote, getCase, mustCase, aggregate, canEditCase, requireEdit, create, update, assign, startAnalysis, isRunning: id => running.has(id),
     addClaim, updateClaim, removeClaim, splitClaim, addEvidence, accountLocationCandidates, setAccountLocation, updateEvidence, setChecklist, addOcr, editOcr, readiness, submit, decide, archiveCase, revise, snapshot, change };
 }

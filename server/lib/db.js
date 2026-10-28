@@ -319,7 +319,12 @@ function mig23(db) {
     t REAL NOT NULL, origin TEXT, dhash TEXT, phash TEXT, dhash_m TEXT, phash_m TEXT, embedding TEXT, ocr_text TEXT, created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS video_keyframes_analysis ON video_keyframes(analysis_id);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+function mig24(db) {
+  if (!db.prepare("PRAGMA table_info(investigations)").all().some(c => c.name === "submission_key")) db.exec("ALTER TABLE investigations ADD COLUMN submission_key TEXT");
+  if (!db.prepare("PRAGMA table_info(investigations)").all().some(c => c.name === "content_key")) db.exec("ALTER TABLE investigations ADD COLUMN content_key TEXT");
+  db.exec(fs.readFileSync(new URL("./migration-024.sql", import.meta.url), "utf8"));
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }, { fn: mig24 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

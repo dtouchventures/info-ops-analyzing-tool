@@ -16,6 +16,7 @@ export const App = {
 try { App.scope = sessionStorage.getItem("aivs-scope") === "training" ? "training" : "real"; } catch {}
 
 const ROUTES = [
+  [/^#\/tasks$/, () => import("./pages/tasks.js"), "tasks"],
   [/^#\/?$|^#\/home$/, () => import("./pages/home.js"), "home"],
   [/^#\/start$/, () => import("./pages/start.js"), "start"],
   [/^#\/dashboard$/, () => import("./pages/dashboard.js"), "dashboard"],
@@ -53,7 +54,8 @@ function shell() {
     ["live", "#/live", "Live Monitoring", "live"],
     ["watch", "#/watch", "AI Watchlist", "watch"],
     ["reports", "#/reports", "Reports", "reports"],
-    ["settings", "#/settings", "Settings", "admin"]
+    ["settings", "#/settings", "Settings", "admin"],
+    ["tasks", "#/tasks", "Background tasks", "cases"]
   ];
   const more = App.guided() ? [] : OTHER_TOOLS.filter(([k]) => k !== "new" || App.can("case.create")).filter(([k]) => k !== "verify" || App.can("case.create"));
   $("#root").innerHTML = `<div class="shell">
@@ -65,7 +67,7 @@ function shell() {
     </aside>
     <div class="main">
       <div class="topbar"><div class="crumbs" id="crumbs"></div>
-        <div class="right"><div class="scope mode" role="group" aria-label="Interface mode" title="Guided shows one next step at a time; Advanced shows every tool"><button data-mode="guided" class="${App.guided() ? "on" : ""}">Guided</button><button data-mode="advanced" class="${App.guided() ? "" : "on"}">Advanced</button></div><span class="small sub">Records:</span><div class="scope" role="group" aria-label="Which records to show">
+        <div class="right"><a href="#/tasks" class="small" id="taskStatus">Background tasks</a><div class="scope mode" role="group" aria-label="Interface mode" title="Guided shows one next step at a time; Advanced shows every tool"><button data-mode="guided" class="${App.guided() ? "on" : ""}">Guided</button><button data-mode="advanced" class="${App.guided() ? "" : "on"}">Advanced</button></div><span class="small sub">Records:</span><div class="scope" role="group" aria-label="Which records to show">
           <button data-scope="real" class="${App.training ? "" : "on"}">Operational</button><button data-scope="training" class="train ${App.training ? "on" : ""}">Training</button></div></div></div>
       ${App.training ? `<div class="trainbar">Training mode — synthetic practice cases and archive records. They are kept separate from operational records and never match them.</div>` : ""}
       <div id="subnav"></div><main class="page" id="page" tabindex="-1"></main>
@@ -87,7 +89,7 @@ async function route() {
   const h = location.hash || "#/home", seq = ++routeSeq;
   const r = ROUTES.find(([re]) => re.test(h));
   if (!r) { location.hash = "#/home"; return; }
-  const group = Object.keys(GROUPS).find(g => GROUPS[g].includes(r[2]));
+  const group = r[2] === "tasks" ? "tasks" : Object.keys(GROUPS).find(g => GROUPS[g].includes(r[2]));
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", a.dataset.nav === group || a.dataset.nav === `x-${r[2]}`));
   const sn = $("#subnav"); if (sn) sn.innerHTML = group === "verify" ? `<nav class="subnav" aria-label="Verify Information">${[App.can("case.create") && ["investigate", "#/investigate", "Analyze information"], ["cases", "#/cases", "Cases"], ["review", "#/review", "Review queue"]].filter(Boolean).map(([k, hr, l]) => `<a href="${hr}" class="${k === r[2] || (k === "investigate" && r[2] === "start") ? "on" : ""}"${k === r[2] ? ' aria-current="page"' : ""}>${l}</a>`).join("")}</nav>` : "";
   const nm = $("#navMore"); if (nm && nm.querySelector(".on")) nm.open = true;
@@ -182,3 +184,11 @@ async function start() {
 window.addEventListener("hashchange", route);
 window.addEventListener("aivs:signedout", () => { if (App.me) { App.me = null; loginView("Your session ended. Sign in again."); } });
 start();
+
+setInterval(async () => {
+  if (!App.me || document.hidden || !document.getElementById("taskStatus")) return;
+  try {
+    const data = await api.get("/api/tasks"), active = data.tasks.filter(t => ["pending", "processing"].includes(t.status)).length + (data.investigations || []).filter(t => ["Pending", "Processing"].includes(t.status_label)).length;
+    const link = document.getElementById("taskStatus"); if (link) link.textContent = `Background tasks${active ? ` (${active})` : ""}`;
+  } catch { /* The task page presents connection errors; do not disturb active editing. */ }
+}, 5000);

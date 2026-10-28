@@ -138,7 +138,8 @@ test("revision after approval keeps the approved report", async () => {
 
 test("claims can be split; OCR keeps the original extraction", async () => {
   const agg = (await ana.get(`/api/cases/${caseId}`)).body;
-  const cl = await ana.post(`/api/cases/${caseId}/claims`, { text: "The trucks were abandoned and the soldiers walked back to base." });
+  const splitCase = (await ana.post('/api/cases', { claim_text: 'A separate case for the split operation.' })).body.id;
+  const cl = await ana.post(`/api/cases/${splitCase}/claims`, { text: "The trucks were abandoned and the soldiers walked back to base." });
   const sp = await ana.post(`/api/claims/${cl.body.id}/split`, {});
   assert.equal(sp.status, 200); assert.equal(sp.body.ids.length, 2);
   const o = await ana.post(`/api/media/${mediaId}/ocr`, { engine: "tesseract.js 5.1.1", lang: "eng+swa", confidence: 71, text: "Dated 14 0ctober 1968" });

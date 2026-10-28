@@ -27,3 +27,20 @@ export const api = {
     });
   }
 };
+
+// Request IDs are idempotency keys, not credentials. getRandomValues also works
+// in the app's existing private-network browser deployment.
+export const newTaskKey = () => [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, "0")).join("");
+const pendingTaskKeys = new Map();
+api.queueTask = async (caseId, kind, input = {}) => {
+  const identity = JSON.stringify([caseId, kind, input]), storageKey = `aivs-pending-task:${identity}`;
+  let key = pendingTaskKeys.get(identity);
+  try { key ||= sessionStorage.getItem(storageKey); } catch {}
+  key ||= newTaskKey(); pendingTaskKeys.set(identity, key);
+  try { sessionStorage.setItem(storageKey, key); } catch {}
+  // Keep the same key if the response is lost, including across a refresh.
+  const result = await api.post(`/api/cases/${encodeURIComponent(caseId)}/tasks`, { kind, input, request_key: key });
+  pendingTaskKeys.delete(identity);
+  try { sessionStorage.removeItem(storageKey); } catch {}
+  return result;
+};

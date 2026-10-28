@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Automatic investigation (1.22): the ten required scenarios plus AI, failure and security cases. Each runs the whole
 // pipeline through the API against local test doubles (a news site, Google Fact Check, Brave, GDELT, Wikipedia, the X
 // embed service and an Ollama server), so the expected outcome of every scenario is known in advance. OCR (Tesseract.js),
@@ -51,7 +52,7 @@ const png = async lines => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000
 const form = (fields, files = []) => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, v); for (const [name, buf, type] of files) fd.append("files", new Blob([buf], { type }), name); return fd; };
 
 async function investigate(client, fields, files) {
-  const r = await client.post("/api/investigations", undefined, { form: form(fields, files) });
+  const r = await client.post("/api/investigations", undefined, { form: form({ ...fields, request_key: crypto.randomUUID() }, files) });
   assert.equal(r.status, 202, JSON.stringify(r.body));
   for (let i = 0; i < 600; i++) { const g = await client.get(`/api/investigations/${r.body.id}`); if (["done", "failed"].includes(g.body.status)) return g.body; await new Promise(ok => setTimeout(ok, 100)); }
   throw new Error("investigation did not finish");

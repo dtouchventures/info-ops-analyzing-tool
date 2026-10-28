@@ -65,13 +65,26 @@ export async function seedCoverageDemo({ db, media, cases, storage, audit, cover
   const id = cases.create(user, { title: "Training 4 · Evidence coverage demo (SYNTHETIC)", is_training: 1, received_at: new Date(Date.now() - 3600e3).toISOString(), priority: "routine",
     source_platform: "WhatsApp forward — synthetic example",
     claim_text: "SYNTHETIC TRAINING CONTENT. FORWARDED MANY TIMES: The Kipini bridge collapsed this week and the road is closed for a month. A voice note from the county engineer confirms it. Ferry services have stopped. Share before it is deleted!" });
-  const put = async (buf, name) => { const t = path.join(storage.tmpDir, `demo-${Date.now()}-${name}`); fs.writeFileSync(t, buf); return media.ingest(t, { name, caseId: id, isTraining: 1, user }); };
+  const put = async (buf, name, caseId = id) => { const t = path.join(storage.tmpDir, `demo-${Date.now()}-${name}`); fs.writeFileSync(t, buf); return media.ingest(t, { name, caseId, isTraining: 1, user }); };
   const pdf = await put(await synthPdf(), "SYNTHETIC-county-roads-bulletin.pdf"), wav = await put(synthWav(), "SYNTHETIC-voice-note-tone.wav");
   db.prepare("UPDATE cases SET status = 'analyst_review' WHERE id = ?").run(id); cases.snapshot(id, user, "Demonstration case prepared for review");
-  const cl = t => cases.addClaim(user, id, { text: t });
+  const demoIds = [id];
+  for (const part of [2, 3]) {
+    const next = cases.create(user, { title: `Training 4 · Evidence coverage demo part ${part} (SYNTHETIC)`, is_training: 1, claim_text: "SYNTHETIC TRAINING: recording, ferry services and forwarding labels.", source_platform: "Synthetic training example" });
+    db.prepare("UPDATE cases SET status='analyst_review' WHERE id=?").run(next); demoIds.push(next);
+  }
+  const demoMedia = { [id]: { pdf, wav } };
+  for (const next of demoIds.slice(1)) demoMedia[next] = { pdf: await put(await synthPdf(), `SYNTHETIC-bulletin-${next}.pdf`, next), wav: await put(synthWav(), `SYNTHETIC-tone-${next}.wav`, next) };
+  let claimIndex = 0;
+  const cl = t => cases.addClaim(user, demoIds[Math.floor(claimIndex++ / 2)], { text: t });
   const c1 = cl("The Kipini bridge collapsed this week."), c2 = cl("The road is closed for a month."), c3 = cl("A voice note from the county engineer confirms it."),
     c4 = cl("Ferry services have stopped."), c5 = cl("The content was forwarded many times.");
-  const ev = (b) => cases.addEvidence(user, id, b);
+  const claimCase = cid => db.prepare("SELECT case_id FROM claims WHERE id=?").get(cid).case_id;
+  const ev = b => {
+    const target = claimCase(b.links[0].claim_id);
+    const mediaId = b.media_id === pdf.id ? demoMedia[target].pdf.id : b.media_id === wav.id ? demoMedia[target].wav.id : b.media_id;
+    return cases.addEvidence(user, target, { ...b, ...(mediaId ? { media_id: mediaId } : {}) });
+  };
   const e1 = ev({ kind: "source_claim", text: "SYNTHETIC: The county roads bulletin says the Kipini crossing remained open and inspection teams recorded no structural damage.", reference: "SYNTHETIC county roads bulletin No. 14, section 1", media_id: pdf.id, loc_page: 1, links: [{ claim_id: c1, stance: "contradicts" }] });
   const e2 = ev({ kind: "source_claim", text: "SYNTHETIC: The bulletin announces maintenance closing one lane for two days from 3 March, not a full closure for a month.", reference: "SYNTHETIC county roads bulletin No. 14, section 2", media_id: pdf.id, loc_page: 2, links: [{ claim_id: c2, stance: "contradicts" }] });
   const e3 = ev({ kind: "observation", text: "SYNTHETIC: The analyst saw a lane-closure notice at the approach road in a photo shared by the county office.", reference: "SYNTHETIC county office photo, https://example.org/synthetic/kipini-notice", links: [{ claim_id: c2, stance: "supports" }] });
@@ -88,8 +101,8 @@ export async function seedCoverageDemo({ db, media, cases, storage, audit, cover
   const sid = `E-${String(db.prepare("INSERT INTO counters(name,value) VALUES ('evidence',1) ON CONFLICT(name) DO UPDATE SET value = value + 1 RETURNING value").get().value).padStart(6, "0")}`;
   cases.change(user, id, `Evidence ${sid} suggested (training demo)`, () => db.prepare("INSERT INTO evidence(id,case_id,kind,origin,status,text,reference,suggested_links,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
     .run(sid, id, "lead", "system", "suggested", "SYNTHETIC: An earlier case recorded a similar ‘bridge collapsed’ message in 2023 that turned out to be false.", "SYNTHETIC earlier-case lead", JSON.stringify([{ claim_id: c1, stance: "context" }]), user.id, new Date().toISOString()));
-  coverage.addGap(user, id, { claim_id: c3, kind: "next_step", text: "SYNTHETIC: Ask the county communications office whether the engineer recorded any voice note this week." });
+  coverage.addGap(user, claimCase(c3), { claim_id: c3, kind: "next_step", text: "SYNTHETIC: Ask the county communications office whether the engineer recorded any voice note this week." });
   coverage.addGap(user, id, { claim_id: c1, kind: "question", text: "SYNTHETIC: Is there a second, independent source on the state of the crossing (for example a ferry operator)?" });
   audit(user, "Evidence coverage demonstration case loaded", "settings", "training", { case: id, evidence: [e1, e2, e3, e5, e6, sid] });
-  return { created: true, case_id: id, message: `Loaded the evidence coverage demonstration case ${id} (training records, all SYNTHETIC).` };
+  return { created: true, case_id: id, case_ids: demoIds, message: `Loaded ${demoIds.length} evidence coverage demonstration cases (at most two claims each; all SYNTHETIC).` };
 }
