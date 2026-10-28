@@ -38,3 +38,12 @@ test("AI drafting cannot upgrade or remove the evidence judgement", () => {
   const result = checkAiSections({ assessment: "It is highly likely that this is false. ".repeat(15) }, base);
   assert.equal(result.assessment, base.assessment);
 });
+
+test("recommendations assign IO tasks and keep likely/unlikely reasoning tied to evidence", async () => {
+  const { informationTasks } = await import("../shared/information-tasks.js");
+  assert.match(informationTasks("supported", "It is highly likely that the assessed claim is accurate, based on strong evidence.")[0], /highly likely.*accurate/);
+  assert.match(informationTasks("contradicted", "It is likely that the assessed claim is false, based on substantive evidence.")[0], /unlikely.*accurate/);
+  const uncertain = informationTasks("insufficient", "Insufficient evidence to assess.");
+  assert.match(uncertain[0], /likelihood cannot yet be assessed/);
+  assert.ok(uncertain.every(x => /task|monitor|review/i.test(x)));
+});

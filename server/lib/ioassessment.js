@@ -1,3 +1,4 @@
+import { informationTasks } from "../../shared/information-tasks.js";
 import { fit as serviceFit, html as serviceHtml, pdf as servicePdf, docx as serviceDocx } from "./formal-print.js";
 // AIVS — KDF Information Operations Assessment (1.25; four-section format and HOD approval 1.32): a one-page product.
 // Built automatically from a completed investigation: exactly four sections (Executive Summary / Background Information,
@@ -188,7 +189,7 @@ export function buildAssessment(r, { priority = null } = {}) {
     rec.push(`${REC_PREFIX} prepare a source-and-context brief for authorised review, identifying the evidence gaps before any public clarification.`);
     rec.push(`${REC_PREFIX} preserve the submitted image and submit new contextual evidence for reassessment without presuming authenticity or hostile intent.`);
   }
-  let recommendations = [...new Set(rec)].slice(0, 5);
+  let recommendations = informationTasks(o.verdict, judgement, {imageOnly: !main && kind === "image", reference: refs.length ? `[${refs[0].n}]` : ""});
   while (recommendations.length < 3) recommendations.push(`${REC_PREFIX} keep the subject under review as new information becomes available.`);
   while (words(recommendations.join(" ")) > LIMITS.recommendations[1] && recommendations.length > 3) recommendations.splice(recommendations.length - 2, 1);
 
@@ -225,7 +226,7 @@ export function checkAiSections(out, base, { hasAmplification = false, nRefs = 0
   }
   const recs = Array.isArray(out?.recommendations) ? out.recommendations.map(s => String(s).replace(/\s+/g, " ").trim()).filter(Boolean) : [];
   const good = recs.filter(s => !validRecommendation(s) && !ATTRIBUTION.test(s)), bad = recs.filter(s => validRecommendation(s) || ATTRIBUTION.test(s));
-  if (good.length >= 3 && words(good.slice(0, 5).join(" ")) <= LIMITS.recommendations[1] + 10) res.recommendations = good.slice(0, 5);
+  if ((!base.evidence_judgement || good[0] === base.recommendations[0]) && good.length >= 3 && words(good.slice(0, 5).join(" ")) <= LIMITS.recommendations[1] + 10) res.recommendations = good.slice(0, 5);
   else if (recs.length) removed.push(`recommendations: ${bad.length ? `${bad.length} not within the rules (${validRecommendation(bad[0]) || "attribution"})` : "fewer than three valid"}; rule-based recommendations kept`);
   if (["background", "analysis", "assessment"].some(k => res[k] !== base[k]) || res.recommendations !== base.recommendations) res.written_by = "ai";
   return { ...res, removed };

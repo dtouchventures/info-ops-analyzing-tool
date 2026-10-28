@@ -1,3 +1,4 @@
+import { informationTasks } from "../../shared/information-tasks.js";
 // Formal one-page report (UNIT: STRATEGIC COMMUNICATION / RESTRICTED): what it says.
 // A draft is written only from records AIVS already holds: a verification case (claims, verdicts, accepted
 // evidence, the reviewer's decision) or a social media dataset analysis. Nothing is invented: a fact that is not
@@ -128,6 +129,7 @@ export function fromCase(d, preparer) {
     } else {
       recs.push("Complete the verification and record an overall assessment before this report is used.");
     }
+    recs.splice(0, recs.length, ...informationTasks(k.value === "misleading_context" ? "misleading" : k.value, as[0], {reference:`(case ${c.id})`}).map(t => t.replace(/^There is a need to /,"")));
     if (!approved && label) recs.push(`Obtain reviewer approval of case ${c.id} before acting on this assessment.`);
 
     const concl = label
