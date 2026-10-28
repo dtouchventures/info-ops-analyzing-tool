@@ -29,4 +29,3 @@ try {
   await page.screenshot({ path: '../../outputs/login-mobile.png', fullPage: true });
   console.log('PASS: assets, empty credentials, failed/successful login, password toggle, session persistence/expiry, logout, widths 320–1440');
 } finally { await browser.close(); await s.close(); s.ctx.db.close(); }
-
