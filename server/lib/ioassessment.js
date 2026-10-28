@@ -36,6 +36,23 @@ export const IO_VERDICT = { supported: "True", contradicted: "False", misleading
   extraction_blocked: "Insufficient Evidence", insufficient_content: "Insufficient Evidence" };
 export const CONFIDENCE = { strong: "High", moderate: "Moderate", weak: "Low", none: "Low" };
 export const REC_PREFIX = "There is a need to";
+// Qualitative judgements concern the claim, not future reach, intent or identity.
+// Confidence remains a separate statement about evidence quality.
+export function evidenceJudgement(r) {
+  const verdict = r.overall?.verdict;
+  const target = { supported: "accurate", contradicted: "false", misleading: "misleading or missing essential context" }[verdict];
+  const principal = principalClaims(r);
+  const ids = new Set(principal.map(p => p.c.id));
+  const relevant = (r.evidence || []).filter(e => ids.has(e.claim_id) && !e.repeat_of && !["reference", "earlier_case"].includes(e.tier));
+  const agrees = e => verdict === "supported" ? e.stance === "supports" : verdict === "misleading" ? e.stance === "misleading" || e.stance === "contradicts" : e.stance === "contradicts";
+  const evidence = relevant.filter(e => agrees(e) && (e.page_read || e.rating) && ["official", "fact_checker", "news", "knowledge_base"].includes(e.tier));
+  const covered = principal.length && principal.every(p => evidence.some(e => e.claim_id === p.c.id));
+  const opposing = relevant.some(e => verdict === "supported" ? ["contradicts", "misleading"].includes(e.stance) : e.stance === "supports");
+  if (!target || !covered || opposing || !["moderate", "strong"].includes(r.overall?.strength)) return "Insufficient evidence to assess. The available material does not support a reliable likelihood judgement.";
+  const origins = new Set(evidence.map(e => { try { return new URL(e.source_url).hostname.replace(/^www\./, ""); } catch { return e.publisher || e.domain; } }).filter(Boolean));
+  const high = r.overall.strength === "strong" && origins.size >= 2 && principal.every(p => p.a?.strength === "strong");
+  return `It is ${high ? "highly likely" : "likely"} that the assessed claim${principal.length > 1 ? "s are" : " is"} ${target}, based on ${high ? "strong corroborating" : "the available substantive"} evidence addressing ${principal.length > 1 ? "each claim" : "the claim"}.`;
+}
 // recommendations are for the organisation's communication and review, never tasks the verification engine should have done,
 // never covert or suppressive measures
 const MANUAL = /\b(visit|check|consult|browse|look at|go to)\b[^.]{0,40}\b(website|site|page|portal)\b|\bsearch (for|the) (evidence|sources|web|internet)\b|\bverify (the|this) (information|claim|content) manually\b|\bmanual(ly)? (verification|check)\b|\bconfirm (it |this |the claim )?(from|with|on) the\b/i;
@@ -134,10 +151,6 @@ export function buildAssessment(r, { priority = null } = {}) {
   let analysis = fit(an, LIMITS.analysis[1]);
 
   // 3. ASSESSMENT (70–130 words): KDF Information Operations judgement, classification, implications, confidence and limitation
-  const open = { supported: "Available evidence establishes that the principal claim is true.", contradicted: "Available evidence establishes that the principal claim is false.",
-    misleading: "Available evidence establishes that the content is misleading or lacks essential context.", insufficient: "Available evidence does not establish whether the principal claim is accurate; it remains unverified.",
-    mixed: "Reliable sources disagree, so the principal claim remains unverified.", not_verifiable: "The content contains no factual claim that can be checked; it is unverified.",
-    extraction_blocked: "The content could not be read, so no claim could be verified.", insufficient_content: "Too little content was available to verify any claim." }[o.verdict] || `The assessment is ${ioV}.`;
   const classify = ["contradicted", "misleading"].includes(o.verdict)
     ? `It meets the description of misinformation; the evidence does not establish intent to deceive, so it cannot be classified as disinformation${cues.length ? ", although its features are common in deceptive messages" : ""}.`
     : o.verdict === "supported" ? "There is no basis to classify it as misinformation; nothing indicates genuine information being used to cause harm (malinformation)."
@@ -150,21 +163,22 @@ export function buildAssessment(r, { priority = null } = {}) {
   const unc = shot && !x.screenshot?.original?.retrieved ? "the post is known only from a screenshot; the original was not independently retrieved" : ["restricted", "failed"].includes(x.access) && !x.provenance ? "the original content could not be fully read" : x.provenance ? "the content was supplied by an analyst and could not be compared with the live post" : !ok.length ? "no independent source could be searched" : !x.author && !pub ? "the origin and date of the content are unknown" : r.evidence.filter(e => !e.repeat_of).length < 2 ? "few independent sources were found" : "the sources consulted cover only what they index";
   const vids = (r.media?.videos || []).filter(v => !v.error);
   const unc2 = vids.length && !vids.some(v => v.internet_search) && /few independent sources|cover only what they index|could not be searched/.test(unc) ? "internet-wide reverse search of the video's keyframes was not completed" : unc;
-  const as = [open, classify, impl, spread, `Significance: ${urgency}; confidence: ${conf}. Main limitation: ${unc2}.`];
+  const judgement = evidenceJudgement(r);
+  const as = [judgement, `Confidence: ${conf}. Main limitation: ${unc2}.`, classify, impl, spread, `Significance: ${urgency}.`];
   let assessment = fit(as.filter(Boolean), LIMITS.assessment[1]);
 
   // 4. RECOMMENDATIONS (3–5, each beginning "There is a need to…"): communication and review measures, never verification chores
   const rec = [];
   const firstCon = refs.find(f => f.stance === "contradicts" || f.stance === "misleading");
   if (["contradicted", "misleading"].includes(o.verdict)) {
-    rec.push(`${REC_PREFIX} issue a timely public clarification through authorised KDF channels that corrects the inaccurate claim${firstCon ? `, citing the evidence [${firstCon.n}]` : ""}.`);
+    rec.push(`${REC_PREFIX} task authorised information operations staff to prepare an evidence-linked clarification for approval${firstCon ? `, citing [${firstCon.n}]` : ""}, before any public release.`);
     rec.push(`${REC_PREFIX} raise public awareness of this ${/recruit|fee|ksh|pay|m-?pesa/i.test(text) ? "fraudulent recruitment narrative and of the official recruitment channels" : "misleading narrative"} through authorised communication.`);
   }
   if ((r.media?.videos || []).some(v => v.reuse?.length)) rec.push(`${REC_PREFIX} make the footage's earlier, verified context known through authorised KDF channels if the recycled video continues to circulate.`);
   if (o.verdict === "supported") rec.push(`${REC_PREFIX} reinforce the accurate information through authorised KDF channels where public interest warrants it.`);
   if (["insufficient", "mixed", "not_verifiable"].includes(o.verdict)) rec.push(`${REC_PREFIX} treat the narrative as unverified and avoid public statements that presume it false until evidence becomes available.`);
   if (["extraction_blocked", "insufficient_content"].includes(o.verdict)) rec.push(`${REC_PREFIX} obtain the content through permitted means so that the verification can be completed.`);
-  rec.push(`${REC_PREFIX} monitor related public narratives${r.hashtags?.length ? ` (${r.hashtags.slice(0, 2).join(" ")})` : ""} through the AIVS watchlist for renewed circulation or amplification.`);
+  rec.push(`${REC_PREFIX} monitor related public narratives${r.hashtags?.length ? ` (${r.hashtags.slice(0, 2).join(" ")})` : ""} through the JICHO AI watchlist and report observed changes in circulation without presuming coordination.`);
   if (o.verdict !== "supported") rec.push(`${REC_PREFIX} strengthen transparent institutional communication on the subject so that accurate information is readily available to the public.`);
   rec.push(`${REC_PREFIX} preserve the evidence collected and escalate significant concerns for authorised review.`);
   let recommendations = [...new Set(rec)].slice(0, 5);
@@ -175,7 +189,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   const header = { reference: r.report_id, date: eatDate(r.completed_at || r.created_at, true), subject: short(r.subject, 16), source: [x.platform, x.publisher && x.publisher !== x.platform ? x.publisher : null].filter(Boolean).join(" · ") || ({ text: "Submitted text", image: "Submitted image", document: "Submitted document", screenshot: "Screenshot" }[x.input_type] || "Not established"),
     ...(srcLabel ? { source: srcLabel } : {}), source_url: x.url || null, priority: ({ routine: "Routine", priority: "Priority", urgent: "Urgent" })[priority] || "Routine", status: "DRAFT — NOT APPROVED" };
   const obj = () => ({ title: "AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", header, background, analysis, assessment, recommendations, references: refs, claims, limitation: null,
-    verdict: o.verdict, verdict_label: ioV, strength: conf, urgency, written_by: "rules", training: !!r.training, ...(vnote ? { video_note: vnote } : {}) });
+    verdict: o.verdict, verdict_label: ioV, evidence_judgement: judgement, strength: conf, urgency, written_by: "rules", training: !!r.training, ...(vnote ? { video_note: vnote } : {}) });
   // the page stays near 480 words: sections are shortened in proportion, whole sentences only
   const pageWords = () => words(assessmentHtml(obj()).replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " "));
   const full = [words(background), words(analysis), words(assessment)];
@@ -198,7 +212,8 @@ export function checkAiSections(out, base, { hasAmplification = false, nRefs = 0
     const t = String(out?.[k] || "").replace(/\s+/g, " ").trim(); if (!t) continue;
     const bad = (t.match(/\[(\d+)\]/g) || []).map(m => +m.slice(1, -1)).filter(n => n < 1 || n > nRefs);
     const verdictOk = k !== "assessment" || !base.verdict_label || new RegExp(base.verdict_label.replace(/\s+/g, "\\s+"), "i").test(t) || (base.verdict === "contradicted" && /\bfalse\b/i.test(t)) || (base.verdict === "supported" && /\b(true|accurate)\b/i.test(t)) || (/insufficient|mixed|not_verifiable/.test(base.verdict) && /unverified|insufficient/i.test(t)) || (base.verdict === "misleading" && /misleading/i.test(t));
-    const why = bad.length ? `cites references that do not exist (${bad.join(", ")})` : PCT.test(t) ? "gives a percentage or probability" : /https?:\/\/|www\./i.test(t) ? "contains a link" : !hasAmplification && ATTRIBUTION.test(t) ? `attributes intent or coordination without data (“${t.match(ATTRIBUTION)[0]}”)` : !verdictOk ? "does not keep the evidence-based verdict" : words(t) > LIMITS[k][1] + 10 ? "is longer than allowed" : words(t) < LIMITS[k][0] - 15 ? "is too short" : null;
+    const unsupportedLikelihood = /\b(likely|unlikely|roughly even chance|realistic possibility)\b/i.test(t.replace(base.evidence_judgement || "", ""));
+    const why = base.evidence_judgement && unsupportedLikelihood ? "adds a likelihood judgement not supported by the evidence rules" : k === "assessment" && base.evidence_judgement && !t.includes(base.evidence_judgement) ? "changes or omits the evidence-based likelihood judgement" : bad.length ? `cites references that do not exist (${bad.join(", ")})` : PCT.test(t) ? "gives a percentage or probability" : /https?:\/\/|www\./i.test(t) ? "contains a link" : !hasAmplification && ATTRIBUTION.test(t) ? `attributes intent or coordination without data (“${t.match(ATTRIBUTION)[0]}”)` : !verdictOk ? "does not keep the evidence-based verdict" : words(t) > LIMITS[k][1] + 10 ? "is longer than allowed" : words(t) < LIMITS[k][0] - 15 ? "is too short" : null;
     if (why) removed.push(`${k}: ${why}`); else res[k] = fit(t.split(/(?<=[.!?])\s+/), LIMITS[k][1]);
   }
   const recs = Array.isArray(out?.recommendations) ? out.recommendations.map(s => String(s).replace(/\s+/g, " ").trim()).filter(Boolean) : [];
@@ -209,9 +224,9 @@ export function checkAiSections(out, base, { hasAmplification = false, nRefs = 0
   return { ...res, removed };
 }
 export function aiPrompt(a, facts) {
-  return `Rewrite the four sections of a one-page KDF (Kenya Defence Forces) Information Operations Assessment in formal British English, objective military reporting style. Use ONLY these facts and the draft; do not add facts, places, dates, actors or sources. Keep the evidence-based verdict exactly (${a.verdict_label || "as given"}) and the confidence level; an AI opinion is never evidence. Cite only [1]-[${a.references.length}]. Classify carefully: misinformation = false or misleading information without established intent; disinformation only where evidence shows deliberate intent to deceive; malinformation only where genuine information is used to cause harm. Do not state or imply hostile intent, coordination, foreign involvement or attribution unless the facts include such evidence; criticism of KDF or high engagement is not evidence of hostile intent. No percentages or probabilities. No links.
+  return `Rewrite the four sections of a one-page KDF (Kenya Defence Forces) Information Operations Assessment in formal British English, objective military reporting style. Use ONLY these facts and the draft; do not add facts, places, dates, actors or sources. Keep the evidence-based verdict exactly (${a.verdict_label || "as given"}) and the confidence level; an AI opinion is never evidence. Cite only [1]-[${a.references.length}]. Classify carefully: misinformation = false or misleading information without established intent; disinformation only where evidence shows deliberate intent to deceive; malinformation only where genuine information is used to cause harm. Do not state or imply hostile intent, coordination, foreign involvement or attribution unless the facts include such evidence; criticism of KDF or high engagement is not evidence of hostile intent. Preserve the first assessment judgement exactly as given; likelihood wording must follow the evidence, never the AI opinion. Keep likelihood separate from confidence. Do not introduce likelihood judgements about intent, reach or future effects. When evidence is inadequate retain "Insufficient evidence to assess." No numerical probabilities or percentages. No links.
 Sections: background = executive summary (the information, its origin, date, central narrative and significance to KDF); analysis = each of the at most two principal claims with its verdict, supporting and contradicting evidence and the main gap; assessment = what the evidence establishes, the implications for KDF's information environment and public confidence, the classification, observed dissemination, significance, confidence and the main limitation.
-Limits: background 40-80 words; analysis 80-180 words; assessment 70-130 words; 3-5 recommendations, each one sentence beginning exactly "There is a need to", oriented to KDF Information Operations (timely clarification through authorised channels, public awareness, monitoring, transparent communication, preserving evidence and authorised review). Never recommend that anyone visit websites, search for evidence or verify the claim manually; never recommend covert activity, suppressing lawful criticism or targeting individuals. If the evidence is insufficient, say so and do not presume the narrative false.
+Limits: background 40-80 words; analysis 80-180 words; assessment 70-130 words; 3-5 recommendations, each one sentence beginning exactly "There is a need to", expressed as evidence-responsive tasks for authorised Information Operations staff (timely clarification through authorised channels, public awareness, monitoring, transparent communication, preserving evidence and authorised review). Never recommend that anyone visit websites, search for evidence or verify the claim manually; never recommend covert activity, suppressing lawful criticism or targeting individuals. If the evidence is insufficient, say so and do not presume the narrative false.
 <content>
 ${JSON.stringify(facts).replace(/<\/?content/gi, "‹content").slice(0, 8000)}
 </content>
