@@ -35,6 +35,7 @@ export async function render(el, params = []) {
         <div class="tiny sub" style="margin-top:4px"><b>Reverse video search:</b> add an MP4, MOV or AVI file (or paste a link to the video file). AIVS extracts keyframes, reads on-screen text and speech, searches for earlier copies of the footage and compares them, automatically.</div>
       </details>
       ${App.training ? `<div class="callout train" style="margin-top:12px"><div>You are viewing Training records: this becomes a training investigation, kept apart from real cases.</div></div>` : ""}
+      <div class="callout" style="margin-top:12px"><div><label class="check"><input type="checkbox" id="geminiPublicImages" disabled> Use Google Gemini for these public images</label><p class="tiny sub" style="margin:6px 0">Optional. Sends copies of uploaded or linked images to Google. I confirm these images are public and cleared for external processing. Free-tier inputs and outputs may be used to improve Google products and reviewed by humans. Keep confidential material local. Gemini descriptions are unverified and do not establish authenticity or the original uploader.</p><span class="tiny sub" id="geminiStatus" role="status">Checking Gemini availability…</span></div></div>
       <div id="ierr" class="callout bad" style="margin-top:12px" hidden></div>
       <p class="tiny sub" style="margin:10px 0 0">Results are AI-generated preliminary assessments, labelled as not reviewed. AI confidence is not proof; consequential decisions need human review.</p>
     </div></div>
@@ -53,6 +54,7 @@ export async function render(el, params = []) {
       </div>
     </div>`;
   const files = $("#ifile"), err = $("#ierr");
+  api.get("/api/gemini-images/status").then(s => { if (!el.isConnected || !$("#geminiStatus", el)) return; $("#geminiPublicImages", el).disabled = !s.configured; $("#geminiStatus", el).textContent = s.configured ? `Available: ${s.model}. Off unless you select it for this submission.` : "Not configured. An administrator must set GEMINI_API_KEY and GEMINI_IMAGE_MODEL on the server. Local checks remain available."; }).catch(() => { if ($("#geminiStatus", el)) $("#geminiStatus", el).textContent = "Gemini availability could not be checked. Local checks remain available."; });
   files.onchange = () => { $("#ifiles").textContent = [...files.files].map(f => `${f.name} (${kb(f.size)})`).join(", "); };
   $("#iv").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#igo").click(); } };
   const submissionKey = newTaskKey();
@@ -67,6 +69,7 @@ export async function render(el, params = []) {
     else if (v) fd.append("text", v);
     if (t) fd.append("text", t);
     for (const f of [...files.files].slice(0, 5)) fd.append("files", f);
+    if ($("#geminiPublicImages", el).checked) fd.append("gemini_public_images", "true");
     if (App.training) fd.append("is_training", "true");
     $("#igo").disabled = true; $("#igo").textContent = "Starting…";
     try { const r = await api.upload("/api/investigations", fd); location.hash = `#/investigate/${r.id}`; }

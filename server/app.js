@@ -1252,7 +1252,7 @@ export function createApp(config) {
   // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
   api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     const b = req.body || {};
-    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true, requestKey: b.request_key || null })); }
+    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true, requestKey: b.request_key || null, geminiPublicImages: b.gemini_public_images === "true" || b.gemini_public_images === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   // ---------------------------------------------------------------- reverse video search and verification (1.35)
@@ -1297,6 +1297,7 @@ export function createApp(config) {
   api.post("/monitor/reports/:id/submit", requirePerm("report.submit"), h((req, res) => res.json(keywords.submitReport(req.user, +req.params.id, req.body || {}))));
   api.post("/monitor/reports/:id/decision", requirePerm("report.hod"), h(async (req, res) => res.json(await keywords.decideReport(req.user, +req.params.id, req.body || {}))));
   api.put("/monitor/reports/:id/assessment", requirePerm("report.submit"), h((req, res) => res.json(keywords.editAssessment(req.user, +req.params.id, req.body || {}))));
+  api.get("/gemini-images/status", h((req, res) => res.json({ configured: !!(config.geminiImages?.apiKey && config.geminiImages?.model), model: config.geminiImages?.model || null })));
   api.post("/investigations/capture", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.capture(req.user, req.body || {}))));
   api.post("/investigations/:id/retry", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.retry(req.user, req.params.id))));
   api.post("/investigations/:id/report", requirePerm("case.create"), h(async (req, res) => res.json(await investigations.regenerate(req.user, req.params.id))));

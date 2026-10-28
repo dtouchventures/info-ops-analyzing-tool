@@ -106,7 +106,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     } catch (e) { console.error("technical review record failed", id, e.message); }
   }
 
-  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null, supplied = null, requestKey = null }) {
+  function start(user, { text = "", url = "", files = [], isTraining = false, corrects = null, prefetched = null, origin = null, supplied = null, requestKey = null, geminiPublicImages = false }) {
     text = String(text || "").replace(/\r\n/g, "\n").trim(); url = String(url || "").trim();
     if (!url && /^https?:\/\/\S+$/i.test(text)) { url = text; text = ""; }
     if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "Links must start with http:// or https://.");
@@ -114,7 +114,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     if (text.length > 20000) throw new HttpError(400, "That is more than 20,000 characters. Paste the part that contains the claims.");
     if (files.length > 5) throw new HttpError(400, "Add at most 5 files to one investigation.");
     if (requestKey != null && (typeof requestKey !== "string" || requestKey.length > 160)) throw new HttpError(400, "Invalid request key.");
-    const contentKey = crypto.createHash("sha256").update(JSON.stringify([user.id, text, url, !!isTraining, corrects, origin,
+    const contentKey = crypto.createHash("sha256").update(JSON.stringify([user.id, text, url, !!isTraining, corrects, origin, geminiPublicImages === true,
       files.map(f => [f.originalname, f.size, crypto.createHash("sha256").update(fs.readFileSync(f.path)).digest("hex")])])).digest("hex");
     const submissionKey = crypto.createHash("sha256").update(JSON.stringify([contentKey, requestKey])).digest("hex");
     const existing = db.prepare("SELECT id,input_json FROM investigations WHERE submission_key=? OR (content_key=? AND status IN ('queued','running')) ORDER BY created_at DESC LIMIT 1").get(submissionKey, contentKey);
@@ -125,7 +125,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     }
     const now = new Date(), ymd = new Date(now.getTime() + 3 * 3600e3).toISOString().slice(0, 10).replace(/-/g, "");
     const id = nextId(db, "investigation", n => `INV-${String(n).padStart(6, "0")}`), reportId = nextId(db, `inv-${ymd}`, n => `AIVS-${ymd}-${String(n).padStart(3, "0")}`);
-    const input = { text, url, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}), ...(supplied ? { supplied } : {}) };
+    const input = { text, url, gemini_public_images: geminiPublicImages === true, files: files.map(f => ({ name: String(f.originalname || "file").slice(0, 200), size: f.size, path: f.path })), is_training: !!isTraining, corrects, ...(prefetched ? { prefetched } : {}), ...(supplied ? { supplied } : {}) };
     db.prepare("INSERT INTO investigations(id,report_id,is_training,status,stages_json,input_json,created_by,created_at,origin,submission_key,content_key) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
       .run(id, reportId, isTraining ? 1 : 0, "queued", JSON.stringify(STAGES.map(([key, label]) => ({ key, label, status: "pending", detail: null }))), JSON.stringify(input), user.id, now.toISOString(), origin, submissionKey, contentKey);
     audit(user, "Automatic investigation submitted", "investigation", id, { report_id: reportId, link: url || null, files: input.files.map(f => f.name), text_chars: text.length, training: !!isTraining });
@@ -559,7 +559,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     check(); setStage(id, "media", "running");
     let mediaRes = { images: [], reuse: [], services: mediacheck.status(), note: "No image was available for this investigation." };
     let mediaFailed = false;
-    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
+    if (caseId) { try { mediaRes = await mediacheck.analyse({ user, caseId, claims: checkable.length ? checkable : claims, claimDate: caseRow?.published_at || inv.created_at, links: linkByMedia, geminiPublicImages: input.gemini_public_images === true, budgetMs: Math.max(5000, budget(120000)), check }); } catch (e) { if (e instanceof Cancelled) throw e; mediaFailed = true; src.notes.push(`Image checks stopped: ${e.message}`); } }
     // video verification (1.35): local similarity, reverse search of keyframes, earlier versions, findings; verified recycled footage
     // counts as reuse in the overall verdict, possible similarities do not
     mediaRes.videos = [];
@@ -752,7 +752,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   // ---------------------------------------------------------------- reads, review, files
   function get(id, user) {
     const r = parse(row(id)); if (!r) throw new HttpError(404, "No such investigation.");
-    r.input = { text: r.input.text ? r.input.text.slice(0, 300) : "", url: r.input.url, files: (r.input.files || []).map(f => ({ name: f.name, size: f.size })), is_training: r.input.is_training };
+    r.input = { text: r.input.text ? r.input.text.slice(0, 300) : "", url: r.input.url, files: (r.input.files || []).map(f => ({ name: f.name, size: f.size })), is_training: r.input.is_training, gemini_public_images: r.input.gemini_public_images === true };
     return r;
   }
   function list({ from, to, training = false, limit = 100 } = {}) {

@@ -8,6 +8,7 @@
 // Nothing here declares an image manipulated or AI-generated. Indicators are labelled as possible and say what would be
 // needed to confirm them. Only archive or metadata dates well before the claim count as a "possible reuse" signal.
 import fs from "node:fs";
+import { describeWithGemini, geminiImageStatus } from "./gemini-images.js";
 import { similarities } from "./autoeval.js";
 import { isLocalHost } from "./ollama.js";
 
@@ -56,7 +57,7 @@ export function makeMediaCheck(db, { config, storage, audit }) {
   }
 
   // claimDate: when the content says it was published (or received); images[i].link = { url, source } for images from the link
-  async function analyse({ user, caseId, claims, claimDate, links = {}, budgetMs = 60000, check = () => {} }) {
+  async function analyse({ user, caseId, claims, claimDate, links = {}, geminiPublicImages = false, budgetMs = 60000, check = () => {} }) {
     const t0 = Date.now(), left = () => budgetMs - (Date.now() - t0);
     const media = db.prepare("SELECT * FROM media WHERE case_id = ? AND kind = 'image' AND parent_media_id IS NULL ORDER BY uploaded_at, id").all(caseId);
     const cd = claimDate ? Date.parse(claimDate) : NaN, out = [];
@@ -100,6 +101,13 @@ export function makeMediaCheck(db, { config, storage, audit }) {
           img.observations.push({ kind: "ai", strength: "ai", text: `AI description (${vision.model}, not verified): ${img.ai.description}${img.ai.consistent !== "unclear" ? ` The model judged the image ${img.ai.consistent === "yes" ? "consistent" : "not consistent"} with the claims${img.ai.reason ? `: ${img.ai.reason}` : ""}.` : ""}` });
         } catch (e) { img.ai = { error: e.message }; }
       }
+      if (geminiPublicImages && buf && left() > 5000) {
+        try {
+          if (geminiImageStatus(config).configured) audit(user, "Public image sent to Google Gemini with analyst consent", "case", caseId, { media: m.id, model: config.geminiImages.model });
+          img.gemini = await describeWithGemini(config, buf);
+          img.observations.push({ kind: "ai", strength: "ai", text: `Google Gemini description (${img.gemini.model}, not verified): ${img.gemini.description}${img.gemini.visible_text ? ` Visible text: ${img.gemini.visible_text}` : ""}` });
+        } catch (e) { img.gemini = { error: e.message }; img.observations.push({ kind: "service", strength: "observed", text: e.message }); }
+      } else if (geminiPublicImages && buf) img.observations.push({ kind: "service", strength: "observed", text: "Gemini image analysis was skipped because the investigation time limit was reached." });
       out.push(img);
     }
     const reuse = out.flatMap(i => i.observations.filter(o => o.kind === "reuse").map(o => ({ media_id: i.media_id, text: o.text })));

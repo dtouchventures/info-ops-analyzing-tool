@@ -68,6 +68,7 @@ export const config = {
     // optional AI image description: a vision model on your own Ollama server (for example qwen2.5vl:7b or llava:7b)
     visionModel: env.INVESTIGATE_VISION_MODEL || "", visionBase: env.INVESTIGATE_VISION_URL || "" },
   // optional reverse-image search for automatic investigations (images are sent to Google Cloud Vision web detection)
+  geminiImages: { apiKey: env.GEMINI_API_KEY || "", model: env.GEMINI_IMAGE_MODEL || "" },
   mediaCheck: { visionKey: env.GOOGLE_VISION_API_KEY || "", visionBase: env.GOOGLE_VISION_BASE_URL || "https://vision.googleapis.com", timeoutMs: int(env.SEARCH_TIMEOUT_MS, 15000) },
   // video verification (1.35): FFmpeg/FFprobe (FFMPEG_PATH / FFPROBE_PATH, else the bundled @ffmpeg-installer packages, else the
   // system PATH), how much of a video is analysed, how many keyframes are kept and how many are sent to reverse search
