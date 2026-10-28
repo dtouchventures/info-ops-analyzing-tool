@@ -16,6 +16,8 @@ export const App = {
 try { App.scope = sessionStorage.getItem("aivs-scope") === "training" ? "training" : "real"; } catch {}
 
 const ROUTES = [
+  [/^#\/reverse-(image)$/, () => import("./pages/investigate.js"), "reverse-image"],
+  [/^#\/reverse-(video)$/, () => import("./pages/investigate.js"), "reverse-video"],
   [/^#\/tasks$/, () => import("./pages/tasks.js"), "tasks"],
   [/^#\/?$|^#\/home$/, () => import("./pages/home.js"), "home"],
   [/^#\/start$/, () => import("./pages/start.js"), "start"],
@@ -50,6 +52,8 @@ function shell() {
   const nav = [
     ["home", "#/home", "Dashboard", "dash"],
     ["verify", App.can("case.create") ? "#/investigate" : "#/cases", "Verify Information", "verify"],
+    ["reverse-image", "#/reverse-image", "Reverse image search", "search"],
+    ["reverse-video", "#/reverse-video", "Reverse video search", "search"],
     ["social", "#/monitor", "Social Media Analysis", "monitor"],
     ["live", "#/live", "Live Monitoring", "live"],
     ["watch", "#/watch", "AI Watchlist", "watch"],

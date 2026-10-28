@@ -72,6 +72,18 @@ export async function render(el, params = []) {
     try { const r = await api.upload("/api/investigations", fd); location.hash = `#/investigate/${r.id}`; }
     catch (e) { err.innerHTML = `<div>${esc(errMsg(e))}</div>`; err.hidden = false; $("#igo").disabled = false; $("#igo").textContent = "Analyse Automatically"; }
   };
+  if (["image", "video"].includes(params[0])) {
+    const video = params[0] === "video", title = video ? "Reverse video search" : "Reverse image search";
+    crumbs(`<b>${title}</b>`);
+    $("h1", el).textContent = title;
+    $(".pagehead p", el).textContent = video ? "Upload a video to extract keyframes and compare footage with earlier cases. Online matching requires a configured search provider; video processing requires FFmpeg and FFprobe." : "Upload an image to check earlier cases and the reference archive. Automatic online matching requires a configured search provider. Manual reverse search is available on the image in its case.";
+    $("#imore").open = true;
+    files.accept = video ? "video/mp4,video/quicktime,video/x-msvideo,video/webm,.mp4,.mov,.avi,.webm" : "image/*";
+    $("label[for=ifile]", el).textContent = video ? "Add video" : "Add image";
+    $("#imore .tiny.sub").textContent = "Already uploaded? Open Cases, select the case and use the reverse search button beneath its image or video.";
+    $("#imore").insertAdjacentHTML("beforeend", '<p><a class="btn" href="#/cases">Open cases</a></p>');
+    return;
+  }
   if (params[0] === "capture") return captureView(el);
   if (params[0]) follow(el, params[0]);
 }
