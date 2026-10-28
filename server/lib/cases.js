@@ -249,7 +249,8 @@ export function makeCases(db, { audit, allowSelfApproval = false, isTest = false
       candidates.slice(0, MAX_CASE_CLAIMS).forEach((x, i) => ins.run(nextId(db, "claim", n => `CL-${String(n).padStart(6, "0")}`), id, i + 1, x.text, "extracted", x.kind, null, nowISO()));
       claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(id);
     }
-    const timing = claims.find(x => x.kind === "timing"), mediaClaim = claims.find(x => x.kind === "media");
+    const timing = claims.find(x => x.kind === "timing") || claims.find(x => { const e = extractEntities(x.text); return e.relative.length || e.dates.length; });
+    const mediaClaim = claims.find(x => x.kind === "media") || claims.find(x => /\b(photo|image|picture|video|footage|picha)\b/i.test(x.text));
     const { matches, archiveCount } = runMatching(db, c);
     const sugg = [];
     const claimedRef = c.claimed_event_at || c.published_at || (timing ? c.received_at : null);

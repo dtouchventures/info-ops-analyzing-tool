@@ -51,7 +51,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
 
   function taskSummary() {
     const cap = A.claimCapacity || { active: A.claims.filter(x => !x.removed).length }, ongoing = (A.tasks || []).filter(t => ["pending", "processing"].includes(t.status));
-    return `<div class="row case-task-summary" style="margin-bottom:12px"><b>Claims: ${Math.min(cap.used ?? cap.active, MAX_CASE_CLAIMS)}/${MAX_CASE_CLAIMS}</b><a href="#/tasks">Background tasks${ongoing.length ? ` (${ongoing.length} active)` : ""}</a>${cap.selection_required ? `<a href="#/case/${encodeURIComponent(id)}/claims">Choose two claims for this older case</a>` : ""}</div>`;
+    return `<div class="row case-task-summary" style="margin-bottom:12px"><b>Claims: ${cap.selection_required ? cap.active : Math.min(cap.used ?? cap.active, MAX_CASE_CLAIMS)}/${MAX_CASE_CLAIMS}</b><a href="#/tasks">Background tasks${ongoing.length ? ` (${ongoing.length} active)` : ""}</a>${cap.selection_required ? `<a href="#/case/${encodeURIComponent(id)}/claims">Choose two claims for this older case</a>` : ""}</div>`;
   }
   function draw() {
     const c = A.case, P = A.perms;
@@ -62,7 +62,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
       let n = GSTEP.test(tab) ? +tab.slice(4) : currentStep(A);
       if (!tabArg) window.history.replaceState(null, "", `#/case/${encodeURIComponent(c.id)}/step${n}`);
       // when the checks finish, move on to the findings by themselves
-      if (n === 1 && lastStatus === "analysing" && c.status === "analyst_review") { lastStatus = c.status; location.hash = `#/case/${encodeURIComponent(c.id)}/step2`; return; }
+      if (n === 1 && ["draft", "analysing", "analysis_failed"].includes(lastStatus) && c.status === "analyst_review") { lastStatus = c.status; location.hash = `#/case/${encodeURIComponent(c.id)}/step2`; return; }
       const view = `step${n}`, y = view === lastView ? window.scrollY : 0; lastView = view; lastStatus = c.status;
       renderSteps(el, n, { A, act, reload, linkEvidence, runSearch, timeline, refresh: async () => { await load(); } });
       el.insertAdjacentHTML("afterbegin", taskSummary());

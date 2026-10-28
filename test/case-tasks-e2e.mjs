@@ -17,7 +17,7 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(S.base); await page.fill('#lu', 'ana'); await page.fill('#lp', PW); await page.click('#lb'); await page.locator('.shell').waitFor();
   const post = async (url, data) => { const r = await page.request.post(S.base + url, { headers: { 'x-aivs': '1' }, data }); assert.ok(r.ok(), `${url}: ${r.status()}`); return r.json(); };
-  await page.request.patch(S.base + '/api/me/preferences', { headers: { 'x-aivs': '1' }, data: { ui_mode: 'advanced' } });
+  await page.click('[data-mode="advanced"]'); await page.locator('[data-mode="advanced"].on').waitFor();
   const c = await post('/api/cases', { claim_text: 'The council built a library. The school enrolled fifty pupils.' });
   await page.goto(`${S.base}/#/case/${c.id}/claims`); await page.locator('#nc').waitFor();
   await page.fill('#nc', 'The council built a library.'); await page.click('#ncAdd');
@@ -62,6 +62,10 @@ try {
   const report = await (await page.request.get(`${S.base}/api/cases/${c.id}/automatic-report.json`)).json();
   assert.equal(report.assessment.claims.length, 2);
   assert.ok(reportTask.id);
+  await page.click('[data-mode="guided"]'); await page.locator('[data-mode="guided"].on').waitFor();
+  const fastCase = await post('/api/cases', { claim_text: 'An office opened a public library. A school enrolled twelve new pupils.' });
+  await page.goto(`${S.base}/#/case/${fastCase.id}/step1`); await page.locator('#gRun').waitFor();
+  await page.click('#gRun'); await page.waitForURL(/\/step2$/, { timeout: 15000 });
   // A legacy case retains all historical rows, but needs an explicit two-claim
   // selection. Its failed report then retries using the same task record.
   const user = S.ctx.db.prepare("SELECT * FROM users WHERE username='ana'").get();

@@ -6,7 +6,7 @@ export async function renderAutomatic(el, id, editable, isCurrent) {
   if (!isCurrent()) return;
   const aggregate = await api.get(`/api/cases/${encodeURIComponent(id)}`);
   if (!isCurrent()) return;
-  el.innerHTML = `<p><b>Claims: ${aggregate.claimCapacity.active}/2</b> · <a href="#/tasks">Background tasks</a></p><h1>Automatic fact-checking report</h1><p>No analyst comments are required. Findings are preliminary and include evidence limits.</p>
+  el.innerHTML = `<p><b>Claims: ${aggregate.claimCapacity.selection_required ? aggregate.claimCapacity.active : Math.min(aggregate.claimCapacity.used, 2)}/2</b> · <a href="#/tasks">Background tasks</a>${aggregate.claimCapacity.selection_required ? ` · <a href="#/case/${encodeURIComponent(id)}/claims">Select up to two claims</a>` : ""}</p><h1>Automatic fact-checking report</h1><p>No analyst comments are required. Findings are preliminary and include evidence limits.</p>
     <div id="autoState" aria-live="polite">Loading…</div>
     ${editable ? `<div class="card"><div class="bd"><label><input id="autoSearch" type="checkbox"> Search configured external evidence services</label><br>
     <label><input id="autoAI" type="checkbox"> Send this case's text, OCR and evidence to the configured AI service for analysis</label>
