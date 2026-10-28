@@ -440,3 +440,14 @@ test("image downloads refuse private addresses and files that are not images", a
   await assert.rejects(fetchImage(`${F}/news/cholera`, { allowPrivate: true }), /JPEG, PNG, WebP or GIF/);
   assert.equal((await fetchImage(`${F}/img/thumb.jpg`, { allowPrivate: true })).mime, "image/jpeg");
 });
+
+test("images without writing continue visual verification: PNG, JPEG, TIFF and AVIF", async () => {
+  for (const format of ["png", "jpeg", "tiff", "avif"]) {
+    const buf = await sharp({ create: { width: 180, height: 120, channels: 3, background: "#137c84" } }).toFormat(format).toBuffer();
+    const inv = await investigate(ana, {}, [[`no-writing.${format}`, buf, `image/${format}`]]);
+    assert.equal(inv.status, "done", inv.error);
+    assert.ok(!inv.result.blocked, JSON.stringify(inv.result.blocked));
+    assert.equal(inv.result.claims.length, 0, "no factual claim invented from the image description");
+    assert.equal(inv.result.media.images.length, 1, "image checked and preserved");
+  }
+});

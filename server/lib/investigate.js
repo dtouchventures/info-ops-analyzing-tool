@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 // it never sets the analyst's verdicts and never approves anything. A failing stage never stops the report; it says
 // what could not be done.
 import fs from "node:fs";
+import sharp from "sharp";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { nowISO, nextId } from "./db.js";
@@ -41,8 +42,7 @@ function thumbsOf(lk) {
 }
 const SOCIAL = ["X (Twitter)", "Facebook", "Instagram", "TikTok", "YouTube", "Telegram", "Threads", "LinkedIn", "WhatsApp", "Reddit"];
 const CONNECTOR_LABEL = { factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
-const kindOf = b => b.subarray(0, 4).toString("latin1") === "%PDF" ? "pdf" : b[0] === 0x50 && b[1] === 0x4b ? "docx"
-  : (b[0] === 0x89 && b[1] === 0x50) || (b[0] === 0xff && b[1] === 0xd8) || b.subarray(0, 3).toString("latin1") === "GIF" || b.subarray(0, 2).toString("latin1") === "BM" || (b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") ? "image" : "other";
+const kindOf = b => sniff(b)?.kind === "image" ? "image" : b.subarray(0, 4).toString("latin1") === "%PDF" ? "pdf" : b[0] === 0x50 && b[1] === 0x4b ? "docx" : "other";
 const avOf = (b, name) => (b.subarray(4, 8).toString("latin1") === "ftyp" || b.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || (b.subarray(0, 4).toString("latin1") === "RIFF" && /AVI |WAVE/.test(b.subarray(8, 12).toString("latin1"))) || b.subarray(0, 3).toString("latin1") === "ID3" || b.subarray(0, 4).toString("latin1") === "OggS" || /\.(mp4|mov|webm|3gp|m4a|mp3|wav|ogg|opus)$/i.test(name || "")) ? "av" : null;
 class Cancelled extends Error { constructor() { super("cancelled after the time limit"); } }
 const fence = t => String(t ?? "").replace(/<\/?content/gi, m => m.replace("<", "‹"));   // untrusted text cannot close the <content> block
@@ -70,7 +70,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         for (const l of ["eng", "swa"]) { const dst = path.join(dir, `${l}.traineddata.gz`); if (!fs.existsSync(dst)) fs.copyFileSync(path.join(path.dirname(require.resolve(`@tesseract.js-data/${l}/package.json`)), "4.0.0", `${l}.traineddata.gz`), dst); }
         worker = await createWorker(["eng", "swa"], 1, { langPath: dir, cachePath: path.join(dir, "cache"), gzip: true });
       }
-      const r = await worker.recognize(file, {}, layout ? { text: true, blocks: true } : undefined);
+      const raster = await sharp(file, { failOn: "error" }).rotate().flatten({ background: "#ffffff" }).png().toBuffer();
+      const r = await worker.recognize(raster, {}, layout ? { text: true, blocks: true } : undefined);
       const out = { text: String(r.data.text || "").trim(), confidence: Math.round(r.data.confidence ?? 0) };
       // line layout (1.34, screenshot analysis): each line with its position and confidence
       if (layout) out.lines = (r.data.blocks || []).flatMap(b => (b.paragraphs || []).flatMap(p => (p.lines || []).map(l => ({ text: String(l.text || "").replace(/\s+/g, " ").trim(), conf: Math.round(l.confidence ?? 0), bbox: l.bbox })))).filter(l => l.text);
@@ -213,7 +214,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     let pick = uniq.filter(factual).slice(0, 2); if (!pick.length) pick = uniq.slice(0, 1);
     let by = "rules", note = null;
     if (uniq.length > 1) {
-      const aiC = injectionFlags(content).length ? { ok: false } : await aiReady(user, training);
+      const aiC = src.image_only || injectionFlags(content).length ? { ok: false } : await aiReady(user, training);
       if (aiC.ok && room() >= 3000) {
         try {
           const list = uniq.slice(0, 12), out = await withTimeout(askJson(user, caseId, "principal claim selection", `Statements found in a public post or article:\n<content>\n${list.map((c, i) => fence(`${i + 1}. ${c.text}`)).join("\n")}\n</content>\n\nChoose the one or two PRINCIPAL claims: the most significant for the Kenya Defence Forces' information environment and public understanding, and checkable against evidence. Choose one only if the others are background, opinion or repetition. Use only the numbers above.\nJSON: {"principal": [1, 2], "reason": "..."}`), room(), "AI claim ranking");
@@ -417,6 +418,12 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     // records what was submitted, and no claim is taken from that description
     const vids = input.files.filter(f => f.video?.frames?.length);
     if (parts.join("").replace(/\s/g, "").length < 25 && vids.length) { src.video_only = true; parts.push(`Video submitted for verification: ${vids.map(f => f.name).join(", ")}. Too little speech, on-screen text or accompanying text was found to take a claim from it; the footage itself was checked.`); }
+    const images = input.files.filter(f => { try { return sniff(fs.readFileSync(f.path).subarray(0, 64))?.kind === "image"; } catch { return false; } });
+    if (parts.join("").replace(/\s/g, "").length < 25 && images.length) {
+      src.image_only = true;
+      parts.push("Image submitted for visual verification. No reliable written claim was extracted; compare the image with earlier cases and the reference archive. The absence of readable text does not prevent image checks.");
+      src.method.push("image retained for visual verification without requiring OCR text");
+    }
     const content = [...new Set(parts.map(p => p.trim()).filter(Boolean))].join("\n\n").slice(0, 20000);
     src.mentions = [...new Set((content.match(/(^|[^\w@])@([A-Za-z0-9_]{2,30})\b/g) || []).map(m => m.trim().replace(/^[^@]*/, "")))].slice(0, 20);
     if (!parts.length && src.access === "full") { src.access = "failed"; src.fallback = src.fallback || "Paste the text, or upload a clearer screenshot."; }
@@ -482,7 +489,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       if (caseRow.status === "analysis_failed") src.notes.push(`Part of the local analysis failed: ${caseRow.analysis_error}`);
       claims = cases.aggregate(caseId).claims.filter(c => !c.removed).map(c => { const e = extractEntities(c.text); return { ...c, names: [...e.locations, ...e.orgs] }; });
       // the organisation's AI model (Ollama) also lists the checkable claims; only sentences really in the content are kept
-      const aiC = injectionFlags(content).length ? { ok: false } : await aiReady(user, training);
+      const aiC = src.image_only || injectionFlags(content).length ? { ok: false } : await aiReady(user, training);
       if (aiC.ok && budget(config.ai.timeoutMs || 90000) >= 3000) {
         try {
           const out = await withTimeout(askJson(user, caseId, "claim extraction", `List the factual claims in this content that could be checked against evidence. Copy each claim word for word from the content (one sentence each, at most 6). Do not add anything.\nReply as JSON: {"claims": ["..."]}\n<content>\n${fence(content.slice(0, 6000))}\n</content>`), budget(config.ai.timeoutMs || 90000), "AI claim extraction"); check();
@@ -502,7 +509,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       }
     }
     if (caseId) cases.assertReportClaims(caseId);
-    if (src.video_only) claims = [];   // the description of the submission is not a claim
+    if (src.video_only || src.image_only) claims = [];   // the description of the submission is not a claim
     // All saved case claims belong to the report scope; extra statements are candidates.
     let otherClaims = [], principalBy = "rules";
     // All saved case claims are in scope. Ranking may not silently remove one.

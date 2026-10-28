@@ -6,6 +6,7 @@ export function sniff(b) {
   if (h(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return { mime: "image/png", kind: "image", ext: "png" };
   if (s(0, "RIFF") && s(8, "WEBP")) return { mime: "image/webp", kind: "image", ext: "webp" };
   if (s(0, "GIF87a") || s(0, "GIF89a")) return { mime: "image/gif", kind: "image", ext: "gif" };
+  if (h(0, 0x49, 0x49, 0x2a, 0x00) || h(0, 0x4d, 0x4d, 0x00, 0x2a)) return { mime: "image/tiff", kind: "image", ext: "tiff" };
   // audio recordings (voice notes, calls, broadcasts)
   if (s(0, "RIFF") && s(8, "AVI ")) return { mime: "video/x-msvideo", kind: "video", ext: "avi" };   // AVI (1.35)
   if (s(0, "RIFF") && s(8, "WAVE")) return { mime: "audio/wav", kind: "audio", ext: "wav" };
@@ -18,6 +19,7 @@ export function sniff(b) {
     const brand = b.toString("latin1", 8, 12);
     if (/^(M4A |M4B |F4A )/.test(brand)) return { mime: "audio/mp4", kind: "audio", ext: "m4a" };
     if (/^3g/.test(brand)) return { mime: "video/3gpp", kind: "video", ext: "3gp" };
+    if (/^(avif|avis)/.test(brand)) return { mime: "image/avif", kind: "image", ext: "avif" };
     if (/^(heic|heix|hevc|mif1|msf1)/.test(brand)) return { mime: "image/heic", kind: "image", ext: "heic" };
     if (/^qt/.test(brand)) return { mime: "video/quicktime", kind: "video", ext: "mov" };
     return { mime: "video/mp4", kind: "video", ext: "mp4" };
