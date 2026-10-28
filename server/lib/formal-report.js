@@ -12,7 +12,7 @@ export const dtg = (d = new Date()) => `${String(d.getUTCDate()).padStart(2, "0"
 export const DTG_RE = /^\d{6}[A-IK-Z] (JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC) \d{2}$/;
 export const LIMITS = { date: 40, subject: 200, section: 6000, recommendation: 600, recommendations: 12, preparer: 120 };
 const SECTION_KEYS = ["purpose", "background", "analysis", "assessment", "conclusion"];
-const LABELS = { date: "Date-time group", subject: "Subject", purpose: "1. Purpose", background: "2. Background", analysis: "3. Analysis", assessment: "5. Assessment", recommendations: "6. Recommendations", conclusion: "7. Conclusion", rank: "Rank", name: "Name", appointment: "Appointment" };
+const LABELS = { date: "Date-time group", subject: "Subject", purpose: "1. Purpose", background: "2. Background", analysis: "3. Analysis", assessment: "4. Assessment", recommendations: "5. Recommendations", conclusion: "6. Conclusion", rank: "Rank", name: "Name", appointment: "Appointment" };
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const day = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? `${String(d.getUTCDate()).padStart(2, "0")} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}` : null; };
 const clip = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? `${s.slice(0, n - 1).replace(/\s+\S*$/, "")}…` : s; };
@@ -75,12 +75,12 @@ export function fromCase(d, preparer) {
     const approved = d.review.approved, label = k.label || null;
     const src = [c.source.platform, c.source.account ? `account ${c.source.account}` : null].filter(Boolean).join(", ");
 
-    const purpose = `To report the outcome of the verification of “${clip(c.title, 140)}” (AIVS case ${c.id}) and to recommend handling action.`;
+    const purpose = `To report the outcome of the verification of “${clip(c.title, 140)}” (JICHO AI case ${c.id}) and to recommend handling action.`;
 
     const bg = [];
     bg.push(`${c.dates.received_at ? `On ${day(c.dates.received_at)}` : "On a date not recorded,"} the following content was received for verification${src ? ` from ${src}` : ""}: “${clip(c.claim_as_received || c.claim_working_text, [320, 240, 180, 130][lvl])}”`);
     bg.push(`Date first published: ${c.dates.published_at ? `${day(c.dates.published_at)}${c.dates.published_basis ? ` (${clip(c.dates.published_basis, 80)})` : ""}` : "not recorded; requires verification"}.${d.topic ? ` Topic: ${d.topic}.` : ""}${c.source.url && lvl < 2 ? ` Source: ${clip(c.source.url, 90)}.` : ""}`);
-    if (d.related_cases?.length && lvl < 2) bg.push(`Related AIVS cases: ${d.related_cases.slice(0, 3).map(r => r.id).join(", ")}.`);
+    if (d.related_cases?.length && lvl < 2) bg.push(`Related JICHO AI cases: ${d.related_cases.slice(0, 3).map(r => r.id).join(", ")}.`);
 
     const an = [];
     if (!claims.length) an.push(`No checkable claim has been recorded in the case. ${UNAVAILABLE}`);
@@ -101,6 +101,9 @@ export function fromCase(d, preparer) {
     if (k.uncertainties) an.push(`Analytical assumptions and uncertainties: ${sentence(clip(k.uncertainties, [300, 200, 150, 100][lvl]))}`);
 
     const as = [];
+    const outcome = { supported: "accurate", contradicted: "false", misleading_context: "misleading in its stated context" }[k.value];
+    const grounded = outcome && claims.length && k.rationale && claims.every(cl => cl.evidence.some(e => k.value === "supported" ? e.stance === "supports" : e.stance === "contradicts" || e.stance === "misleading"));
+    as.push(grounded ? `It is likely that the assessed content is ${outcome}, based on accepted evidence linked to the claims. Confidence has not been separately graded in the case record.` : "Insufficient evidence to assess a likelihood. No probability judgement is made where evidence is incomplete or conflicting.");
     as.push(label ? `Overall assessment: ${label.toUpperCase()}.${k.rationale ? ` ${sentence(clip(k.rationale, [420, 300, 220, 160][lvl]))}` : " The rationale has not been recorded; requires analyst input."}` : "No overall assessment has been recorded; the case is still under analysis.");
     as.push(approved ? `Assessment approved by ${d.review.decided_by} on ${day(d.review.decided_at)}.` : "The assessment has not yet been approved by a reviewer and is provisional.");
     const verdicts = claims.map(x => x.assessment);
@@ -110,15 +113,15 @@ export function fromCase(d, preparer) {
     const v = k.value;
     if (["contradicted", "misleading_context", "mixed"].includes(v)) {
       recs.push(`Do not repeat or amplify the contradicted ${v === "mixed" ? "parts of the content" : "content"} as fact in any communication.`);
-      recs.push(`Where a public correction is required, cite the accepted evidence recorded in case ${c.id}${d.evidence.some(e => e.citation?.url) ? " and its published sources" : ""}.`);
-      recs.push("Monitor further spread of the content with an AI Watchlist on its key terms and report any significant increase.");
+      recs.push(`Task authorised information operations staff to prepare a factual clarification for approval, citing the accepted evidence in case ${c.id}${d.evidence.some(e => e.citation?.url) ? " and its published sources" : ""}.`);
+      recs.push("Monitor the public narrative through the JICHO AI Watchlist and report observed changes in reach and recurring claims.");
     } else if (v === "supported" || v === "partially_supported") {
-      recs.push("No counter-messaging is required; the content may be referred to as supported, citing the accepted evidence.");
+      recs.push("Task authorised information operations staff to prepare factual talking points, citing the accepted evidence, for approval where a response is required.");
       recs.push(`Record case ${c.id} as the reference for any further enquiries on this content.`);
     } else if (v === "insufficient") {
       recs.push("Treat the content as unverified and do not use it as a basis for communication or action.");
       recs.push("Seek confirmation from the original or an authoritative source and add the result to the case.");
-      recs.push("Re-assess once additional evidence is available.");
+      recs.push("Reassess the narrative when additional evidence becomes available and submit the revised judgement for review.");
     } else if (v === "not_verifiable") {
       recs.push("Handle the content as opinion or prediction; it cannot be confirmed or refuted as fact.");
       recs.push("Monitor its spread and audience reaction where it is relevant to the mission.");
@@ -154,7 +157,7 @@ export function fromDataset(d, preparer) {
     const as = [];
     if (ind?.synchronised) as.push(`${plural(ind.synchronised, "synchronised repeated message")} ${ind.synchronised === 1 ? "indicates" : "indicate"} possible coordinated activity that requires examination of the accounts involved; this is not proof of coordination.`);
     const reviewed = claims.filter(c => c.case_conclusion).length, open = C.by_status?.needs_review || 0;
-    as.push(C.total ? `${plural(C.total, "checkable claim")} identified: ${reviewed} verified in AIVS cases, ${open} still requiring review.` : "No checkable claim was identified in the posts analysed.");
+    as.push(C.total ? `${plural(C.total, "checkable claim")} identified: ${reviewed} reviewed in JICHO AI cases, ${open} still requiring review.` : "No checkable claim was identified in the posts analysed.");
     as.push("The findings describe this dataset only and should not be generalised without comparison with other sources.");
     const recs = (d.recommendations || []).slice(0, [6, 5, 4, 3][lvl]).map(x => clip(x, [260, 200, 160, 140][lvl]));
     const concl = `The dataset analysis is complete for ${plural((ds.posts || 0).toLocaleString("en-GB"), "post")}${d.synthetic ? " of synthetic data" : ""}. Follow-up: action recommendations ${recs.length > 1 ? `(a) to (${String.fromCharCode(96 + recs.length)})` : "(a)"}${open ? ` and verify the ${plural(open, "claim")} still requiring review` : ""}.`;

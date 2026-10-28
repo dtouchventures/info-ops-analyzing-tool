@@ -553,3 +553,12 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 
 .case-search .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .case-task-summary { align-items: baseline; }
+
+/* formal one-page report */
+.btn.disabled { opacity: .5; cursor: not-allowed; }
+.frm-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.frm-grid textarea { width: 100%; }
+.frm-prev { width: 100%; aspect-ratio: 210 / 297; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-sm); background: #e9ecef; position: relative; container-type: inline-size; }
+.frm-prev iframe { position: absolute; top: 0; left: 0; width: 820px; height: 1160px; border: 0; transform-origin: 0 0; transform: scale(calc(100cqw / 820px)); }
+@supports not (transform: scale(calc(100cqw / 820px))) { .frm-prev iframe { transform: scale(.55); } }
+@media (max-width: 900px) { .frm-grid { grid-template-columns: 1fr; } }
