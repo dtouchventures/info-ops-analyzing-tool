@@ -8,7 +8,8 @@ try {
   await page.goto(s.base); await page.locator('#lf').waitFor();
   assert.equal(await page.inputValue('#lu'), ''); assert.equal(await page.inputValue('#lp'), '');
   assert.equal(await page.locator('#lerr').isVisible(), false);
-  assert.match(await page.locator('.art').innerText(), /Academic \/ unofficial/);
+  assert.equal(await page.locator('.art .login-context').count(), 0);
+  assert.match(await page.locator('.form .login-context').innerText(), /Academic \/ unofficial/);
   for (const img of await page.locator('.login img').all()) assert.ok(await img.evaluate(i => i.complete && i.naturalWidth > 0));
   await page.fill('#lu', 'ana'); await page.fill('#lp', 'incorrect');
   await page.click('#loginReveal'); assert.equal(await page.locator('#lp').getAttribute('type'), 'text');

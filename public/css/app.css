@@ -279,9 +279,7 @@ pre.box { white-space: pre-wrap; background: var(--surface-2); border: 1px solid
 .login-brand p { text-transform: uppercase; font-size: 12px; letter-spacing: .17em; line-height: 1.7; margin: 0; }
 .kenya-stripe { width: 100px; height: 6px; margin-top: 16px; background: linear-gradient(to right, #111 32%, white 32% 34%, #bb2229 34% 66%, white 66% 68%, #008550 68%); }
 .login-motto { font-size: 11px; letter-spacing: .17em; text-transform: uppercase; margin-top: 26px; }
-.login-context { margin-top: auto; padding-top: 200px; max-width: 48ch; font-size: 12px; }
-.login-context b { display: inline-block; border: 1px solid #96b7ad; border-radius: 20px; padding: 7px 12px; }
-.login-context p { line-height: 1.6; color: #e1e9ec; }
+.login-context { margin: 16px 0 0; font-size: 12px; color: #52617c; }
 .login .form { background: #fff; color: #101d31; padding: 30px clamp(24px, 4.5vw, 80px) 48px; display: flex; flex-direction: column; min-width: 0; }
 .dmi-emblem { align-self: flex-end; width: 150px; height: auto; object-fit: contain; margin-bottom: 20px; }
 .login-fields { width: 100%; max-width: 540px; margin: auto; }
@@ -300,7 +298,7 @@ pre.box { white-space: pre-wrap; background: var(--surface-2); border: 1px solid
 .login .notice { font-size: 13px; color: #52617c; margin-top: 32px; border-top: 1px solid #d2dae6; padding-top: 22px; }
 .login-audit { font-size: 12px; color: #52617c; line-height: 1.6; }
 @media (min-width: 861px) and (max-width: 1150px) { .login-brand { gap: 14px; } .stratcom-mark { flex-basis: 100px; } .login-brand p { font-size: 10px; } }
-@media (max-width: 860px) { .login .art { min-height: 290px; } .login-context { padding-top: 20px; } .dmi-emblem { width: 100px; margin-bottom: 24px; } .login-fields { margin: 0 auto; } .login .form { min-height: 580px; } }
+@media (max-width: 860px) { .login .art { min-height: 290px; } .dmi-emblem { width: 100px; margin-bottom: 24px; } .login-fields { margin: 0 auto; } .login .form { min-height: 580px; } }
 @media (max-width: 400px) { .login-brand { gap: 12px; } .stratcom-mark { flex-basis: 90px; } .login-brand p { font-size: 9px; } .login-motto { font-size: 9px; letter-spacing: .08em; } }
 
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .dash, .split { grid-template-columns: 1fr; } .kindlegend { grid-template-columns: repeat(2, 1fr); } }

@@ -120,7 +120,6 @@ function loginView(msg) {
         <img src="/assets/login/kdf.png" alt="Kenya Defence Forces emblem" width="1244" height="1120">
       </div><div><h1>JICHO <span>AI</span></h1><p>Information Operations<br>Intelligence System</p><div class="kenya-stripe" aria-hidden="true"></div></div></div>
       <p class="login-motto">Monitor · Verify · Analyse · Assess · Report</p>
-      <div class="login-context"><b>Academic / unofficial project</b><p>Emblems are reference assets. This project does not imply KDF or DMI endorsement.</p></div>
     </section>
     <section class="form" aria-labelledby="login-title">
       <img class="dmi-emblem" src="/assets/login/dmi.png" alt="Directorate of Military Intelligence emblem" width="1500" height="1070">
@@ -132,6 +131,7 @@ function loginView(msg) {
         <button class="btn primary" id="lb" type="submit">Sign in <span aria-hidden="true">→</span></button>
       </form>
       <div class="notice">Need access or help signing in? Contact your administrator.</div>
+      <p class="login-context">Academic / unofficial project</p>
       <p class="login-audit">Authorised use only. Activity is recorded in an audit log.</p></div>
     </section></main>`;
   $("#lu").focus({ preventScroll: true });
