@@ -32,7 +32,7 @@ Migration 24 is additive and runs automatically on the next normal server start.
 
 Older cases can already have more than two saved claims. They are preserved as historical records, with no capacity to insert more. If more than two are still active, an authorized editor must open **Claims**, choose one or two existing claims and confirm the selection before a new case report or approval can proceed. Unselected claims are marked historical, with their evidence links retained. Submitted/approved cases must first follow the existing return/revision workflow. Frozen historical reports remain unchanged, even if their original scope exceeded the new limit.
 
-New report generation checks the selected claim scope; it never silently truncates an over-limit legacy case. Training coverage examples now use three separate synthetic cases, with at most two claims in each, preserving all five demonstration scenarios.
+If an older investigation snapshot has a different claim selection or wording, its regeneration is refused; generate a fresh case report from the current saved claims. New report generation checks the selected claim scope; it never silently truncates an over-limit legacy case. Training coverage examples now use three separate synthetic cases, with at most two claims in each, preserving all five demonstration scenarios.
 
 Restart the existing app after deploying the changed server files. No manual SQL or dependency installation is required. Do not start a second server on the same production database while upgrading.
 

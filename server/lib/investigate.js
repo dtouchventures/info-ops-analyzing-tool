@@ -679,7 +679,13 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const rw = row(id); if (!rw) throw new HttpError(404, "No such investigation.");
     if (rw.status !== "done" || !rw.result_json) throw new HttpError(409, "The investigation has not finished yet.");
     if (rw.case_id) cases.assertReportClaims(rw.case_id);
-    const r = JSON.parse(rw.result_json); if (r.blocked) throw new HttpError(409, "There is no content to report on yet. Continue the investigation with the post's text or a screenshot first.");
+    const r = JSON.parse(rw.result_json);
+    if (rw.case_id) {
+      const selected = cases.aggregate(rw.case_id).claims.filter(cl => !cl.removed);
+      if ((r.claims || []).length !== selected.length || (r.claims || []).some(cl => !selected.some(current => current.id === cl.id && current.text === cl.text)))
+        throw new HttpError(409, "The case claim selection changed. Generate a fresh case report from its current saved claims.");
+    }
+    if (r.blocked) throw new HttpError(409, "There is no content to report on yet. Continue the investigation with the post's text or a screenshot first.");
     const aiState = await aiReady(user, r.training), notes = [];
     r.io_assessment = await writeAssessment(user, r, aiState, () => config.ai.timeoutMs || 90000, () => {}, notes);
     r.io_assessment.regenerated_at = nowISO(); r.ai.notes = [...(r.ai.notes || []), ...notes.map(n => `Report generated again: ${n}`)];

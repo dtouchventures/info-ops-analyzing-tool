@@ -120,6 +120,10 @@ test('migration preserves legacy claims and reports; explicit selection is requi
     assert.equal(R.ctx.db.prepare("SELECT COUNT(*) n FROM evidence_links WHERE claim_id='legacy-3'").get().n, 1);
     assert.equal((await signed.get(`/api/cases/${id}/report.json`)).body.claims.length, 2);
     assert.equal((await signed.post(`/api/cases/${id}/claims`, { text: 'A fourth claim' })).status, 409);
+    const uid = R.ctx.db.prepare("SELECT id FROM users WHERE username='ana'").get().id;
+    R.ctx.db.prepare("INSERT INTO investigations(id,report_id,case_id,status,stages_json,input_json,result_json,created_by,created_at) VALUES ('INV-old-scope','OLD-SCOPE',?,'done','[]','{}',?,?,?)").run(id, JSON.stringify({ claims: before.map(x => ({ id: x.id, text: x.text })) }), uid, new Date().toISOString());
+    const stale = await signed.post('/api/investigations/INV-old-scope/report');
+    assert.equal(stale.status, 409); assert.match(stale.body.error, /claim selection changed/);
     assert.equal(R.ctx.db.prepare("SELECT json_snapshot FROM reports WHERE id='legacy-report'").get().json_snapshot, historical);
     assert.ok(fs.readdirSync(L.dataDir).some(x => x.includes('.before-v24-')));
   } finally { R.ctx.tasks.close(); await R.close(); R.ctx.db.close(); }
