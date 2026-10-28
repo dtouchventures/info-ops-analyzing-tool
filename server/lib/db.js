@@ -324,7 +324,16 @@ function mig24(db) {
   if (!db.prepare("PRAGMA table_info(investigations)").all().some(c => c.name === "content_key")) db.exec("ALTER TABLE investigations ADD COLUMN content_key TEXT");
   db.exec(fs.readFileSync(new URL("./migration-024.sql", import.meta.url), "utf8"));
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }, { fn: mig24 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+function mig25(db) {
+  const cols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+  for (const name of ["rank", "appointment"]) if (!cols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} TEXT`);
+  db.exec(`CREATE TABLE IF NOT EXISTS formal_reports (
+    id INTEGER PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, content_json TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1, created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL,
+    updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL, UNIQUE(source_kind, source_id));
+  CREATE TABLE IF NOT EXISTS formal_report_versions (id INTEGER PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, content_json TEXT NOT NULL, saved_by INTEGER REFERENCES users(id), saved_at TEXT NOT NULL, note TEXT)`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }, { fn: mig24 }, { fn: mig25 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

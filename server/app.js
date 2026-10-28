@@ -1,3 +1,5 @@
+import { makeFormalReports, fromCase as formalFromCase, fromDataset as formalFromDataset, normalise as formalNormalise, check as formalCheck, tooLong as formalTooLong } from "./lib/formal-report.js";
+import { docx as formalDocx, pdf as formalPdf, html as formalHtml } from "./lib/formal-print.js";
 import { makeCaseTasks } from "./lib/case-tasks.js";
 import { CLAIM_LIMIT_MESSAGE } from "../shared/claim-limit.js";
 // Express application factory. `createApp(config)` is used by server/index.js and the test suite.
@@ -254,6 +256,14 @@ export function createApp(config) {
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
+  // rank and appointment for the "Prepared by" block of formal reports
+  api.patch("/me/profile", h((req, res) => {
+    const b = req.body || {}, set = {};
+    for (const k of ["rank", "appointment"]) if (b[k] !== undefined) set[k] = String(b[k] ?? "").trim().slice(0, 120) || null;
+    if (!Object.keys(set).length) return res.json({ ok: true });
+    db.prepare(`UPDATE users SET ${Object.keys(set).map(k => `${k} = @${k}`).join(", ")} WHERE id = @id`).run({ ...set, id: req.user.id });
+    audit(req.user, "Profile updated (rank, appointment)", "user", String(req.user.id), set); res.json({ ok: true, ...set });
+  }));
   api.patch("/me/preferences", h((req, res) => {
     const m = req.body?.ui_mode; if (!["guided", "advanced"].includes(m)) throw new HttpError(400, "Mode must be guided or advanced.");
     db.prepare("UPDATE users SET ui_mode = ? WHERE id = ?").run(m, req.user.id); res.json({ ok: true, ui_mode: m });
@@ -1357,6 +1367,60 @@ export function createApp(config) {
   api.post("/live/instagram/test", requirePerm("watch.manage"), h(async (req, res) => res.json(await live.testInstagram(req.user))));
   api.post("/live/training/sample", requirePerm("case.create"), h(async (req, res) => { if (scopeOf(req) !== 1) throw new HttpError(400, "Practice posts can only be loaded in Training mode."); res.status(201).json(await live.loadPractice(req.user)); }));
 
+  // ---------------------------------------------------------------- formal one-page report (UNIT: STRATEGIC COMMUNICATION)
+  // Generate a draft from the case or dataset records, edit it, then download it as Word or PDF or print it. Downloads
+  // and printing are refused until every required field is filled and the text is measured to fit one A4 page.
+  const formal = makeFormalReports(db, { audit });
+  // "Prepared by" is left blank in the draft (completed by hand on the printed copy); the author may type it in
+  const preparerOf = () => ({ rank: "", name: "", appointment: "" });
+  function formalSource(req) {
+    const { kind, id } = req.params;
+    if (kind === "case") {
+      const c = cases.mustCase(id);
+      return { kind, id: c.id, title: c.title, canEdit: cases.canEditCase(req.user, c) || can(req.user, "case.approve"), draft: () => formalFromCase(reports.render(c.id).data, preparerOf(req.user)) };
+    }
+    if (kind === "dataset") {
+      const d = io.getDataset(id);
+      return { kind, id: String(d.id), title: d.name, canEdit: can(req.user, "io.import"), draft: () => formalFromDataset(buildReport(db, { dataset: d, filters: {}, user: req.user, version: VERSION }), preparerOf(req.user)) };
+    }
+    throw new HttpError(404, "Unknown report source.");
+  }
+  const formalView = (src, row) => { const content = row?.content || null; return { source: { kind: src.kind, id: src.id, title: src.title }, can_edit: src.canEdit, saved: !!row, revision: row?.revision || 0, updated_at: row?.updated_at || null, content, ...(content ? formalCheck(content) : { problems: [], layout: null, ready: false }) }; };
+  api.get("/formal/:kind(case|dataset)/:id", h((req, res) => { const src = formalSource(req); res.json(formalView(src, formal.get(src.kind, src.id))); }));
+  api.post("/formal/:kind(case|dataset)/:id/generate", h((req, res) => {
+    const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot prepare the report for this record.");
+    const cur = formal.get(src.kind, src.id), d = src.draft();
+    // regenerating keeps what the author already typed for the subject and the "Prepared by" details, unless asked to replace everything
+    const keep = cur && !req.body?.replace_all ? { subject: cur.content.subject || d.subject, preparer: { ...d.preparer, ...Object.fromEntries(Object.entries(cur.content.preparer || {}).filter(([, v]) => v)) } } : {};
+    const row = formal.save(req.user, src.kind, src.id, formalNormalise({ ...d, ...keep }, d), "Formal report generated from the records");
+    res.status(201).json(formalView(src, row));
+  }));
+  api.put("/formal/:kind(case|dataset)/:id", h((req, res) => {
+    const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot edit the report for this record.");
+    const cur = formal.get(src.kind, src.id); if (!cur) throw new HttpError(409, "Generate the report first.");
+    if (req.body?.revision != null && Number(req.body.revision) !== cur.revision) throw new HttpError(409, "Someone else saved this report since you opened it. Reload it, then make your changes again.");
+    const over = formalTooLong(req.body?.content || {}); if (over.length) throw new HttpError(400, `Too long: ${over.join(", ")}. Shorten it; the whole report must fit on one A4 page.`);
+    const row = formal.save(req.user, src.kind, src.id, formalNormalise(req.body?.content || {}, cur.content), "Formal report edited");
+    res.json(formalView(src, row));
+  }));
+  api.get("/formal/:kind(case|dataset)/:id/report.:fmt(docx|pdf|html)", h(async (req, res) => {
+    const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
+    const { problems, layout, ready } = formalCheck(row.content), fmt = req.params.fmt, name = `AIVS-${src.kind}-${String(src.id).replace(/[^\w-]/g, "")}-formal-report`;
+    if (fmt === "html") { res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'"); res.setHeader("X-Frame-Options", "SAMEORIGIN"); return res.type("html").send(formalHtml(row.content, layout, { problems, fits: layout.fits })); }
+    if (!ready) throw new HttpError(409, [!layout.fits ? `The report is about ${layout.over_lines} line(s) longer than one A4 page. Shorten the text, then try again.` : null, ...problems].filter(Boolean).join(" "));
+    audit(req.user, `Formal report downloaded (${fmt})`, src.kind === "case" ? "case" : "io_dataset", String(src.id), { revision: row.revision, font_pt: layout.size, margin_cm: layout.marginCm });
+    res.setHeader("Content-Disposition", `attachment; filename="${name}.${fmt}"`);
+    if (fmt === "pdf") return res.type("application/pdf").send(await formalPdf(row.content, layout));
+    res.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document").send(formalDocx(row.content, layout));
+  }));
+  // print: recorded in the audit log when the author presses Print Report (the browser does the printing)
+  api.post("/formal/:kind(case|dataset)/:id/printed", h((req, res) => {
+    const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
+    const { ready } = formalCheck(row.content); if (!ready) throw new HttpError(409, "The report is not ready to print.");
+    audit(req.user, "Formal report printed", src.kind === "case" ? "case" : "io_dataset", String(src.id), { revision: row.revision }); res.json({ ok: true });
+  }));
+
+  // ---------------------------------------------------------------- reports
   api.get("/reports", (req, res) => {
     const t = scopeOf(req);
     res.json({
