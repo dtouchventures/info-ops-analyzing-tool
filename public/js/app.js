@@ -54,7 +54,7 @@ function shell() {
   const more = App.guided() ? [] : OTHER_TOOLS.filter(([k]) => k !== "new" || App.can("case.create")).filter(([k]) => k !== "verify" || App.can("case.create"));
   $("#root").innerHTML = `<div class="shell">
     <aside class="side" aria-label="Main navigation">
-      <div class="brand"><div class="brand-mark">AIVS</div><div><b>AIVS</b><span>Information verification</span></div></div>
+      <div class="brand"><div class="brand-mark" aria-hidden="true">J</div><div><b>JICHO <span class="brand-ai">AI</span></b><span>Information operations analysis</span><span class="brand-context">Academic / unofficial project</span></div></div>
       <nav class="nav">${nav.map(([k, h, l, ic]) => `<a href="${h}" data-nav="${k}">${icon(ic)}<span>${l}</span>${k === "verify" ? `<span class="count" id="navReview" hidden title="Cases awaiting approval"></span>` : k === "watch" ? `<span class="count" id="navWatch" hidden></span>` : ""}</a>`).join("")}
         ${more.length ? `<details class="navmore" id="navMore" open><summary>${icon("cases")}<span>Other tools</span></summary>${more.map(([k, h, l, ic]) => `<a href="${h}" data-nav="x-${k}">${icon(ic)}<span>${l}</span></a>`).join("")}</details>` : ""}</nav>
       <div class="side-foot"><b>${esc(App.me.display_name)}</b>${esc(App.meta.roles[App.me.role])} · <a href="#" id="pwLink" style="color:#9fd8d5">Password</a> · <a href="#/privacy" style="color:#9fd8d5">Privacy</a> · <a href="#" id="logout" style="color:#9fd8d5">Sign out</a></div>
@@ -161,7 +161,7 @@ async function checkServerVersion() {
     const h = await fetch("/healthz", { cache: "no-store" }).then(r => r.json());
     if (h?.version && h.version !== CLIENT_VERSION && !$("#verBanner")) {
       const d = document.createElement("div"); d.id = "verBanner"; d.className = "callout warn"; d.style.cssText = "margin:8px 16px";
-      d.innerHTML = `<div><b>AIVS was updated, but the server is still running the old version (${esc(h.version)}; the pages are ${CLIENT_VERSION}).</b> Close the AIVS window and start it again (start-windows.bat or start-for-reviewers.bat). Until then, new features such as the AI Watchlist dataset monitoring will not work.</div>`;
+      d.innerHTML = `<div><b>JICHO AI was updated, but the server is still running the old version (${esc(h.version)}; the pages are ${CLIENT_VERSION}).</b> Close the JICHO AI window and start it again (start-windows.bat or start-for-reviewers.bat). Until then, new features such as the AI Watchlist dataset monitoring will not work.</div>`;
       document.body.prepend(d);
     }
   } catch { /* the health check is optional */ }

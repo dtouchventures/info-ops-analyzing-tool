@@ -499,3 +499,17 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .wterms .bar { height: 8px; background: var(--teal-100); border-radius: 4px; } .wterms .bar i { display: block; height: 100%; background: var(--teal-600); border-radius: 4px; }
 .wmon { font-size: 12.5px; color: var(--muted); border-left: 3px solid var(--line-strong); padding: 4px 8px; background: var(--surface-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 .wmon.ok { border-left-color: var(--sup); } .wmon.warn { border-left-color: var(--warn); } .wmon.bad { border-left-color: var(--con); }
+
+/* JICHO AI dashboard: compact cards and clear source status. */
+.brand .brand-ai { font-size: inherit; color: #eac57d; }
+.brand .brand-context { display: block; font-size: 10px; margin-top: 4px; color: #bdcbd6; }
+.dashboard-eyebrow { text-transform: uppercase; font-size: 11px; letter-spacing: .1em; font-weight: 700; color: var(--teal-700); margin-bottom: 8px !important; }
+.svcs { align-items: start; }
+.svc p { flex: none; min-height: 78px; }
+.svc-figs { margin-top: 6px; }
+.svc .btn { margin-top: 6px; }
+.watch-source-details { display: inline; overflow-wrap: anywhere; }
+.watch-source-details summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.dashboard-load-warning { margin-bottom: 16px; }
+@media (max-width: 1100px) { .svcs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .svc p { min-height: 0; } }
+@media (max-width: 600px) { .svcs { grid-template-columns: minmax(0, 1fr); } .topbar .right { flex-wrap: wrap; margin-left: 0; } }
