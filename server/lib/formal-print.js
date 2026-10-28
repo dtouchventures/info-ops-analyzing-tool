@@ -28,8 +28,8 @@ const paras = s => String(s || "").split(/\n+/).map(x => x.trim()).filter(Boolea
 // The report as a list of lines of the page, in order. Each block: text runs, alignment, indent and spacing role.
 export function blocks(r) {
   const B = [];
-  B.push({ role: "top", runs: [{ text: UNIT_LINE, bold: true }], right: String(r.date || "") });
   if (CLASSIFICATION) B.push({ role: "classif", align: "center", runs: [{ text: CLASSIFICATION, bold: true }], scale: 1.2 });
+  B.push({ role: "top", runs: [{ text: UNIT_LINE, bold: true }], right: String(r.date || "") });
   B.push({ role: "subject", runs: [{ text: "SUBJECT: ", bold: true }, { text: String(r.subject || "").toUpperCase(), bold: true }] });
   for (const [k, head] of SECTIONS) {
     B.push({ role: "head", runs: [{ text: head, bold: true }] });

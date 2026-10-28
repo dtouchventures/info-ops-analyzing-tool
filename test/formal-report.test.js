@@ -79,7 +79,7 @@ test("Download Word: A4 portrait, 1.5 cm margins, Arial 9–10 pt, headings in t
   assert.match(doc, /w:ascii="Arial"/); const sizes = [...doc.matchAll(/<w:sz w:val="(\d+)"\/>/g)].map(m => +m[1] / 2); assert.ok(Math.min(...sizes) >= 9 && Math.min(...sizes) <= 10, String(sizes[0]));
   const text = [...doc.matchAll(/<w:t xml:space="preserve">([^<]*)<\/w:t>/g)].map(m => m[1]).join("|");
   assert.match(doc, /<w:tab w:val="right"/, "the date-time group sits at the right margin of the top line");
-  const order = ["UNIT: STRATEGIC COMMUNICATION", "Z ", "RESTRICTED", "SUBJECT: ", "1. PURPOSE", "2. BACKGROUND", "3. ANALYSIS", "5. ASSESSMENT", "6. RECOMMENDATIONS", "7. CONCLUSION", "Prepared by:", "Rank: ", "Name: ", "Appointment: "];
+  const order = ["RESTRICTED", "UNIT: STRATEGIC COMMUNICATION", "Z ", "SUBJECT: ", "1. PURPOSE", "2. BACKGROUND", "3. ANALYSIS", "5. ASSESSMENT", "6. RECOMMENDATIONS", "7. CONCLUSION", "Prepared by:", "Rank: ", "Name: ", "Appointment: "];
   let at = -1; for (const h of order) { const i = text.indexOf(h, at + 1); assert.ok(i > at, `${h} after the previous heading`); at = i; }
   assert.ok(!text.includes("4. "), "specified numbering gap is preserved");
   assert.match(text, /\(a\)\|.*\(b\)\|.*\(c\)/, "recommendations lettered (a), (b), (c)");
