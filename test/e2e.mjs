@@ -36,7 +36,7 @@ const shot = async (p, n) => shots && p.screenshot({ path: path.join(shots, n + 
 const a = await session("ana");
 await a.waitForSelector(".svc");
 check("the main menu preserves the seven services and adds Background tasks", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "Live Monitoring", "AI Watchlist", "Reports", "Settings", "Background tasks"]));
-check("the dashboard shows four service cards including the reports hub, recent investigations and recent alerts", (await a.$$(".svc")).length === 4 && (await a.textContent("#page")).includes("Recent investigations") && (await a.textContent("#page")).includes("No alerts"));
+check("the dashboard shows four service cards including reports and cases access, without recent report or investigation panels", (await a.$$(".svc")).length === 4 && !(await a.textContent("#page")).includes("Recent investigations") && !(await a.textContent("#page")).includes("Recent automatic reports") && !!(await a.$('[data-svc="reports"] a[href="#/cases"]')) && (await a.textContent("#page")).includes("No alerts"));
 await shot(a, "00a-dashboard-home");
 await a.goto(S.base + "/#/status"); await a.waitForSelector(".module");
 check("start page lists the eight modules with honest statuses", (await a.$$(".module")).length === 8 && (await a.textContent(".modules")).includes("Available") && (await a.textContent(".modules")).includes("Partly available"));
@@ -928,7 +928,7 @@ let watchDead = [], watchSeen = 0;
   await a.goto(S.base + "/#/reports"); await a.waitForSelector("#rauto table"); check("Reports lists the automatic report by date", (await a.textContent("#rauto")).includes("AIVS-"));
   const t = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); await a.fill("#rfrom", "2020-01-01"); await a.fill("#rto", "2020-01-02"); await a.click("#rfilt button"); await a.waitForFunction(() => /No automatic reports/.test(document.querySelector("#rauto").textContent));
   await a.fill("#rfrom", t); await a.fill("#rto", t); await a.click("#rfilt button"); await a.waitForSelector("#rauto table"); check("the date filter narrows the automatic reports", true);
-  await a.goto(S.base + "/#/home"); await a.waitForSelector(".svcs"); check("the dashboard shows recent automatic reports", (await a.textContent("#page")).includes("Recent automatic reports") && (await a.textContent("#page")).includes("AIVS-"));
+  await a.goto(S.base + "/#/home"); await a.waitForSelector(".svcs"); check("the dashboard keeps reports and cases in the Reports card", !!(await a.$('[data-svc="reports"] a[href="#/reports"]')) && !!(await a.$('[data-svc="reports"] a[href="#/cases"]')) && !(await a.textContent("#page")).includes("Recent automatic reports"));
   const ph = await (await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true })).newPage();
   ph.on("pageerror", e => errors.push(`phone: ${e.message}`));
   await ph.goto(S.base); await ph.fill("#lu", "ana"); await ph.fill("#lp", PW); await ph.click("#lb"); await ph.waitForSelector(".shell");

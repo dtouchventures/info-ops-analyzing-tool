@@ -1,8 +1,8 @@
-// Dashboard: services and the central reports entry point, recent investigations and recent alerts. Figures come from the server;
+// Dashboard: services and the central reports entry point, cases entry point and recent alerts. Figures come from the server;
 // nothing here is sample data. Service status for every module is under Settings → Service status.
 import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
-import { esc, icon, fmtDT, status, ago } from "../ui.js";
+import { esc, icon, fmtDT } from "../ui.js";
 
 const KIND = { match: "Keyword match", threshold: "Keyword threshold exceeded", volume: "Unusual posting spike", narrative: "Emerging narrative", repeated: "Repeated message", coordination: "Coordination indicator", engagement: "High engagement" };
 
@@ -26,13 +26,13 @@ async function draw(el) {
   const h0 = location.hash;
   crumbs(`<b>Dashboard</b>${App.training ? " · training records" : ""}`);
   const [D, W, IO] = await Promise.all([api.get(`/api/dashboard?${App.q()}`).catch(() => null), api.get("/api/watch/overview").catch(() => null), api.get("/api/io/datasets").catch(() => null)]);
-  const [al, INV, LV, MO] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/investigations?limit=6&${App.q()}`).catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null), api.get(`/api/monitor/overview?${App.q()}`).catch(() => null)]);
+  const [al, LV, MO] = await Promise.all([api.get("/api/watch/alerts?limit=6").catch(() => null), api.get(`/api/live/overview?${App.q()}`).catch(() => null), api.get(`/api/monitor/overview?${App.q()}`).catch(() => null)]);
   if (location.hash !== h0) return;   // the user moved on while the figures were loading: do not draw over the next page
   const c = D?.counts || {}, open = (c.draft || 0) + (c.analysing || 0) + (c.analysis_failed || 0) + (c.analyst_review || 0) + (c.needs_evidence || 0);
   const ds = (IO?.datasets || []).filter(d => App.training ? d.is_sample : !d.is_sample), posts = ds.reduce((a, d) => a + (d.posts || 0), 0);
   const wls = W?.watchlists || [], activeW = wls.filter(w => w.status === "active").length, openAlerts = (W?.alert_counts?.new || 0) + (W?.alert_counts?.acknowledged || 0);
-  const card = (key, ic, title, text, figs, href, cta, extra = "") => `<div class="svc" data-svc="${key}"><div class="svc-top"><span class="mic">${icon(ic)}</span><h2>${title}</h2></div>
-    <p class="small muted">${text}</p><div class="svc-figs">${figs.map(([n, l, h]) => `<a href="${h}" data-fig="${esc(l)}"><b>${({ verify: D, social: IO, watch: W })[key] ? n : "—"}</b><span>${l}</span></a>`).join("")}</div>${extra}<a class="btn primary" href="${href}">${cta}</a></div>`;
+  const card = (key, ic, title, text, figs, href, cta, extra = "", secondary = "") => `<div class="svc" data-svc="${key}"><div class="svc-top"><span class="mic">${icon(ic)}</span><h2>${title}</h2></div>
+    <p class="small muted">${text}</p><div class="svc-figs">${figs.map(([n, l, h]) => `<a href="${h}" data-fig="${esc(l)}"><b>${({ verify: D, social: IO, watch: W })[key] ? n : "—"}</b><span>${l}</span></a>`).join("")}</div>${extra}<a class="btn primary" href="${href}">${cta}</a>${secondary}</div>`;
   el.innerHTML = `<div class="pagehead"><div><p class="dashboard-eyebrow">JICHO AI · Analyst workspace</p><h1>Dashboard</h1><p>Check claims against evidence, analyse public post datasets, and watch topics for unusual activity. Automatic results are leads for an analyst, never findings.</p></div></div>
     ${!D || !W || !IO ? `<div class="callout warn dashboard-load-warning" role="status">Some dashboard data could not be loaded. Unavailable totals appear as —. <a href="#/status">Check service status</a>.</div>` : ""}
     <div class="svcs">
@@ -43,16 +43,10 @@ async function draw(el) {
         [[ds.length, "datasets", "#/monitor"], [posts.toLocaleString(), "posts", "#/monitor"]], "#/monitor", "Analyse a dataset")}
       ${card("watch", "watch", "AI Watchlist", "Watch topics and hashtags in imported or collected posts, and get alerts for unusual increases and repeated messages.",
         [[activeW, "active watchlists", "#/watch/lists"], [openAlerts, "open alerts", "#/watch/alerts"]], "#/watch", "Open watchlists", monitoringLine(W))}
-      ${card("reports", "reports", "Reports", "Find automatic reports, approved reports and drafts together in one place. Review, open or download the report you need.", [], "#/reports", "View all reports")}
+      ${card("reports", "reports", "Reports", "Find automatic reports, approved reports, drafts and cases together. Review reports or open your cases.", [], "#/reports", "View all reports", "", `<a class="btn" href="#/cases" style="margin-top:8px">Cases</a>`)}
     </div>
     ${liveSection(LV, MO)}
-    <div class="grid g3" style="margin-top:16px">
-      <div class="card"><div class="hd"><h3>Recent automatic reports</h3><a class="small right" href="#/reports">All reports</a></div><div class="bd">
-        ${(INV?.investigations || []).length ? `<table class="t"><tbody>${INV.investigations.map(x => `<tr><td><a href="#/investigate/${esc(x.id)}" class="mono small">${esc(x.report_id)}</a></td><td class="small">${esc((x.subject || x.status).slice(0, 70))}</td><td>${x.overall ? `<span class="chip ${({ supported: "sup", contradicted: "con", mixed: "mix" })[x.overall] || "grey"}">${esc(x.overall_label)}</span>` : `<span class="chip grey">${esc(x.status)}</span>`}</td><td class="tiny sub">${fmtDT(x.created_at)}</td></tr>`).join("")}</tbody></table>`
-          : `<p class="small sub" style="margin:0">No automatic reports yet.${App.can("case.create") ? ` <a href="#/investigate">Analyse information</a>.` : ""}</p>`}</div></div>
-      <div class="card"><div class="hd"><h3>Recent investigations</h3><a class="small right" href="#/cases">All cases</a></div><div class="bd">
-        ${(D?.recent || []).length ? `<table class="t"><tbody>${D.recent.slice(0, 6).map(r => `<tr><td><a href="#/case/${esc(r.id)}" class="mono small">${esc(r.id)}</a></td><td class="small">${esc((r.title || "").slice(0, 70))}</td><td>${status(r.status)}</td><td class="tiny sub" style="white-space:nowrap">${fmtDT(r.updated_at)}</td></tr>`).join("")}</tbody></table>`
-          : !D ? `<p class="small sub" style="margin:0">Investigation data is currently unavailable.</p>` : `<p class="small sub" style="margin:0">No investigations yet.${App.can("case.create") ? ` <a href="#/start">Start one</a>.` : ""}</p>`}</div></div>
+    <div style="margin-top:16px">
       <div class="card"><div class="hd"><h3>Recent alerts</h3><a class="small right" href="#/watch/alerts">All alerts</a></div><div class="bd">
         ${(al?.alerts || []).length ? `<ul class="mini">${al.alerts.map(a => `<li><span class="chip ${a.status === "new" ? "warn" : "grey"}">${esc(a.status)}</span><a class="small" style="flex:1" href="#/watch/alerts/${a.id}">${esc((t => (t.toLowerCase().startsWith(String(KIND[a.kind] || a.kind).toLowerCase()) ? t : `${KIND[a.kind] || a.kind}: ${t}`))(a.title || "").slice(0, 90))}</a><span class="tiny sub" style="white-space:nowrap">${esc(a.watchlist_name || "")} · ${fmtDT(a.created_at)}</span></li>`).join("")}</ul>`
           : !al ? `<p class="small sub" style="margin:0">Alert data is currently unavailable.</p>` : `<p class="small sub" style="margin:0">No alerts. Alerts appear when a watchlist finds matching posts or an unusual increase.</p>`}</div></div>
