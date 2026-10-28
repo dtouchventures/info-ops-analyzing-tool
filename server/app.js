@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { ROOT } from "./config.js";
 import { openDb, nowISO } from "./lib/db.js";
 import { makeAudit, verifyChain } from "./lib/audit.js";
-import { makeStorage } from "./lib/storage.js";
+import { makeStorage, safeRm } from "./lib/storage.js";
 import { makeMedia } from "./lib/media.js";
 import { makeCases, STATES, CONCLUSIONS, DEFAULT_CHECKS } from "./lib/cases.js";
 import { makeReports } from "./lib/report.js";
@@ -49,6 +49,7 @@ import { makeNotify } from "./lib/notify.js";
 import { makeAutoComplete, ACCEPT_RULES } from "./lib/autocomplete.js";
 import { submissionHashes, ham, levelOf } from "./lib/hashing.js";
 import { sniff } from "./lib/sniff.js";
+import { makeScreenshots, MAX_SCREENSHOT_MB } from "./lib/screenshot.js";
 import { THRESH } from "./lib/hashing.js";
 import { ROLES, ROLE_LABELS, PERMISSIONS, can, hashPassword, verifyPassword, passwordProblem, makeSessions, throttled, noteFailure, clearFailures, HttpError, requireUser, requirePerm } from "./lib/auth.js";
 
@@ -104,7 +105,8 @@ export function createApp(config) {
   const live = makeLiveMonitor(db, { config, investigations, watch, storage, audit, version: VERSION0, ...(config.liveGraphFactory ? { graphFactory: config.liveGraphFactory } : {}) });
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
-  const ctx = { approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const screenshots = makeScreenshots(db, { config, storage, audit, investigations, io, social, fetchPage, notify });
+  const ctx = { screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -214,7 +216,7 @@ export function createApp(config) {
   });
   api.use(requireUser);
   const upload = multer({ dest: storage.tmpDir, limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 20, fields: 20 } });
-  const cleanup = files => (files || []).forEach(f => fs.rmSync(f.path, { force: true }));
+  const cleanup = files => (files || []).forEach(f => safeRm(f?.path, "upload"));
   // rate limits: everything, plus a tighter budget for work that fetches, stores or computes a lot
   const RL = { windowMs: 300000, general: 1500, heavy: 60, ...(config.rateLimit || {}) };
   const general = makeLimiter({ windowMs: RL.windowMs, limit: RL.general, name: "General" }), heavy = makeLimiter({ windowMs: RL.windowMs, limit: RL.heavy, name: "Heavy" });
@@ -1208,6 +1210,16 @@ export function createApp(config) {
     try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
+  // ---------------------------------------------------------------- automatic social media screenshot analysis (1.34)
+  const shotUpload = multer({ dest: storage.tmpDir, limits: { fileSize: (MAX_SCREENSHOT_MB + 1) * 1024 * 1024, files: 1, fields: 5 } });
+  const canShot = (req, res, next) => (can(req.user, "io.import") && can(req.user, "case.create") ? next() : next(new HttpError(403, "Your role cannot start screenshot analyses.")));
+  api.post("/screenshots", canShot, (req, res, next) => shotUpload.single("file")(req, res, e => next(e?.code === "LIMIT_FILE_SIZE" ? new HttpError(413, `The screenshot is larger than ${MAX_SCREENSHOT_MB} MB. Save it again as JPEG or crop it to the post.`) : e)),
+    h(async (req, res) => { try { const r = await screenshots.submit(req.user, { file: req.file, isTraining: req.body?.is_training === "true", force: req.body?.force === "true" }); res.status(r.duplicate ? 200 : 202).json(r); } catch (e) { cleanup(req.file ? [req.file] : []); throw e; } }));
+  api.get("/screenshots", (req, res) => res.json({ analyses: screenshots.list(Math.min(100, Number(req.query.limit) || 30)) }));
+  api.get("/screenshots/capabilities", h(async (req, res) => res.json(await screenshots.capabilities({ fresh: req.query.fresh === "1" }))));
+  api.get("/screenshots/:id", (req, res) => res.json(screenshots.get(req.params.id)));
+  api.get("/screenshots/:id/image", (req, res) => { const { buf, mime } = screenshots.image(req.params.id); res.set({ "Content-Type": mime, "Content-Security-Policy": "default-src 'none'; sandbox", "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300" }); res.send(buf); });
+  api.patch("/screenshots/:id", canShot, h((req, res) => res.json(screenshots.edit(req.user, req.params.id, req.body || {}))));
   api.get("/investigations/services", (req, res) => { const s = investigations.services(); res.json({ reverse_search: s.reverse_search, ai_vision: s.ai_vision, evidence: s.evidence, ai: { configured: s.ai.configured, model: s.ai.model || null, local: !!s.ai.local, reason: s.ai.reason || null } }); });
   // ---------------------------------------------------------------- Head of Department approval (1.32)
   api.get("/approvals", (req, res) => res.json(approvals.list(req.user, req.query)));

@@ -8,6 +8,7 @@ import { recognise } from "../lib/ocr.js";
 const watchNote = r => r?.watchlists?.length ? ` AI Watchlist: ${r.watchlists.map(w => `“${w.watchlist}” found ${w.matched} matching post${w.matched === 1 ? "" : "s"}${w.alerts ? `, ${w.alerts} new alert${w.alerts === 1 ? "" : "s"}` : ""}`).join("; ")}.` : "";
 import { parsePostScreenshot } from "/shared/text.js";
 import * as SM from "./social.js";
+import * as SHOT from "./screenshot.js";
 
 // content analysis (filters apply) and coordination indicators (whole dataset)
 const TABS = [["overview", "Overview"], ["sentiment", "Sentiment"], ["topics", "Topics & narratives"], ["engagement", "Engagement"], ["claims", "Claims"], ["geography", "Geography"], ["posts", "Posts"], ["report", "Report"],
@@ -28,15 +29,18 @@ async function listPage(el) {
   SM.resetMeta();
   const [{ datasets, caveats }, M] = await Promise.all([api.get("/api/io/datasets"), SM.meta()]), canImport = App.can("io.import");
   el.innerHTML = `<div class="pagehead"><div><h1>Social Media Analysis</h1><p>Import or collect public posts you are permitted to use. AIVS estimates tone, finds themes, topics and checkable claims, summarises public engagement and location data, and looks for signs of coordination: near-identical messages, synchronised posting, hashtag bursts and links shared together.</p></div></div>
-    <div class="callout warn" style="margin-bottom:14px"><div><b>Signals, not proof.</b> ${esc(caveats[0])} ${esc(caveats[2])}</div></div>
+    ${SHOT.uploadCard()}
+    <div class="callout warn" style="margin:14px 0"><div><b>Signals, not proof.</b> ${esc(caveats[0])} ${esc(caveats[2])}</div></div>
     <div class="split"><div class="stack">
+      <div id="shotRecent"></div>
       <div class="card"><div class="hd"><h3>Datasets</h3><span class="chip grey right">${datasets.length}</span></div>
         ${datasets.length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Dataset</th><th class="n">Posts</th><th class="n">Accounts</th><th>Period</th><th>Imported</th></tr></thead><tbody>${datasets.map(d => `<tr class="click" data-ds="${d.id}"><td><b>${esc(d.name)}</b>${d.is_sample ? ` <span class="chip train">synthetic</span>` : ""}<div class="tiny sub">${esc(d.source)}</div></td><td class="n">${n(d.posts)}</td><td class="n">${n(d.accounts)}</td><td class="small">${dt(d.first_at)}<br>to ${dt(d.last_at)}</td><td class="small">${esc(d.imported_by || "—")}<div class="tiny sub">${dt(d.imported_at)}</div></td></tr>`).join("")}</tbody></table></div>`
         : `<div class="bd">${empty("No datasets yet", "Import a CSV or JSON export of posts, or load the synthetic sample to see how the monitor works.")}</div>`}</div>
     </div><div class="stack">
-      ${canImport ? `<div class="card"><div class="hd"><h3>Import posts</h3></div><div class="bd">
+      ${canImport ? `<div class="card"><div class="hd"><h3>Advanced: import a dataset</h3><span class="chip grey right">CSV · JSON · Excel</span></div><div class="bd">
+        <div class="hint" style="margin-top:0">For one screenshot of a post, use <b>Upload Screenshot — Automatic AI Analysis</b> above: nothing needs to be typed. This form is for datasets of many posts.</div>
         <label class="f" for="iof" style="margin-top:0">Posts: a CSV/JSON file, or screenshots of posts <span class="req">*</span></label><input type="file" id="iof" multiple accept=".csv,.json,.jsonl,.txt,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*">
-        <div class="hint"><b>Screenshots:</b> choose one or more pictures of posts (up to 50). AIVS reads them on this computer and shows you the account, time and text it found, for you to check and correct before anything is analysed.</div>
+        <div class="hint"><b>Several screenshots for a dataset</b> (optional, up to 50): AIVS reads them on this computer and shows you the account, time and text it found, for you to check and correct before they are added as dataset rows.</div>
         <div class="hint">Needs one column each for the text, the account and the time. Common names are recognised (text/content/tweet, username/author/account, created_at/date/timestamp). Optional: platform, url, likes, comments, shares, views, language, country / county / place, user_location, collected_at, repost_of, reply_to, account_created_at. CSV, JSON or Excel (.xlsx, first sheet). Up to 200,000 posts. <a href="/posts-template.csv" download>Download a template</a>.</div>
         <label class="f" for="ion">Name <span class="req">*</span></label><input type="text" id="ion" maxlength="200" placeholder="e.g. #ExampleTag posts, 1–7 Oct">
         <label class="f" for="ios">Where the data came from <span class="req">*</span></label><input type="text" id="ios" maxlength="500" placeholder="e.g. platform research API export; partner submission">
@@ -55,6 +59,8 @@ async function listPage(el) {
       <div class="card"><div class="hd"><h3>How to read the results</h3></div><div class="bd small"><ul style="margin:0 0 0 18px;line-height:1.6">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul></div></div>
     </div></div>`;
   $$("[data-ds]").forEach(r => r.onclick = () => App.go(`#/monitor/${r.dataset.ds}`));
+  SHOT.wireUploadCard();
+  SHOT.recentList().then(h => { const box = $("#shotRecent"); if (box && h) { box.innerHTML = h; SHOT.wireRecent(); } });
   SM.wireCollect();
   if ($("#ioDisc")) $("#ioDisc").onclick = async () => { const b = $("#ioDisc"); b.disabled = true; b.innerHTML = '<span class="spin"></span> Loading…'; try { const r = await api.post("/api/io/discussion-sample"); toast("Synthetic discussion sample loaded and analysed."); App.go(`#/monitor/${r.id}`); } catch (e) { fail(e); b.disabled = false; b.textContent = "Load discussion sample"; } };
   if ($("#ioSample")) $("#ioSample").onclick = async () => { const b = $("#ioSample"); b.disabled = true; b.innerHTML = '<span class="spin"></span> Loading…'; try { const r = await api.post("/api/io/sample"); toast("Synthetic sample loaded and analysed."); App.go(`#/monitor/${r.id}`); } catch (e) { fail(e); b.disabled = false; b.textContent = "Load synthetic sample"; } };

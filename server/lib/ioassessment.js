@@ -77,7 +77,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   const x = r.source, o = r.overall, P = principalClaims(r), main = P[0]?.c || null;
   const refs = refsFor(r, P.map(p => p.c.id)), cite = ids => { const ns = refs.filter(f => ids.includes(f.id)).map(f => `[${f.n}]`); return ns.length ? ` ${ns.join("")}` : ""; };
   const text = `${r.content || ""} ${r.claims.map(c => c.text).join(" ")}`, topic = topicOfText(text), kdf = KDF_RE.test(text);
-  const kind = x.input_type === "url" ? (x.platform && /X \(|Facebook|Instagram|TikTok|YouTube|Telegram|Threads|WhatsApp|Reddit|LinkedIn/.test(x.platform) ? "post" : "article") : x.input_type === "image" ? "image" : x.input_type === "document" ? "document" : "message";
+  const kind = x.input_type === "url" ? (x.platform && /X \(|Facebook|Instagram|TikTok|YouTube|Telegram|Threads|WhatsApp|Reddit|LinkedIn/.test(x.platform) ? "post" : "article") : x.input_type === "image" ? "image" : x.input_type === "screenshot" ? "screenshot of a post" : x.input_type === "document" ? "document" : "message";
   const pub = eatDate(x.published_at && x.published_at.slice(0, 10)), recv = eatDate(r.created_at);
   const indicators = r.io?.observed || [], amplification = indicators.filter(i => ["repetition", "dataset", "amplification", "spread"].includes(i.kind)), cues = indicators.filter(i => i.kind === "content");
   const ok = (r.search || []).filter(s => (s.status === "ok" || s.status === "partial") && !["kb", "holdings", "reference"].includes(s.key));
@@ -88,10 +88,13 @@ export function buildAssessment(r, { priority = null } = {}) {
       gap: a.verdict === "insufficient" ? (ok.length ? "no independent reliable source addresses it" : "no outside source could be searched") : a.verdict === "not_verifiable" ? "it is an opinion, prediction or question rather than a checkable fact" : null }; });
 
   // 1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION (40–80 words)
-  const who = [x.author && `attributed to ${x.author}`, x.platform && `on ${x.platform}`].filter(Boolean).join(" ");
+  const shot = x.input_type === "screenshot";
+  const who = [x.author && `attributed to ${x.author}${shot ? " (as shown)" : ""}`, x.platform && `on ${x.platform}${shot ? " (apparent)" : ""}`].filter(Boolean).join(" ");
   const bg = [
     main ? `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} asserts that ${lc(short(main.text.replace(/[.!]+$/, ""), 28))}${P[1] ? `, and that ${lc(short(P[1].c.text.replace(/[.!]+$/, ""), 18))}` : ""}.` : `${kind === "image" ? "An" : "A"} ${kind}${who ? ` ${who}` : ""} was submitted, but no checkable claim could be identified.`,
     x.provenance ? (x.provenance.continues ? `${x.provenance.platform || "The platform"} did not allow automatic extraction; the content was supplied by an analyst.` : "The content was captured by an analyst from their own browser view.") : null,
+    // 1.34: a screenshot is a copy of a post, not proof of it; whether the original was retrieved is always stated
+    shot ? `The screenshot was submitted by an analyst; ${x.screenshot?.original?.retrieved ? "the original post was retrieved from the visible link" : "the original post was not independently retrieved"}, so its authenticity is not established.` : null,
     pub ? `It was published on ${pub} and received by AIVS on ${recv}.` : `Its publication date could not be established; AIVS received it on ${recv}.`,
     `It is significant to KDF because it ${kdf ? "concerns the Kenya Defence Forces or their activities" : topic ? `concerns ${topic}` : "makes a public claim"} and could shape public understanding if repeated.`,
     ["restricted", "failed"].includes(x.access) && !x.provenance ? "The original content could not be fully retrieved." : null];
@@ -127,7 +130,7 @@ export function buildAssessment(r, { priority = null } = {}) {
     : kdf ? "Its effect on KDF's information environment cannot be judged until evidence is available; it should not be presumed false." : "Its effect on the information environment cannot yet be judged.";
   const spread = amplification.length ? "Repetition was observed, which is consistent with amplification but does not prove coordination." : "No dissemination or amplification data indicates coordinated activity.";
   const urgency = ["contradicted", "misleading"].includes(o.verdict) && (kdf || cues.length) ? (o.strength === "strong" ? "High" : "Moderate") : o.verdict === "supported" ? "Low" : "Moderate";
-  const unc = ["restricted", "failed"].includes(x.access) && !x.provenance ? "the original content could not be fully read" : x.provenance ? "the content was supplied by an analyst and could not be compared with the live post" : !ok.length ? "no independent source could be searched" : !x.author && !pub ? "the origin and date of the content are unknown" : r.evidence.filter(e => !e.repeat_of).length < 2 ? "few independent sources were found" : "the sources consulted cover only what they index";
+  const unc = shot && !x.screenshot?.original?.retrieved ? "the post is known only from a screenshot; the original was not independently retrieved" : ["restricted", "failed"].includes(x.access) && !x.provenance ? "the original content could not be fully read" : x.provenance ? "the content was supplied by an analyst and could not be compared with the live post" : !ok.length ? "no independent source could be searched" : !x.author && !pub ? "the origin and date of the content are unknown" : r.evidence.filter(e => !e.repeat_of).length < 2 ? "few independent sources were found" : "the sources consulted cover only what they index";
   const as = [open, classify, impl, spread, `Significance: ${urgency}; confidence: ${conf}. Main limitation: ${unc}.`];
   let assessment = fit(as.filter(Boolean), LIMITS.assessment[1]);
 
@@ -148,8 +151,9 @@ export function buildAssessment(r, { priority = null } = {}) {
   while (recommendations.length < 3) recommendations.push(`${REC_PREFIX} keep the subject under review as new information becomes available.`);
   while (words(recommendations.join(" ")) > LIMITS.recommendations[1] && recommendations.length > 3) recommendations.splice(recommendations.length - 2, 1);
 
-  const header = { reference: r.report_id, date: eatDate(r.completed_at || r.created_at, true), subject: short(r.subject, 16), source: [x.platform, x.publisher && x.publisher !== x.platform ? x.publisher : null].filter(Boolean).join(" · ") || ({ text: "Submitted text", image: "Submitted image", document: "Submitted document" }[x.input_type] || "Not established"),
-    source_url: x.url || null, priority: ({ routine: "Routine", priority: "Priority", urgent: "Urgent" })[priority] || "Routine", status: "DRAFT — NOT APPROVED" };
+  const srcLabel = shot ? `Screenshot · ${x.platform ? `${x.platform} (apparent)` : "platform not identified"}${x.account ? ` · ${x.account}` : ""}` : null;
+  const header = { reference: r.report_id, date: eatDate(r.completed_at || r.created_at, true), subject: short(r.subject, 16), source: [x.platform, x.publisher && x.publisher !== x.platform ? x.publisher : null].filter(Boolean).join(" · ") || ({ text: "Submitted text", image: "Submitted image", document: "Submitted document", screenshot: "Screenshot" }[x.input_type] || "Not established"),
+    ...(srcLabel ? { source: srcLabel } : {}), source_url: x.url || null, priority: ({ routine: "Routine", priority: "Priority", urgent: "Urgent" })[priority] || "Routine", status: "DRAFT — NOT APPROVED" };
   const obj = () => ({ title: "AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", header, background, analysis, assessment, recommendations, references: refs, claims, limitation: null,
     verdict: o.verdict, verdict_label: ioV, strength: conf, urgency, written_by: "rules", training: !!r.training });
   // the page stays near 480 words: sections are shortened in proportion, whole sentences only

@@ -105,6 +105,8 @@ export function makeAutoComplete(db, { cases }) {
     if (emptySearch.length) unc.push({ code: "auto_empty", text: `${emptySearch.map(c => c.label).join(", ")} answered but returned no results for the claims.` });
     const unread = compared.filter(e => e.read_error && checks.get(e.id).ok);
     if (unread.length) unc.push({ code: "auto_unread", text: `${plural(unread.length, "accepted source page")} could not be read in full; the search excerpt was used.` });
+    // 1.34: a screenshot shows a post but does not prove it exists or was published as shown
+    if (source.input_type === "screenshot") unc.push({ code: "auto_screenshot", text: `The content is known from a screenshot submitted by an analyst; ${source.screenshot?.original?.retrieved ? "the original post was retrieved from the visible link for comparison" : "the original post was not independently retrieved"}. A screenshot is not proof that the post exists or was published as shown, and OCR may misread names and numbers.` });
     if (!source.published_at) unc.push({ code: "auto_date", text: "The original publication date of the content could not be established from the source." });
     if (media?.reuse?.length) unc.push({ code: "auto_media", text: `${plural(media.reuse.length, "image reuse indicator")} suggest an attached image may be older than the claim; see the image findings.` });
     if (otherClaims.length) unc.push({ code: "auto_other", text: `${plural(otherClaims.length, "further statement")} in the content ${otherClaims.length === 1 ? "was" : "were"} recorded but not assessed (at most two principal claims are assessed).` });

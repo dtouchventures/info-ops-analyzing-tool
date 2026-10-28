@@ -271,6 +271,21 @@ check("posts can be filtered by account", (await a.$$eval("table.t tbody tr", r 
   check("posts can be added to a dataset; duplicates are skipped and the signal appears", posts3 === "3" && /Synchronised messages\s*1(?!\d)/.test(await a.textContent("#tabBody .kpis")));
   await shot(a, "26-monitor-added");
 }
+// ---- 1.34: one screenshot, analysed automatically (the analyst only uploads)
+{ await a.goto(S.base + "/#/monitor"); await a.waitForSelector("#shotFile");
+  check("Social Media Analysis shows the screenshot upload first", (await a.textContent(".shotcard h3")).includes("Upload Screenshot — Automatic AI Analysis"));
+  await a.setInputFiles("#shotFile", "test/fixtures/screenshots/facebook-post.png");
+  await a.waitForFunction(() => /#\/monitor\/shot\/SA-\d+/.test(location.hash), null, { timeout: 30000 });
+  await a.waitForFunction(() => /Completed|failed/i.test(document.querySelector("#sStatus")?.textContent || ""), null, { timeout: 240000 });
+  const post = await a.textContent("#sPost"), form = await a.inputValue("#sf_source"), auth = await a.inputValue("#sf_authorisation");
+  check("screenshot: platform, page, time and engagement read; observed / inferred / not available shown", /Facebook/.test(post) && /Kenya Daily Updates/.test(post) && /2h · Public/.test(post) && /Observed/.test(post) && /Inferred/.test(post) && /Not available/.test(post), post.slice(0, 120));
+  check("screenshot: fields populated without inventing permission", /apparent platform: Facebook/.test(form) && /No platform API access, permission or consent is recorded/.test(auth));
+  check("screenshot: comments excluded from the post", /Jane Wanjiru/.test(await a.textContent("#sExcluded")) && !/Jane Wanjiru/.test(await a.textContent("#sPost")));
+  check("screenshot: investigation completed with the one-page draft and HOD status", (await a.textContent("#sStatus")).includes("Completed") && !!(await a.$('#sResult a[href$="/report.pdf"]')) && /HOD approval/.test(await a.textContent("#sResult")));
+  await shot(a, "27-screenshot-analysis");
+  await a.goto(S.base + "/#/monitor"); await a.waitForSelector("[data-shot]", { timeout: 15000 });
+  check("recent screenshot analyses are listed", (await a.$$("[data-shot]")).length >= 1);
+}
 // ---- Social media analysis dashboard: synthetic discussion sample, filters, tabs, claims, report
 let discId;
 { await a.goto(S.base + "/#/monitor"); await a.waitForSelector("#ioDisc");

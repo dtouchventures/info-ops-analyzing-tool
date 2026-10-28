@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { nowISO, nextId } from "./db.js";
+import { safeRm } from "./storage.js";
 import { HttpError, can } from "./auth.js";
 import { parseSourceLink, suggestSource, parsePostScreenshot, extractEntities, extractHashtags, redFlags, injectionFlags } from "../../shared/text.js";
 import { compare, topFor, assessClaim, overall, ioIndicators, checkSections, AUTO_VERDICTS, STRENGTH as STRENGTH_LABEL } from "./autoeval.js";
@@ -51,14 +52,14 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   const opt = { timeoutMs: 900000, concurrency: 2, allowExternalAI: false, maxLinkImages: 3, ...(config.investigate || {}) };
   // investigations interrupted by a restart: marked as such, and their uploaded files removed from the temporary folder
   for (const r of db.prepare("SELECT id, input_json FROM investigations WHERE status IN ('queued','running')").all()) {
-    for (const f of JSON.parse(r.input_json).files || []) fs.rmSync(f.path, { force: true });
+    for (const f of JSON.parse(r.input_json).files || []) safeRm(f.path);
     db.prepare("UPDATE investigations SET status = 'failed', error = 'Interrupted: the server stopped while this investigation was running. Start it again.', completed_at = ? WHERE id = ?").run(nowISO(), r.id);
   }
   const queue = [], running = new Set();
 
   // ---------------------------------------------------------------- server-side OCR (Tesseract.js, bundled English and Kiswahili data)
   let worker = null, ocrChain = Promise.resolve();
-  function ocr(file, ms) {
+  function ocr(file, ms, { layout = false } = {}) {
     const job = () => withTimeout(read(), ms, "OCR").catch(async e => { const w = worker; worker = null; await w?.terminate().catch(() => {}); throw e; });   // a stuck or crashed reader is replaced
     const read = async () => {
       if (!worker) {
@@ -67,8 +68,11 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
         for (const l of ["eng", "swa"]) { const dst = path.join(dir, `${l}.traineddata.gz`); if (!fs.existsSync(dst)) fs.copyFileSync(path.join(path.dirname(require.resolve(`@tesseract.js-data/${l}/package.json`)), "4.0.0", `${l}.traineddata.gz`), dst); }
         worker = await createWorker(["eng", "swa"], 1, { langPath: dir, cachePath: path.join(dir, "cache"), gzip: true });
       }
-      const r = await worker.recognize(file);
-      return { text: String(r.data.text || "").trim(), confidence: Math.round(r.data.confidence ?? 0) };
+      const r = await worker.recognize(file, {}, layout ? { text: true, blocks: true } : undefined);
+      const out = { text: String(r.data.text || "").trim(), confidence: Math.round(r.data.confidence ?? 0) };
+      // line layout (1.34, screenshot analysis): each line with its position and confidence
+      if (layout) out.lines = (r.data.blocks || []).flatMap(b => (b.paragraphs || []).flatMap(p => (p.lines || []).map(l => ({ text: String(l.text || "").replace(/\s+/g, " ").trim(), conf: Math.round(l.confidence ?? 0), bbox: l.bbox })))).filter(l => l.text);
+      return out;
     };
     const p = ocrChain.then(job, job); ocrChain = p.catch(() => {}); return p;   // the time limit starts when this image's turn comes
   }
@@ -120,8 +124,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       const [id, user] = queue.shift(), ctl = { cancelled: false }; running.add(id);
       const job = run(id, user, ctl);
       // uploaded files are removed only when the work has really stopped (it checks ctl.cancelled between steps)
-      job.catch(() => {}).finally(() => { for (const f of JSON.parse(row(id)?.input_json || "{}").files || []) fs.rmSync(f.path, { force: true });
-        try { for (const n of fs.readdirSync(storage.tmpDir)) if (n.startsWith(`inv-${id}-link-`)) fs.rmSync(path.join(storage.tmpDir, n), { force: true }); } catch {} });
+      job.catch(() => {}).finally(() => { for (const f of JSON.parse(row(id)?.input_json || "{}").files || []) safeRm(f.path);
+        try { for (const n of fs.readdirSync(storage.tmpDir)) if (n.startsWith(`inv-${id}-link-`)) safeRm(path.join(storage.tmpDir, n)); } catch {} });
       withTimeout(job, opt.timeoutMs, "The investigation")
         .catch(e => { ctl.cancelled = true; if (!(e instanceof Cancelled)) console.error("investigation failed", id, e.message); markFailed(id, user, String(e.message || e)); })
         .finally(() => { running.delete(id); pump(); });
@@ -234,6 +238,8 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     // 0 ---- source detection: platform, kind of content, post or video identifier, earlier investigations of the same link
     setStage(id, "source", "running");
     const srcInfo = detectSource(input.url, id);
+    if (input.prefetched?.screenshot) { const ps = input.prefetched; Object.assign(srcInfo, { valid: true, platform: ps.platform || null, account: ps.account || null, kind: "screenshot",
+      summary: [`screenshot ${ps.screenshot.id}`, ps.platform ? `apparent platform ${ps.platform}` : "platform not identified", ps.account ? `account ${ps.account}` : "account not visible", ps.url ? `link visible: ${ps.url}` : null, ps.screenshot.duplicates?.length ? `similar earlier content: ${ps.screenshot.duplicates.join(", ")}` : null].filter(Boolean).join(" · ") }); }
     setPreview(id, { source_info: srcInfo });
     setStage(id, "source", srcInfo.valid === false ? "warning" : "done", srcInfo.summary);
     // 1 ---- extraction
@@ -245,6 +251,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     const P = input.prefetched || null;
     if (P) { Object.assign(src, { input_type: "url", url: P.url || null, platform: P.platform || null, account: P.account || null, author: P.account || null, author_basis: P.author_basis || null, publisher: P.publisher || null,
       title: P.title || null, published_at: P.published_at || null, published_basis: P.published_basis || null, access: input.text ? "full" : "partial", metrics: P.metrics || null });
+      if (P.screenshot) Object.assign(src, { input_type: "screenshot", screenshot: P.screenshot });
       if (P.method) src.method.push(P.method); src.notes.push(...(P.notes || []).slice(0, 4)); }
     // Facebook links go first to the live monitoring service: the post from the database when it was collected, a share
     // link resolved by Facebook's redirect, or a post of an authorised Page read with that Page's token. Nothing else is requested.
@@ -309,7 +316,12 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     for (const f of input.files) {
       let buf; try { buf = fs.readFileSync(f.path); } catch { src.notes.push(`${f.name}: the uploaded file was not found.`); continue; }
       const k = kindOf(buf);
-      if (k === "image") {
+      if (k === "image" && P?.screenshot && P.ocr_text != null) {
+        // the screenshot was already read (OCR with its layout) by the screenshot analysis: its main post is the content; the full
+        // OCR text (with comments and interface text) is kept with the image but not analysed as claims
+        ocrs.push({ file: f, text: P.ocr_text, confidence: P.ocr_confidence ?? 0 });
+        if (P.ocr_confidence < 70) src.notes.push(`${f.name}: OCR confidence is ${P.ocr_confidence} of 100; names and numbers may be misread.`);
+      } else if (k === "image") {
         try {
           check(); if (budget(120000) < 5000) { src.notes.push(`${f.name}: not read, because the time limit was reached.`); continue; }
           const o = await ocr(f.path, budget(120000));
@@ -338,7 +350,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       } else if (avOf(buf, f.name)) src.notes.push(`${f.name}: video or audio evidence is kept with the case; its frames and speech can be checked from the case (capture frames, transcribe). Its content is not read automatically here.`);
       else src.notes.push(`${f.name}: this file type is not supported here (use an image, video, PDF or Word .docx).`);
     }
-    if (input.text) { parts.unshift(input.text); src.method.push(P ? "post text as returned by the platform API" : S ? "post text pasted by the analyst (not retrieved automatically)" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
+    if (input.text) { parts.unshift(input.text); src.method.push(P?.screenshot ? "main post text read from the screenshot by OCR (comments, advertisements and interface text left out)" : P ? "post text as returned by the platform API" : S ? "post text pasted by the analyst (not retrieved automatically)" : "text provided by the user"); if (src.access === "restricted" || src.access === "failed") { src.access = "full"; src.fallback = null; } }
     if (!input.url && !input.files.length && !P) src.input_type = "text";
     // the original source named by the analyst (for example the article a post shares): retrieved and kept; its text is analysed
     // only when nothing else was supplied
@@ -357,7 +369,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
     // nothing readable: the investigation stops here and says so; no AI or evidence search is run on nothing
     const readable = content.replace(/\s/g, "").length;
     if (readable < 25) {
-      for (const f of input.files) if (f.temp) fs.rmSync(f.path, { force: true });
+      for (const f of input.files) if (f.temp) safeRm(f.path);
       // is the post referred to anywhere else? Pages that quote or link it are listed as independent references, not as its content
       if (input.url && SOCIAL.includes(parseSourceLink(input.url)?.platform) && retrieval.references) {
         setStage(id, "extract", "running", "looking for independent public references to the post");
@@ -384,7 +396,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       for (const f of input.files) {
         if (!fs.existsSync(f.path)) continue;
         try {
-          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.temp) fs.rmSync(f.path, { force: true });
+          const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); if (f.temp) safeRm(f.path);
           const o = ocrs.find(x => x.file === f); if (o?.text && m.kind === "image") cases.addOcr(user, m.id, { text: o.text, lang: "eng+swa", confidence: o.confidence, engine: "tesseract.js (server, automatic investigation)" });
         } catch (e) { src.notes.push(`${f.name} was not kept with the case: ${e.message}`); }
       }
@@ -393,12 +405,12 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
           const m = await media.ingest(f.path, { name: f.name, caseId, isTraining: c.is_training, user }); added.push(m); linkByMedia[m.id] = { url: f.link.url, source: f.link.source };
           audit(user, "Image retrieved from the link and kept with the case", "case", caseId, { media: m.id, url: f.link.url, final_url: f.link.final_url, found_as: f.link.source, sha256: m.sha256 });
           const o = ocrs.find(x => x.file === f); if (o?.text && m.kind === "image") cases.addOcr(user, m.id, { text: o.text, lang: "eng+swa", confidence: o.confidence, engine: "tesseract.js (server, automatic investigation)" });
-        } catch (e) { src.notes.push(`${f.name} was not kept with the case: ${e.message}`); } finally { fs.rmSync(f.path, { force: true }); }
+        } catch (e) { src.notes.push(`${f.name} was not kept with the case: ${e.message}`); } finally { safeRm(f.path); }
       }
       if (added.length) cases.change(user, caseId, `Media received: ${added.map(m => `${m.id} (${m.original_name})`).join(", ")}`, () => {}, { sha256: added.map(m => m.sha256) });
     }
 
-    for (const f of linkFiles) fs.rmSync(f.path, { force: true });
+    for (const f of linkFiles) safeRm(f.path);
     const imgs = caseId ? db.prepare("SELECT id, original_name FROM media WHERE case_id = ? AND kind = 'image' AND parent_media_id IS NULL").all(caseId) : [];
     setPreview(id, { platform: src.platform, url: input.url || null, title: src.title, description: src.description || null, text: content.slice(0, 3000), author: src.author, publisher: src.publisher || null,
       published_at: src.published_at, published_basis: src.published_basis, access: src.access, fallback: src.fallback, notes: src.notes.slice(0, 6), hashtags: content ? extractHashtags(content) : [], mentions: src.mentions,
@@ -868,5 +880,5 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   }
   const services = () => ({ ...mediacheck.status(), evidence: retrieval.status().map(s => ({ key: s.key, label: s.label, configured: s.configured })), ai: ai.status() });
   const visionCheck = () => mediacheck.visionCheck();
-  return { useCaseReports, autoSubmit, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
+  return { useCaseReports, autoSubmit, ocr, start, rerun, regenerate, capture, visionCheck, approvalState, submitReport, decideReport, editAssessment, get, list, review, approve, aiReady, askJson, useFacebook, file, assessmentOf, idle, close, services, STAGES };
 }

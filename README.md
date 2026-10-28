@@ -310,6 +310,22 @@ Rate limits are respected: after a platform says "too many requests", AIVS does 
 
 What is **said** in a video is never available from these services (YouTube gives caption files only to the video's owner). To check speech, add a copy of the video you are permitted to use: the AIVS transcription service transcribes it.
 
+## Automatic screenshot analysis (1.34)
+
+**Social Media Analysis → Upload Screenshot — Automatic AI Analysis.** The analyst uploads one screenshot (PNG, JPEG or WebP, up to 25 MB); everything else is automatic:
+
+1. **Image check:** the format is checked from the file's content (GIF, HEIC, PDF and others are refused with a clear message); very large pictures are reduced and very tall ones read to 16,000 px; an identical file already analysed opens the earlier analysis.
+2. **Reading:** OCR (Tesseract, English and Kiswahili) on this server, with the position and confidence of every line. The text model (`qwen3:4b-instruct`) is never sent images.
+3. **Main post:** the apparent platform (Facebook, Instagram, X, TikTok, WhatsApp, YouTube, Telegram) from layout cues; the account, time, text, hashtags, mentions, links, engagement figures and picture regions of the main post. Comments, advertisements ("Sponsored"), other posts and interface text are separated and left out.
+4. **Every detail is labelled** *Observed* (read from the picture), *Inferred* (worked out by AIVS) or *Not available*. Nothing missing is invented. A relative time such as "2h" is not turned into a date.
+5. **Fields populated:** name, where the data came from, the basis for using it ("submitted by the analyst"; no permission, consent or API authorisation is assumed), research question and notes. They are saved as a Social Media Analysis dataset record. The post is also added as a dataset row when the account and an exact time are visible. Corrections are optional and recorded.
+6. **Original post:** a link visible in the screenshot is tried through permitted methods only (the platform's official embed/API, or public page retrieval). A failure is recorded and the analysis continues.
+7. **Investigation:** at most two principal claims, evidence search and validation, verdicts, KDF IO assessment, a one-page A4 draft and automatic submission to a Head of Department. The screenshot is never treated as evidence. Without accepted evidence a claim stays *Unverified*.
+
+**Image models:** AIVS lists the models on the Ollama server and uses one for image description only when `INVESTIGATE_VISION_MODEL` names it **and** Ollama reports its `vision` capability. None is installed by default. To add one, run `ollama pull qwen2.5vl:7b` on the server and set `INVESTIGATE_VISION_MODEL=qwen2.5vl:7b`. `GET /api/screenshots/capabilities` shows what is installed.
+
+The CSV / JSON / Excel import remains available as a separate, advanced workflow.
+
 ## Checking a social media post
 
 **Verify information → Social media post**:

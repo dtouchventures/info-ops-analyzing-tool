@@ -297,7 +297,17 @@ function mig21(db) {
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')), created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL, resolved_by INTEGER REFERENCES users(id), resolved_at TEXT, resolution TEXT);
   CREATE INDEX IF NOT EXISTS technical_reviews_status ON technical_reviews(status);`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+// 1.34: automatic social media screenshot analysis: one record per uploaded screenshot (what was read, what was inferred,
+// the populated analysis fields, the dataset record and the investigation it started)
+function mig22(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS screenshot_analyses (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, mime TEXT NOT NULL, width INTEGER, height INTEGER, bytes INTEGER NOT NULL,
+    original_name TEXT, status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed')), stage TEXT, stages_json TEXT NOT NULL, extraction_json TEXT, form_json TEXT, form_edits_json TEXT,
+    dataset_id INTEGER REFERENCES io_datasets(id), investigation_id TEXT, duplicate_of TEXT, error TEXT, is_training INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS screenshot_analyses_sha ON screenshot_analyses(sha256);
+  CREATE INDEX IF NOT EXISTS screenshot_analyses_created ON screenshot_analyses(created_at);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
