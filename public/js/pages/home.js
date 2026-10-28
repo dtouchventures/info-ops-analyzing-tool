@@ -1,4 +1,4 @@
-// Dashboard: the three AIVS services, recent investigations and recent alerts. Figures come from the server;
+// Dashboard: services and the central reports entry point, recent investigations and recent alerts. Figures come from the server;
 // nothing here is sample data. Service status for every module is under Settings → Service status.
 import { api } from "../api.js";
 import { App, crumbs } from "../app.js";
@@ -43,6 +43,7 @@ async function draw(el) {
         [[ds.length, "datasets", "#/monitor"], [posts.toLocaleString(), "posts", "#/monitor"]], "#/monitor", "Analyse a dataset")}
       ${card("watch", "watch", "AI Watchlist", "Watch topics and hashtags in imported or collected posts, and get alerts for unusual increases and repeated messages.",
         [[activeW, "active watchlists", "#/watch/lists"], [openAlerts, "open alerts", "#/watch/alerts"]], "#/watch", "Open watchlists", monitoringLine(W))}
+      ${card("reports", "reports", "Reports", "Find automatic reports, approved reports and drafts together in one place. Review, open or download the report you need.", [], "#/reports", "View all reports")}
     </div>
     ${liveSection(LV, MO)}
     <div class="grid g3" style="margin-top:16px">

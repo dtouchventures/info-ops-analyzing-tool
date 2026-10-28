@@ -36,7 +36,7 @@ const shot = async (p, n) => shots && p.screenshot({ path: path.join(shots, n + 
 const a = await session("ana");
 await a.waitForSelector(".svc");
 check("the main menu preserves the seven services and adds Background tasks", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "Live Monitoring", "AI Watchlist", "Reports", "Settings", "Background tasks"]));
-check("the dashboard shows three service cards with server figures, recent investigations and recent alerts", (await a.$$(".svc")).length === 3 && (await a.textContent("#page")).includes("Recent investigations") && (await a.textContent("#page")).includes("No alerts"));
+check("the dashboard shows four service cards including the reports hub, recent investigations and recent alerts", (await a.$$(".svc")).length === 4 && (await a.textContent("#page")).includes("Recent investigations") && (await a.textContent("#page")).includes("No alerts"));
 await shot(a, "00a-dashboard-home");
 await a.goto(S.base + "/#/status"); await a.waitForSelector(".module");
 check("start page lists the eight modules with honest statuses", (await a.$$(".module")).length === 8 && (await a.textContent(".modules")).includes("Available") && (await a.textContent(".modules")).includes("Partly available"));
