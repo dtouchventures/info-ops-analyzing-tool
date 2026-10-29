@@ -49,6 +49,8 @@ h1 { font-size: 22px; font-weight: 700; } h2 { font-size: 17px; font-weight: 700
 .topbar .crumbs { font-size: 13px; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .crumbs b { color: var(--text); }
 .topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.ai-availability { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; overflow-wrap: anywhere; }
+.ai-availability[data-available="true"] { color: #086b60; background: #eaf7f3; }
 .scope { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; }
 .scope button { border: 0; background: var(--surface); padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
 .scope button.on { background: var(--navy-900); color: #fff; }

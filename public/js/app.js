@@ -70,7 +70,7 @@ function shell() {
       <div class="side-foot"><b>${esc(App.me.display_name)}</b>${esc(App.meta.roles[App.me.role])} · <a href="#" id="pwLink" style="color:#9fd8d5">Password</a> · <a href="#/privacy" style="color:#9fd8d5">Privacy</a> · <a href="#" id="logout" style="color:#9fd8d5">Sign out</a></div>
     </aside>
     <div class="main">
-      <div class="topbar"><div class="crumbs" id="crumbs"></div>
+      <div class="topbar"><div class="crumbs" id="crumbs"></div><a href="#/status" id="aiAvailability" class="small ai-availability" role="status" aria-live="polite">AI · Checking connection…</a>
         <div class="right"><a href="#/tasks" class="small" id="taskStatus">Background tasks</a><div class="scope mode" role="group" aria-label="Interface mode" title="Guided shows one next step at a time; Advanced shows every tool"><button data-mode="guided" class="${App.guided() ? "on" : ""}">Guided</button><button data-mode="advanced" class="${App.guided() ? "" : "on"}">Advanced</button></div><span class="small sub">Records:</span><div class="scope" role="group" aria-label="Which records to show">
           <button data-scope="real" class="${App.training ? "" : "on"}">Operational</button><button data-scope="training" class="train ${App.training ? "on" : ""}">Training</button></div></div></div>
       ${App.training ? `<div class="trainbar">Training mode — synthetic practice cases and archive records. They are kept separate from operational records and never match them.</div>` : ""}
@@ -84,7 +84,26 @@ function shell() {
     try { await api.patch("/api/me/preferences", { ui_mode: m }); App.me.ui_mode = m; shell(); route(); toast(m === "guided" ? "Guided mode: one next step at a time, advanced tools hidden." : "Advanced mode: all tools shown."); } catch (e) { fail(e); }
   });
   document.querySelectorAll("[data-scope]").forEach(b => b.onclick = () => { App.setScope(b.dataset.scope); route(); });
+  refreshAiAvailability();
 }
+let aiStatusPending = false;
+async function refreshAiAvailability() {
+  if (!App.me || document.hidden || aiStatusPending) return;
+  aiStatusPending = true;
+  try {
+    const result = await api.get("/api/ai/health?cached=1"), ai = result.ai || {}, el = $("#aiAvailability");
+    if (!el || !App.me) return;
+    const state = !ai.configured ? "Not configured" : !ai.enabled ? "Switched off" : result.state === "ok" ? "Available" : result.state === "failed" ? "Unavailable" : result.state === "unchecked" ? "Not verified" : "Checking connection…";
+    el.textContent = `${ai.providerLabel || "AI"} · ${state}`;
+    el.dataset.available = String(ai.configured && ai.enabled && result.state === "ok");
+    el.title = [ai.model, ai.reason, "Open AI connection details"].filter(Boolean).join(" · ");
+  } catch {
+    const el = $("#aiAvailability");
+    if (el) { el.textContent = "AI · Connection unknown"; el.dataset.available = "false"; el.title = "Could not reach the server. Open connection details."; }
+  } finally { aiStatusPending = false; }
+}
+setInterval(refreshAiAvailability, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAiAvailability(); });
 export function crumbs(html) { const c = $("#crumbs"); if (c) c.innerHTML = html; }
 
 let routeSeq = 0;
