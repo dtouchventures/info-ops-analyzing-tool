@@ -1,3 +1,5 @@
+import { makeBriefReports } from "./lib/brief-reports.js";
+import { briefHtml, briefPdf, briefDocx } from "./lib/brief-print.js";
 import { makeLatestKenyaNews } from "./lib/kenyan-news.js";
 import { backgroundOverview } from "./lib/background-overview.js";
 import { makeReverseImageSearch } from "./lib/reverse-image.js";
@@ -156,7 +158,8 @@ export function createApp(config) {
     return { case_id: id, report_url: `/api/cases/${id}/automatic-report.html` };
   });
   tasks.start();
-  const ctx = { securityKenyaNews, latestKenyaNews, tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const briefs = makeBriefReports(db, { audit, notify });
+  const ctx = { briefs, securityKenyaNews, latestKenyaNews, tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -1450,6 +1453,19 @@ export function createApp(config) {
   }));
 
   // ---------------------------------------------------------------- reports
+  api.get("/briefs", requirePerm("case.read"), (req,res)=>res.json({reports:briefs.list(scopeOf(req)===1),schedule:briefs.status()}));
+  api.get("/briefs/candidates", requirePerm("case.read"), (req,res)=>res.json({verifications:briefs.candidates(scopeOf(req)===1)}));
+  api.post("/briefs/daily", heavy, requirePerm("report.submit"), h((req,res)=>res.status(201).json(briefs.daily(req.user,{training:scopeOf(req)===1}))));
+  api.post("/briefs/consolidated", heavy, requirePerm("report.submit"), h((req,res)=>res.status(201).json(briefs.consolidate(req.user,req.body?.ids,{training:scopeOf(req)===1,title:req.body?.title}))));
+  api.get("/briefs/:id/file.:fmt(html|pdf|docx|json)", requirePerm("case.read"), h(async(req,res)=>{
+    const r=briefs.get(Number(req.params.id));const snap={...r.snapshot,is_training:!!r.is_training};
+    res.set('Cache-Control','private, no-store');
+    if(req.params.fmt==='html'){res.set('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'self'");return res.type('html').send(briefHtml(snap));}
+    res.attachment(`${r.reference}.${req.params.fmt}`);
+    if(req.params.fmt==='json')return res.json({reference:r.reference,sha256:r.sha256,snapshot:snap});
+    if(req.params.fmt==='pdf')return res.type('application/pdf').send(await briefPdf(snap));
+    return res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(briefDocx(snap));
+  }));
   api.get("/reports", (req, res) => {
     const t = scopeOf(req);
     res.json({

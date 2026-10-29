@@ -333,7 +333,14 @@ function mig25(db) {
     updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL, UNIQUE(source_kind, source_id));
   CREATE TABLE IF NOT EXISTS formal_report_versions (id INTEGER PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, content_json TEXT NOT NULL, saved_by INTEGER REFERENCES users(id), saved_at TEXT NOT NULL, note TEXT)`);
 }
-const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }, { fn: mig24 }, { fn: mig25 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
+function mig26(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS brief_reports (
+    id INTEGER PRIMARY KEY, reference TEXT NOT NULL UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('daily','consolidated')),
+    is_training INTEGER NOT NULL DEFAULT 0, window_from TEXT, window_to TEXT, snapshot_json TEXT NOT NULL,
+    sha256 TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS brief_reports_scope ON brief_reports(is_training,kind,created_at);`);
+}
+const MIGRATIONS = [SCHEMA, MIG2, MIG3, MIG4, { fn: mig5, noFk: true }, MIG6, MIG7, MIG8, { fn: mig9, noFk: true }, { fn: mig10 }, { fn: mig11 }, { fn: mig12 }, { fn: mig13, noFk: true }, { fn: mig14 }, { fn: mig15 }, { fn: mig16 }, { fn: mig17 }, { fn: mig18 }, { fn: mig19 }, { fn: mig20, noFk: true }, { fn: mig21 }, { fn: mig22 }, { fn: mig23 }, { fn: mig24 }, { fn: mig25 }, { fn: mig26 }]; // index i => user_version i+1. Append new migrations; never edit old ones.
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

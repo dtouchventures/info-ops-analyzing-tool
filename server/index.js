@@ -39,6 +39,7 @@ const server = app.listen(config.port, config.host, () => {
   ctx.transcriber.resume();
   ctx.watchCollector.start();
   ctx.live.start();
+  ctx.briefs.start();
   // the default KDF watchlist is created once (then edited from the dashboard); AI analysis of discovered items runs from a queue
   // that waits while the Ollama server cannot be reached; emerging topics are checked every 10 minutes
   try { const d = ctx.keywords.ensureDefault(ctx.live.systemUser()); if (d) console.log(`  Default watchlist “KDF and Kenya Defence Forces Monitoring”: ${d.status}`);
