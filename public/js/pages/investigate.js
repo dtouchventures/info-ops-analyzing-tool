@@ -1,3 +1,4 @@
+import { reverseImageHtml } from "../lib/reverseview.js";
 import { formalPanel } from "../formal.js";
 // Verify Information (1.24): paste a link, press Analyse Automatically. AIVS extracts the post or article (text,
 // headline, images, author, date, hashtags, engagement, video details), detects the claims, searches for evidence,
@@ -37,6 +38,7 @@ export async function render(el, params = []) {
       </details>
       ${App.training ? `<div class="callout train" style="margin-top:12px"><div>You are viewing Training records: this becomes a training investigation, kept apart from real cases.</div></div>` : ""}
       <div class="callout" style="margin-top:12px"><div><label class="check"><input type="checkbox" id="geminiPublicImages" disabled> Use Google Gemini for these public images</label><p class="tiny sub" style="margin:6px 0">Optional. Sends copies of uploaded or linked images to Google. I confirm these images are public and cleared for external processing. Free-tier inputs and outputs may be used to improve Google products and reviewed by humans. Keep confidential material local. Gemini descriptions are unverified and do not establish authenticity or the original uploader.</p><span class="tiny sub" id="geminiStatus" role="status">Checking Gemini availability…</span></div></div>
+      <div id="reverseProviderState" class="small" role="status" style="margin-top:10px"></div>
       <div id="ierr" class="callout bad" style="margin-top:12px" hidden></div>
       <p class="tiny sub" style="margin:10px 0 0">Results are AI-generated preliminary assessments, labelled as not reviewed. AI confidence is not proof; consequential decisions need human review.</p>
     </div></div>
@@ -56,6 +58,7 @@ export async function render(el, params = []) {
     </div>`;
   const files = $("#ifile"), err = $("#ierr");
   api.get("/api/gemini-images/status").then(s => { if (!el.isConnected || !$("#geminiStatus", el)) return; $("#geminiPublicImages", el).disabled = !s.configured; $("#geminiStatus", el).textContent = s.configured ? `Available: ${s.model}. Off unless you select it for this submission.` : "Not configured. An administrator must set GEMINI_API_KEY and GEMINI_IMAGE_MODEL on the server. Local checks remain available."; }).catch(() => { if ($("#geminiStatus", el)) $("#geminiStatus", el).textContent = "Gemini availability could not be checked. Local checks remain available."; });
+  api.get("/api/reverse-images/status").then(s=>{const box=$("#reverseProviderState",el);if(box)box.textContent=s.configured?`Prior-posting search is configured: uploaded images are sent to ${s.service} to find matching web pages. Results are limited to its index.`:"Prior-posting search is not configured. Local image descriptions and archive matching do not search the web. Add SERPAPI_API_KEY or GOOGLE_VISION_API_KEY on the server to enable online matches.";}).catch(()=>{});
   files.onchange = () => { $("#ifiles").textContent = [...files.files].map(f => `${f.name} (${kb(f.size)})`).join(", "); };
   $("#iv").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#igo").click(); } };
   const submissionKey = newTaskKey();
@@ -251,7 +254,7 @@ function results(inv) {
       ${a.corrected_from ? `<p class="tiny" style="margin:0 0 6px"><span class="chip warn">verdict corrected automatically</span> The preliminary reading was not carried by the accepted evidence.</p>` : ""}
       ${rel.length ? `<details class="small"><summary>${valid ? "Context and other sources found" : "Related sources"} (${rel.length})</summary><ul style="margin:4px 0 6px 18px">${rel.map(evRow).join("")}</ul></details>` : ""}</div></div>`; }).join("");
   const imgs = (r.media?.images || []).map(i => `<div class="row" style="gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap"><img src="/api/media/${encodeURIComponent(i.media_id)}/thumb" alt="${esc(i.name)}" style="max-width:160px;max-height:120px;border:1px solid var(--line);border-radius:6px">
-    <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul></div>`).join("");
+    <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul><div style="width:100%">${reverseImageHtml(i.reverse)}</div></div>`).join("");
   const cred = Object.entries(r.evidence.filter(e => !e.repeat_of).reduce((m, e) => (m[e.tier_label] = (m[e.tier_label] || 0) + 1, m), {}));
   return `${pv}<div class="card" style="margin-top:12px;border-left:6px solid var(--${VC[o.verdict] === "grey" ? "line" : VC[o.verdict]})"><div class="bd">
       <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><div><div class="tiny sub">Overall preliminary verdict</div><h2 style="margin:2px 0">${esc(o.label)}</h2></div><span class="chip ${VC[o.verdict]}" style="font-size:13px">Strength of the evidence: ${esc(o.strength_label)}</span></div>

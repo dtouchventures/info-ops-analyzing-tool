@@ -325,7 +325,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
     const parent = m.parent_media_id ? A.media.find(x => x.id === m.parent_media_id) : null;
     return `<div class="mediacard" id="mc-${esc(m.id)}">
       <div><div class="pv"><img src="${thumb(m.id)}" alt="${esc(m.original_name)}" data-view="${esc(m.id)}" loading="lazy"></div>
-        <div class="row" style="margin-top:8px"><button class="btn sm" data-view="${esc(m.id)}">Enlarge</button><button class="btn sm adv" data-ela="${esc(m.id)}">Error level analysis</button><button class="btn sm" data-web="${esc(m.id)}" title="Upload the image yourself to a reverse-image search service">Reverse image search</button><a class="btn sm ghost" href="${content(m.id)}" target="_blank" rel="noopener">Original</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download</a></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm" data-view="${esc(m.id)}">Enlarge</button><button class="btn sm adv" data-ela="${esc(m.id)}">Error level analysis</button>${P.edit ? `<button class="btn sm primary" data-ris="${esc(m.id)}">Search prior postings</button>` : ""}<button class="btn sm" data-web="${esc(m.id)}" title="Upload the image yourself to a reverse-image search service">Manual reverse search</button><a class="btn sm ghost" href="${content(m.id)}" target="_blank" rel="noopener">Original</a><a class="btn sm ghost" href="${content(m.id)}?download=1">Download</a></div>
         <div data-elabox="${esc(m.id)}" hidden></div></div>
       <div style="min-width:0">
         <h4>${esc(m.id)} ${parent ? `<span class="chip info">Frame at ${m.frame_time.toFixed(2)} s of ${esc(parent.id)} · ${m.frame_origin === "auto" ? "auto-sampled" : "selected by analyst"}</span>` : `<span class="small sub" style="font-weight:400">${esc(m.original_name)}</span>`}</h4>
@@ -382,6 +382,7 @@ export async function render(el, [id, tabArg], { isCurrent }) {
       try { await api.post(`/api/media/${encodeURIComponent(b.dataset.rvs)}/video-check`); toast("Reverse video search started. It runs automatically; results appear here."); showVideoCheck(b.dataset.rvs, true); }
       catch (e) { fail(e); } finally { b.disabled = false; b.textContent = "Reverse video search"; }
     });
+    $$("[data-ris]").forEach(b => b.onclick = () => onlineImageSearch(A.media.find(m=>m.id===b.dataset.ris),P));
     $$("[data-web]").forEach(b => b.onclick = () => webSearch(A.media.find(x => x.id === b.dataset.web), P));
     $$("[data-view]").forEach(b => b.onclick = () => { const m = A.media.find(x => x.id === b.dataset.view); viewer(content(m.id), `${m.id} · ${m.original_name}`); });
     $$("[data-ela]").forEach(b => b.onclick = async () => {
@@ -763,6 +764,16 @@ export async function render(el, [id, tabArg], { isCurrent }) {
 
   // ---------------------------------------------------------------- history
   // ---------------------------------------------------------------- reverse image search (done by the analyst, outside AIVS)
+  async function onlineImageSearch(m,P) {
+    try {
+      const state=await api.get("/api/reverse-images/status");
+      if(!state.configured) {const choice=await modal("Online image search is not configured", `<p>${esc(state.needs)}</p><p>Image descriptions do not search earlier web postings. Add the institution's reverse-image provider key to the server configuration, then restart JICHO AI.</p>`,[{label:"Use manual reverse search",value:"manual",kind:"primary"},{label:"Close",value:null}]);if(choice.value==="manual")await webSearch(m,P);return;}
+      const r=await modal("Search prior image postings", "<p>This sends a copy of the image to the configured reverse-image provider to find matching public web pages. Continue only for an image cleared for external search. Dates and matches will be checked where accessible; private posts and the first uploader may remain unknown.</p>",[{label:"Cancel",value:null},{label:"Search online",value:true,kind:"primary"}]);
+      if(!r.value)return;
+      await api.queueTask(A.case.id,"collection",{reverse_image:true,media_id:m.id,confirm_external:true});
+      toast("Reverse-image search started. Results will be saved under Background tasks.");location.hash="#/tasks";
+    } catch(e){fail(e);}
+  }
   async function webSearch(m, P) {
     const sites = [["Google Lens", "https://lens.google.com/"], ["Bing Visual Search", "https://www.bing.com/visualsearch"], ["TinEye", "https://tineye.com/"], ["Yandex Images", "https://yandex.com/images/"]];
     const body = `<div class="callout warn"><div><b>This step leaves AIVS.</b> You upload the image to an outside search service yourself. Do it only for material that is public or cleared for external search. AIVS sends nothing.</div></div>

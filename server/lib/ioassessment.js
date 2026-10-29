@@ -102,9 +102,10 @@ export function videoNote(r) {
 }
 // an AI-written analysis keeps the video sentence (it is added back when the model left it out, within the word limit)
 export function keepVideoNote(a) {
-  if (!a?.video_note || a.analysis.includes("Video verification")) return a;
-  const ss = String(a.analysis).split(/(?<=[.!?])\s+/).filter(Boolean); ss.splice(Math.min(1, ss.length), 0, a.video_note);
-  return { ...a, analysis: fit(ss, LIMITS.analysis[1]) };
+  if(!a)return a;
+  const ss=String(a.analysis).split(/(?<=[.!?])\s+/).filter(Boolean);
+  for(const note of [a.image_history_note,a.video_note].filter(Boolean)) if(!a.analysis.includes(note)) ss.splice(Math.min(1,ss.length),0,note);
+  return {...a,analysis:fit(ss,LIMITS.analysis[1])};
 }
 export function buildAssessment(r, { priority = null } = {}) {
   const x = r.source, o = r.overall, P = principalClaims(r), main = P[0]?.c || null;
@@ -135,11 +136,15 @@ export function buildAssessment(r, { priority = null } = {}) {
 
   // video verification (1.35): one concise sentence, placed right after the evidence-search sentence so it is never cut
   const vnote = videoNote(r);
+  const imageResults = r.media?.images || [];
+  const datedImage = imageResults.map(i=>i.reverse?.earliest_known).filter(Boolean).sort((a,b)=>a.date.localeCompare(b.date))[0];
+  const imageNote = !imageResults.length ? null : datedImage ? `Image history: the earliest dated confirmed match among accessible returned pages is ${datedImage.date.slice(0,10)}; this does not establish the first upload. See Image verification for source links.` : imageResults.some(i=>i.reverse?.status!=="completed") ? "Image history: online earlier-post searching was not completed for all images; AI descriptions and local matching do not establish prior web postings." : "Image history: online reverse search completed, but no earliest dated confirmed match was established among returned results.";
   // 2. ANALYSIS (80–180 words): each principal claim, its evidence and the gaps
   const SHORT = { factcheck: "fact-check databases", web: "web search", official: "official and fact-checking sites", news: "a news index" };
   const an = [ok.length ? `AIVS searched ${ok.map(s => SHORT[s.key] || s.label).join(", ")} automatically and compared ${plural(r.evidence.filter(e => !e.repeat_of && !["reference", "earlier_case"].includes(e.tier)).length, "independent item")}${r.evidence.some(e => e.page_read) ? `, reading the full text of ${plural(r.evidence.filter(e => e.page_read).length, "source")}` : ""}.`
     : `No independent evidence source could be searched${errored.length ? ` (${errored.map(s => s.label).join(", ")} returned errors)` : unconfigured.length ? " (no search service is configured)" : ""}, so the claims could not be compared with outside reporting.`];
   if (vnote) an.push(vnote);
+  if (imageNote) an.push(imageNote);
   for (const k of claims) {
     const parts = [`Claim ${k.n} (“${short(k.text, 16)}”) is assessed as ${k.verdict_io} (confidence: ${k.confidence}).`];
     if (k.contradicting.length) parts.push(`It is contradicted by ${refs.filter(f => k.contradicting.includes(f.n)).map(f => `${f.publisher}${f.rating ? `, which rates it “${f.rating}”` : ""} [${f.n}]`).join(" and ")}.`);
@@ -197,7 +202,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   const header = { reference: r.report_id, date: eatDate(r.completed_at || r.created_at, true), subject: short(r.subject, 16), source: [x.platform, x.publisher && x.publisher !== x.platform ? x.publisher : null].filter(Boolean).join(" · ") || ({ text: "Submitted text", image: "Submitted image", document: "Submitted document", screenshot: "Screenshot" }[x.input_type] || "Not established"),
     ...(srcLabel ? { source: srcLabel } : {}), source_url: x.url || null, priority: ({ routine: "Routine", priority: "Priority", urgent: "Urgent" })[priority] || "Routine", status: "DRAFT — NOT APPROVED" };
   const obj = () => ({ title: "AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", header, background, analysis, assessment, recommendations, references: refs, claims, limitation: null,
-    verdict: o.verdict, verdict_label: ioV, evidence_judgement: judgement, strength: conf, urgency, written_by: "rules", training: !!r.training, ...(vnote ? { video_note: vnote } : {}) });
+    verdict: o.verdict, verdict_label: ioV, evidence_judgement: judgement, strength: conf, urgency, written_by: "rules", training: !!r.training, ...(imageNote ? {image_history_note:imageNote} : {}), ...(vnote ? { video_note: vnote } : {}) });
   // the page stays near 480 words: sections are shortened in proportion, whole sentences only
   const pageWords = () => words(assessmentHtml(obj()).replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " "));
   const full = [words(background), words(analysis), words(assessment)];

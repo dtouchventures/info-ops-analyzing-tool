@@ -1,3 +1,4 @@
+import { makeReverseImageSearch } from "./lib/reverse-image.js";
 import { serviceWritingReport as serviceReport, buildAssessment as serviceAssessment } from "./lib/ioassessment.js";
 import { makeFormalReports, fromCase as formalFromCase, fromDataset as formalFromDataset, normalise as formalNormalise, check as formalCheck, tooLong as formalTooLong } from "./lib/formal-report.js";
 import { docx as formalDocx, pdf as formalPdf, html as formalHtml } from "./lib/formal-print.js";
@@ -120,7 +121,16 @@ export function createApp(config) {
     const c = cases.mustCase(id); if (c.status === "analysis_failed") throw new HttpError(422, c.analysis_error);
     return { case_id: id, claims: cases.claimCapacity(id) };
   });
+  const reverseImages = makeReverseImageSearch(config);
   tasks.register("collection", async (user, id, b) => {
+    if(b.reverse_image) {
+      if(b.confirm_external !== true) throw new HttpError(400,"Confirm this image is cleared for external reverse-image search.");
+      const m=db.prepare("SELECT * FROM media WHERE id=? AND case_id=? AND kind='image'").get(b.media_id,id);
+      if(!m) throw new HttpError(404,"Image not found in this case.");
+      if(!reverseImages.status().configured) throw new HttpError(503,reverseImages.status().needs);
+      audit(user,"Image sent to online reverse-image search","case",id,{media:m.id,sha256:m.sha256,provider:reverseImages.status().service});
+      return {reverse_image:await reverseImages.search(fs.readFileSync(storage.pathOf(m.sha256))),media_id:m.id};
+    }
     const result = await retrieval.retrieve(user, id, { claimIds: b.claim_ids, use: b.use }, cases);
     const configured = (result.connectors || []).filter(c => c.configured);
     if (configured.length && configured.every(c => c.errors?.length)) throw new HttpError(422, "Evidence collection failed for the configured services. Existing evidence was retained. Retry or check service status.");
@@ -1267,6 +1277,7 @@ export function createApp(config) {
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   // ---------------------------------------------------------------- reverse video search and verification (1.35)
+  api.get("/reverse-images/status", (req,res)=>res.json(reverseImages.status()));
   api.get("/video-checks/status", (req, res) => res.json(videoCheck.status()));
   api.post("/media/:id/video-check", requirePerm("case.edit"), h((req, res) => res.status(202).json(videoCheck.start(req.user, req.params.id))));
   api.get("/media/:id/video-checks", (req, res) => res.json({ analyses: videoCheck.forMedia(req.params.id) }));

@@ -282,7 +282,7 @@ check("posts can be filtered by account", (await a.$$eval("table.t tbody tr", r 
   check("video upload: keyframes extracted and the video verification shown, stating that internet-wide reverse search was not completed", /Video verification/.test(out) && /3 keyframe/.test(out) && /Internet-wide reverse search was not completed/.test(out), out.slice(0, 160));
   const invId = (await a.evaluate(() => location.hash)).match(/INV-\d+/)[0], cid = await a.evaluate(async id => (await (await fetch(`/api/investigations/${id}`)).json()).result.case_id, invId);
   await a.goto(S.base + `/#/case/${cid}/media`); await a.waitForSelector("[data-rvs]");
-  check("Reverse video search sits on the video beside Reverse image search on its keyframes", (await a.textContent("[data-rvs]")).trim() === "Reverse video search" && (await a.$$("[data-web]")).length >= 3 && (await a.textContent("[data-web]")).trim() === "Reverse image search");
+  check("Reverse video search sits on the video beside Reverse image search on its keyframes", (await a.textContent("[data-rvs]")).trim() === "Reverse video search" && (await a.$$("[data-web]")).length >= 3 && (await a.textContent("[data-web]")).trim() === "Manual reverse search");
   await a.waitForFunction(() => /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 30000 });
   await a.click("[data-rvs]"); await a.waitForFunction(() => /VC-000002/.test(document.querySelector("[data-rvsbox]")?.textContent || "") && /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 240000 });
   const box = await a.textContent("[data-rvsbox]");

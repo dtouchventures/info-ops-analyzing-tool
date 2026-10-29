@@ -1,3 +1,4 @@
+import { reverseImageHtml } from "../lib/reverseview.js";
 import { api, newTaskKey } from '../api.js';
 import { crumbs } from '../app.js';
 import { esc, fmtDT } from '../ui.js';
@@ -19,7 +20,8 @@ export async function render(el, _args, { isCurrent }) {
       }
       lastData = signature;
       panel.innerHTML = data.tasks.length ? data.tasks.map(t => `<article class="card" style="margin-bottom:12px"><div class="bd"><div class="row"><h2>${esc(LABEL[t.kind] || t.kind)}</h2><span class="chip ${t.status === 'failed' ? 'warn' : t.status === 'completed' ? 'sup' : 'info'}">${esc(t.status_label)}</span><a href="#/case/${encodeURIComponent(t.case_id)}">${esc(t.case_id)}</a></div><p class="small sub">Requested ${fmtDT(t.created_at)} · Attempt ${t.attempts}</p>${t.error ? `<p role="status">${esc(t.error)}</p>` : ''}
-        ${t.kind === 'collection' && t.result ? `<p class="small">${(t.result.connectors || []).reduce((n, x) => n + (x.stored || 0), 0)} new evidence suggestions. <a href="#/case/${encodeURIComponent(t.case_id)}/evidence">Review evidence</a></p><ul class="small">${(t.result.connectors || []).map(c => `<li>${esc(c.label || c.key)}: ${c.errors?.length ? esc(c.errors.join("; ")) : !c.configured ? "Not configured" : `${c.results || 0} results, ${c.stored || 0} new suggestions`}</li>`).join("")}</ul>` : ''}
+        ${t.kind === 'collection' && t.result && !t.result.reverse_image ? `<p class="small">${(t.result.connectors || []).reduce((n, x) => n + (x.stored || 0), 0)} new evidence suggestions. <a href="#/case/${encodeURIComponent(t.case_id)}/evidence">Review evidence</a></p><ul class="small">${(t.result.connectors || []).map(c => `<li>${esc(c.label || c.key)}: ${c.errors?.length ? esc(c.errors.join("; ")) : !c.configured ? "Not configured" : `${c.results || 0} results, ${c.stored || 0} new suggestions`}</li>`).join("")}</ul>` : ''}
+        ${reverseImageHtml(t.result?.reverse_image)}
         ${t.status === 'failed' ? `<button class="btn sm" data-retry="${t.id}">Retry</button>` : t.status === 'completed' ? `<button class="btn sm" data-again="${t.id}">Run again</button>` : '<p class="small">You can leave this page. Results will be saved with the case.</p>'}
         ${t.kind === 'report' && t.status === 'completed' ? `<a class="btn sm" href="#/case/${encodeURIComponent(t.case_id)}/automatic">Open report</a>` : ''}</div></article>`).join('') : '<div class="card"><div class="bd">No case tasks yet. Start checks, evidence collection, AI verification or a report from a case.</div></div>';
       if (data.investigations?.length) panel.insertAdjacentHTML('beforeend', `<div class="card"><div class="hd"><h2>Automatic investigations</h2></div><div class="bd">${data.investigations.map(t => `<p><a href="#/investigate/${encodeURIComponent(t.id)}">${esc(t.report_id)}</a> · ${esc(t.status_label)}${t.case_id ? ` · ${esc(t.case_id)}` : ''}</p>`).join('')}</div></div>`);

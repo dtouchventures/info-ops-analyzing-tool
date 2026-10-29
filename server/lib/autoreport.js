@@ -47,7 +47,7 @@ export function writeSections(r) {
   const as = [`Overall: ${o.label}. Strength of the available evidence: ${o.strength_label.toLowerCase()}.${o.note ? ` ${o.note}` : ""}`, r.io.assessment];
   if (["restricted", "failed"].includes(x.access)) as.push("The original content could not be fully read, which limits this assessment.");
   for (const v of vids(r)) as.push(v.summary);
-  if (r.media?.images?.length) as.push(r.media.reuse.length ? "Image findings: at least one image appears to be reused from an earlier context (see Image verification)." : `Image findings: ${r.media.images.length} image(s) were checked; no sign of reuse of an older image was found in the reference archive${r.media.services?.reverse_search?.configured ? " or by reverse-image search" : ""}. This does not show that the images are original or unaltered.`);
+  if (r.media?.images?.length) as.push(r.media.reuse.length ? "Image findings: at least one image appears to be reused from an earlier context (see Image verification)." : `Image findings: ${r.media.images.length} image(s) were checked; no sign of reuse of an older image was found in the reference archive${r.media.images.every(i=>i.reverse?.status === "completed") ? " or among returned reverse-image results" : ""}. This does not show that the images are original or unaltered.`);
   if (["insufficient", "mixed"].includes(o.verdict)) as.push("The claim should not be treated as established or as false until stronger evidence is available.");
 
   const rec = [];
@@ -130,7 +130,7 @@ const imgHtml = (r, images) => {
   return `<h2>Image verification</h2>${list.map(i => { const d = images.find(x => x.media_id === i.media_id);
     return `<div style="display:flex;gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap">${d?.dataUri ? `<img src="${d.dataUri}" alt="${esc(i.name)}" style="max-width:220px;max-height:180px;border:1px solid var(--line);border-radius:4px">` : ""}
     <div style="flex:1;min-width:220px"><div class="s"><b>${esc(i.name)}</b>${i.width ? ` · ${i.width}×${i.height}` : ""}${i.link ? ` · ${esc(i.link.source)} · ${link(i.link.url, "image link")}` : ""}</div>
-    <ul>${i.observations.map(o => `<li>${esc(o.text)}${o.strength === "ai" ? ' <span class="s">(AI, not verified)</span>' : ""}</li>`).join("")}</ul>${i.reverse?.pages?.length ? `<div class="s">Pages with this image: ${i.reverse.pages.slice(0, 5).map(p => link(p.url, p.title || p.url)).join(" · ")}</div>` : ""}</div></div>`; }).join("")}<p class="s">${esc(r.media.note)}</p>`;
+    <ul>${i.observations.map(o => `<li>${esc(o.text)}${o.strength === "ai" ? ' <span class="s">(AI, not verified)</span>' : ""}</li>`).join("")}</ul>${i.reverse?.pages?.length ? `<div class="s">Pages with this image: ${i.reverse.pages.slice(0, 5).map(p => link(p.url, `${p.title || p.url}${p.date ? ` · ${p.date.slice(0,10)}` : " · date not established"} · ${p.match_status === "confirmed" ? "image match confirmed" : "provider report, not locally confirmed"}`)).join(" · ")}</div>` : ""}</div></div>`; }).join("")}<p class="s">${esc(r.media.note)}</p>`;
 };
 export function toHtml(r, { standalone = true, images = [] } = {}) {
   const o = r.overall, x = r.source, ids = new Set(r.evidence.map(e => e.id)), { main, rest } = references(r), S = r.sections;

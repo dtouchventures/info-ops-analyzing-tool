@@ -1,3 +1,4 @@
+import { makeReverseImageSearch } from "./reverse-image.js";
 // Image and media verification for automatic investigations (AIVS 1.24). Works on the images kept with the case
 // (uploaded, or retrieved from the submitted link) after AIVS's case analysis has run, and reports OBSERVATIONS:
 //   - text inside the image (OCR) and whether it matches a claim
@@ -17,12 +18,13 @@ const EDITORS = /photoshop|gimp|lightroom|snapseed|picsart|facetune|canva|pixlr|
 const DAY = 864e5;
 
 export function makeMediaCheck(db, { config, storage, audit }) {
+  const onlineReverse = makeReverseImageSearch(config);
   const V = { visionKey: "", visionBase: "https://vision.googleapis.com", timeoutMs: 15000, ...(config.mediaCheck || {}) };
   // image understanding (1.30): the model named in INVESTIGATE_VISION_MODEL, or else the organisation's own Ollama model, is used
   // only after Ollama confirms the model can read images (its "vision" capability); qwen3:4b-instruct, for example, cannot
   const vision = { model: config.investigate?.visionModel || (config.ai?.provider === "ollama" ? config.ai?.model || "" : ""), named: !!config.investigate?.visionModel, base: String(config.investigate?.visionBase || config.ai?.baseUrl || config.ollama?.url || "").replace(/\/+$/, "").replace(/\/(v1|api)$/, "") };
   const status = () => ({
-    reverse_search: V.visionKey ? { configured: true, service: "Google Cloud Vision web detection" } : { configured: false, needs: "GOOGLE_VISION_API_KEY (Google Cloud Vision API with web detection; the image is sent to Google)" },
+    reverse_search: onlineReverse.status(),
     ai_vision: vision.model && vision.base && isLocalHost(safeHost(vision.base)) ? (visionState && visionState.supported === false ? { configured: false, model: vision.model, checked_at: visionState.at, needs: `${visionState.reason} Set INVESTIGATE_VISION_MODEL to a vision model installed on your own Ollama server (for example qwen2.5vl or llava) to have images described.` }
       : { configured: true, model: vision.model, checked: !!visionState, ...(visionState ? { checked_at: visionState.at } : {}) }) : { configured: false, needs: "INVESTIGATE_VISION_MODEL: a vision model installed on your own Ollama server (for example qwen2.5vl or llava)" }
   });
@@ -44,12 +46,7 @@ export function makeMediaCheck(db, { config, storage, audit }) {
     try { const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: ac.signal }); const j = await r.json().catch(() => null); if (!r.ok) throw new Error(`HTTP ${r.status}${j?.error?.message ? `: ${String(j.error.message).slice(0, 120)}` : ""}`); return j; }
     catch (e) { if (e.name === "AbortError") throw new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`); throw e; } finally { clearTimeout(t); }
   }
-  async function reverseSearch(buf) {
-    const j = await post(`${V.visionBase}/v1/images:annotate?key=${encodeURIComponent(V.visionKey)}`, { requests: [{ image: { content: buf.toString("base64") }, features: [{ type: "WEB_DETECTION", maxResults: 10 }] }] }, V.timeoutMs);
-    const w = j?.responses?.[0]?.webDetection || {}, http = u => /^https?:\/\//i.test(String(u || ""));
-    return { pages: (w.pagesWithMatchingImages || []).filter(p => http(p.url)).slice(0, 8).map(p => ({ url: p.url, title: String(p.pageTitle || "").replace(/<[^>]+>/g, "").slice(0, 200), full_match: !!p.fullMatchingImages?.length })),
-      full_matches: (w.fullMatchingImages || []).length, partial_matches: (w.partialMatchingImages || []).length, labels: (w.bestGuessLabels || []).map(l => l.label).filter(Boolean).slice(0, 3) };
-  }
+  const reverseSearch = buf => onlineReverse.search(buf);
   async function describe(buf, claims) {
     const prompt = `Describe only what is visible in this image in 2-3 sentences (people, objects, place features, visible text). Then say whether the image is consistent with these claims, using only what is visible: ${claims.map(c => `claim ${c.seq}: ${String(c.text).replace(/<\/?content/gi, "")}`).join("; ").slice(0, 1500)}. Do not guess dates, places or identities that cannot be seen. Do not say whether the image is real, edited or AI-generated.\nJSON: {"description": "...", "consistent": "yes|no|unclear", "reason": "..."}`;
     buf = await sharp(buf).rotate().resize({width:1800,height:1800,fit:"inside",withoutEnlargement:true}).png().toBuffer();
@@ -91,11 +88,13 @@ export function makeMediaCheck(db, { config, storage, audit }) {
       let buf = null; try { buf = fs.readFileSync(storage.pathOf(m.sha256)); } catch {}
       if (buf && st.reverse_search.configured && left() > 5000) {
         try {
-          audit(user, "Image sent to reverse-image search (automatic investigation)", "case", caseId, { media: m.id, service: "Google Cloud Vision", sha256: m.sha256 });
+          audit(user, "Image sent to reverse-image search (automatic investigation)", "case", caseId, { media: m.id, service: onlineReverse.status().service, sha256: m.sha256 });
           img.reverse = await reverseSearch(buf);
+          if(img.reverse.earliest_known) img.observations.push({kind:"reverse_date",strength:"observed",text:`Earliest dated locally confirmed match among returned pages: ${img.reverse.earliest_known.date.slice(0,10)} at ${img.reverse.earliest_known.url}. This is the page publication date, not proof of the image first upload.`});
           img.observations.push({ kind: "reverse", strength: "observed", text: img.reverse.pages.length ? `Reverse-image search found the image on ${img.reverse.pages.length} other page(s)${img.reverse.full_matches ? ` (${img.reverse.full_matches} full match(es))` : ""}. Check the earliest of them for the image's original context.` : "Reverse-image search found no other pages with this image (this does not show the image is original)." });
-        } catch (e) { img.reverse = { error: e.message }; img.observations.push({ kind: "reverse", strength: "observed", text: `Reverse-image search failed (${e.message}).` }); }
+        } catch (e) { img.reverse = { status: "failed", error: e.message, pages: [] }; img.observations.push({ kind: "reverse", strength: "observed", text: `Reverse-image search failed (${e.message}).` }); }
       }
+      if (buf && !img.reverse) { img.reverse = {status:st.reverse_search.configured ? "not_run" : "not_configured", pages:[], note:st.reverse_search.configured ? "Online reverse-image search did not run within the available time." : "Online reverse-image search did not run: a reverse-image provider key is not configured. Local matching and AI descriptions do not search prior web postings."}; img.observations.push({kind:"reverse",strength:"observed",text:img.reverse.note}); }
       if (buf && st.ai_vision.configured && left() > 15000) {
         try {
           audit(user, "Image sent to AI service (automatic investigation)", "case", caseId, { media: m.id, model: vision.model, endpoint: safeHost(vision.base) });
