@@ -1,0 +1,13 @@
+# Official KDF checks and report assessments
+
+Every shared evidence search in a normal JICHO AI installation includes the official KDF connector. It applies to checkable claims from links, text, documents, images and video, and runs with case analysis and report research. A submission with no recoverable factual claim cannot receive a factual verdict.
+
+The connector reads the Ministry of Defence public search feeds directly. Recruitment claims also search the official site's recruitment warnings. When SERPAPI_API_KEY is configured, it additionally searches indexed mod.go.ke pages, @kdfinfo on X and OfficialKDF on Facebook. Official account paths are restricted; lookalike accounts and domains are rejected. These account links are identified by the Ministry's own site: https://www.mod.go.ke/our-socials/ . Indexed website and social searches use up to two SerpApi searches per claim, in addition to any reverse-image search. These searches use SerpApi credits and do not provide access to private or unindexed posts.
+
+Results are saved as evidence suggestions with source links, retrieval dates and publication dates where supplied. The automated investigation reads relevant official pages alongside other sources. Search snippets alone are not proof. Official recruitment notices with a different or unknown period cannot settle a current claim automatically; an analyst can assess their exact scope. Missing notices, blocked pages and search errors do not prove falsity. Partial coverage is reported explicitly.
+
+The report separates factual findings and qualitative likelihood from intent. It may describe established false or misleading content as misinformation. It does not infer deliberate deception (disinformation) or harmful use of genuine information (malinformation) from falsity, criticism, image reuse, or engagement alone. Unsupported classifications remain undetermined and require evidence and authorised review. AI drafting cannot replace the protected evidence judgement or classification limitation.
+
+Assessment and Recommendations both print as lettered points in the common HTML, Word and PDF layout. Enter one assessment point per line in the report editor; older single-paragraph assessments are split into sentences for printing. Existing approved/frozen reports are preserved; generate a new draft to use the updated format.
+
+Validation includes a live public Ministry of Defence feed lookup, simulated indexed-account results, shared-workflow enforcement, date and source-reading safeguards, classification protections and report-layout exports. No claim that every official platform or every historic post has been exhaustively searched is made.

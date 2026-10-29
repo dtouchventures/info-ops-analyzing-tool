@@ -1,3 +1,4 @@
+import { isKdfOfficial } from "./kdf-official.js";
 // Automatic evidence comparison and assessment for one-click investigations (AIVS 1.22).
 // Pure functions: no database, no network. Everything here is a fixed, explainable rule:
 //   relevance   TF-IDF cosine over words and character trigrams (English and Kiswahili, no model download)
@@ -55,6 +56,7 @@ export function classify(e) {
   if (e.connector === "kb") return ["knowledge_base", e.source_publisher || null];
   if (e.connector === "holdings") return ["earlier_case", null];
   const url = String(e.source_url || ""), h = hostOf(url);
+  if (isKdfOfficial(url)) return ["official", "Kenya Ministry of Defence / KDF"];
   if (/reuters\.com\/fact-check/.test(url)) return ["fact_checker", "Reuters Fact Check"];
   for (const [d, n] of Object.entries(FACT_CHECKERS)) if (under(h, d)) return ["fact_checker", n];
   const off = OFFICIAL_SOURCES.find(([d]) => under(h, d) && !FACT_CHECKERS[d]);
@@ -124,13 +126,26 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
       // a bare domain name is replaced by the organisation's name when AIVS knows it (e.g. health.go.ke -> Ministry of Health)
       e.publisher = outlet && (!e.source_publisher || /^[\w.-]+\.[a-z]{2,}$/i.test(e.source_publisher)) ? outlet : e.source_publisher || outlet || hostOf(e.source_url) || e.reference;
       e.domain = e.source_url ? registrable(hostOf(e.source_url)) : `${e.connector}:${e.id}`;
-      const [stance, strength, basis] = ruleStance(cl, e);
+      let [stance, strength, basis] = ruleStance(cl, e);
+      if (isKdfOfficial(e.source_url) && /recruit|cadet|enlist|vacanc/i.test(cl.text)) {
+        const published = Date.parse(e.source_published_at || ""), claimed = Date.parse(claimDate || ""), now = Date.now();
+        const years = String(cl.text).match(/\b20\d{2}\b/g) || [];
+        const sameYear = !years.length || years.includes(String(new Date(published).getUTCFullYear()));
+        const close = Number.isFinite(published) && Math.abs(published - (Number.isFinite(claimed) ? claimed : now)) <= 45 * 864e5;
+        if (!e.page_read || !sameYear || !close) {
+          stance = "related"; strength = "none";
+          basis = !e.page_read ? "official search lead only; the source page was not read" : "official recruitment notice has an unknown or different time scope; it cannot settle this claim without matching the recruitment period";
+        }
+      }
       Object.assign(e, { stance, stance_strength: strength, stance_basis: basis, stance_method: e.rating ? "published rating" : "rules" });
+      if (isKdfOfficial(e.source_url) && (!e.page_read || !e.passage)) {
+        e.stance = "related"; e.stance_strength = "none"; e.stance_basis = "official lead only; no claim-relevant passage was recovered from the official page";
+      }
       // The AI's reading is recorded beside the rule result but never replaces it (verdicts come only from the rules).
       // A reading whose quote is not really in the source is discarded; a reading that disagrees is flagged for a person.
       const a = aiStances[e.id];
       if (a && ["supports", "contradicts", "related"].includes(a.stance)) {
-        if (quoteOk(a.quote, e)) { e.ai_stance = a.stance; e.ai_quote = String(a.quote).slice(0, 200); e.ai_disagrees = a.stance !== stance; }
+        if (quoteOk(a.quote, e)) { e.ai_stance = a.stance; e.ai_quote = String(a.quote).slice(0, 200); e.ai_disagrees = a.stance !== e.stance; }
         else e.ai_rejected = "the quoted words are not in the source";
       }
     });

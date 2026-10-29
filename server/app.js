@@ -120,7 +120,8 @@ export function createApp(config) {
   tasks.register("analysis", async (user, id) => {
     await cases.startAnalysis(user, id);
     const c = cases.mustCase(id); if (c.status === "analysis_failed") throw new HttpError(422, c.analysis_error);
-    return { case_id: id, claims: cases.claimCapacity(id) };
+    const official_check = await retrieval.retrieve(user, id, { use: ["kdf_official"] }, cases);
+    return { case_id: id, claims: cases.claimCapacity(id), official_check };
   });
   const reverseImages = makeReverseImageSearch(config);
   tasks.register("collection", async (user, id, b) => {
@@ -130,7 +131,9 @@ export function createApp(config) {
       if(!m) throw new HttpError(404,"Image not found in this case.");
       if(!reverseImages.status().configured) throw new HttpError(503,reverseImages.status().needs);
       audit(user,"Image sent to online reverse-image search","case",id,{media:m.id,sha256:m.sha256,provider:reverseImages.status().service});
-      return {reverse_image:await reverseImages.search(fs.readFileSync(storage.pathOf(m.sha256))),media_id:m.id};
+      const reverse_image = await reverseImages.search(fs.readFileSync(storage.pathOf(m.sha256)));
+      const official_check = await retrieval.retrieve(user, id, { use: ["kdf_official"] }, cases);
+      return { reverse_image, official_check, media_id:m.id };
     }
     const result = await retrieval.retrieve(user, id, { claimIds: b.claim_ids, use: b.use }, cases);
     const configured = (result.connectors || []).filter(c => c.configured);
@@ -329,6 +332,7 @@ export function createApp(config) {
     let search = null;
     const ext = retrieval.status().filter(s => s.sends_to).map(s => s.key);   // unconfigured services report "not configured"
     if (b.search !== false) { try { search = await retrieval.retrieve(req.user, id, { use: ["kb", "holdings", ...(b.search ? ext : [])] }, cases); } catch (e) { search = { error: e.message }; } }
+    if (b.search === false) { try { search = await retrieval.retrieve(req.user, id, { use: ["kdf_official"] }, cases); } catch (e) { search = { error: e.message }; } }
     res.status(201).json({ ...verifyResult(id, search), truncated,
       source: page ? { title: page.title, site: page.site, final_url: page.finalUrl, published: page.published, published_basis: page.publishedBasis, modified: page.modified, sha256: snap.sha256, bytes: page.raw.length } : null });
   }));

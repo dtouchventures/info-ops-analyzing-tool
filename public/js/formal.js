@@ -20,7 +20,7 @@ export async function formalPanel(box, kind, id) {
         <label class="f" for="fr_date">Date-time group <span class="req">*</span></label><input type="text" id="fr_date" maxlength="40" value="${esc(c.date || "")}" placeholder="281430Z OCT 26" ${ed ? "" : "disabled"}>
         <div class="hint">Military date-time group, printed at the top right: day, hour and minute, time zone letter (Z = UTC, C = East Africa Time), month, year.</div>
         <label class="f" for="fr_subject">Subject <span class="req">*</span></label><input type="text" id="fr_subject" maxlength="200" value="${esc(c.subject)}" ${ed ? "" : "disabled"}>
-        ${FIELDS.map(([k, l, rows]) => `<label class="f" for="fr_${k}">${l} <span class="req">*</span></label><textarea id="fr_${k}" rows="${rows}" ${ed ? "" : "disabled"}>${esc(c[k])}</textarea>`).join("")}
+        ${FIELDS.map(([k, l, rows]) => `<label class="f" for="fr_${k}">${l} <span class="req">*</span></label><textarea id="fr_${k}" rows="${rows}" ${ed ? "" : "disabled"}>${esc(c[k])}</textarea>${k === "assessment" ? '<div class="hint">One assessment point per line. Points are lettered (a), (b), (c) in the report.</div>' : ""}`).join("")}
         <label class="f" for="fr_recs">6. Recommendations <span class="req">*</span></label><textarea id="fr_recs" rows="5" ${ed ? "" : "disabled"}>${esc(c.recommendations.join("\n"))}</textarea>
         <div class="hint">One recommendation per line. They are lettered (a), (b), (c) when printed.</div>
         <label class="f" for="fr_conclusion">7. Conclusion <span class="req">*</span></label><textarea id="fr_conclusion" rows="3" ${ed ? "" : "disabled"}>${esc(c.conclusion)}</textarea>

@@ -41,7 +41,7 @@ function thumbsOf(lk) {
   return out;
 }
 const SOCIAL = ["X (Twitter)", "Facebook", "Instagram", "TikTok", "YouTube", "Telegram", "Threads", "LinkedIn", "WhatsApp", "Reddit"];
-const CONNECTOR_LABEL = { factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
+const CONNECTOR_LABEL = { kdf_official: "Official KDF / Ministry of Defence checks", factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
 const kindOf = b => sniff(b)?.kind === "image" ? "image" : b.subarray(0, 4).toString("latin1") === "%PDF" ? "pdf" : b[0] === 0x50 && b[1] === 0x4b ? "docx" : "other";
 const avOf = (b, name) => (b.subarray(4, 8).toString("latin1") === "ftyp" || b.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || (b.subarray(0, 4).toString("latin1") === "RIFF" && /AVI |WAVE/.test(b.subarray(8, 12).toString("latin1"))) || b.subarray(0, 3).toString("latin1") === "ID3" || b.subarray(0, 4).toString("latin1") === "OggS" || /\.(mp4|mov|webm|3gp|m4a|mp3|wav|ogg|opus)$/i.test(name || "")) ? "av" : null;
 class Cancelled extends Error { constructor() { super("cancelled after the time limit"); } }
@@ -228,7 +228,9 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
   async function deepRead(evidence, claims, budgetMs) {
     const t0 = Date.now(), left = () => budgetMs - (Date.now() - t0); let read = 0, failed = 0;
     for (const cl of claims) {
-      const cand = evidence.filter(e => e.claim_id === cl.id && /^https?:\/\//i.test(e.source_url || "") && !["reference", "kb", "holdings"].includes(e.connector)).slice(0, 3);
+      const available = evidence.filter(e => e.claim_id === cl.id && /^https?:\/\//i.test(e.source_url || "") && !["reference", "kb", "holdings"].includes(e.connector));
+      const official = available.filter(e => e.connector === "kdf_official");
+      const cand = [...official.slice(0, 2), ...available.filter(e => e.connector !== "kdf_official"), ...official.slice(2)].slice(0, 4);
       await Promise.all(cand.map(async e => {
         if (left() < 5000) return;
         try {
@@ -537,7 +539,7 @@ export function makeInvestigations(db, { config, cases, retrieval, media, storag
       try { search = await withTimeout(retrieval.retrieve(user, caseId, { use, claimIds: checkable.map(c => c.id) }, cases), budget(240000), "Evidence search"); }
       catch (e) { search = { connectors: [], error: e.message }; src.notes.push(`Evidence search stopped: ${e.message}`); }
     }
-    const connectors = (search.connectors || []).map(c => ({ key: c.connector, label: CONNECTOR_LABEL[c.connector] || c.label, status: c.status, results: c.results, stored: c.stored, errors: c.errors || [], configured: c.configured }));
+    const connectors = (search.connectors || []).map(c => ({ key: c.connector, label: CONNECTOR_LABEL[c.connector] || c.label, status: c.status, results: c.results, stored: c.stored, errors: c.errors || [], configured: c.configured, coverage: c.coverage || null }));
     const searched = connectors.some(c => (c.status === "ok" || c.status === "partial") && !["holdings", "kb"].includes(c.key));
     setStage(id, "search", search.error && !searched ? "failed" : searched ? "done" : checkable.length ? "warning" : "skipped", searched ? `${connectors.filter(c => c.status === "ok" || c.status === "partial").map(c => c.label).join(", ")}: ${search.stored || 0} item(s) kept`
       : checkable.length ? "no outside evidence source could be searched" : "nothing checkable to search for");

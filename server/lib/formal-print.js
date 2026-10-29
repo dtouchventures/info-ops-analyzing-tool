@@ -25,6 +25,12 @@ for (const m of [1.5, 1.27, 1.0]) for (const size of [10, 9.5, 9]) for (const ga
 const letter = i => `(${String.fromCharCode(97 + (i % 26))}${i >= 26 ? Math.floor(i / 26) : ""})`;
 const paras = s => String(s || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
 
+export function assessmentPoints(value) {
+  const p = paras(value).map(x => x.replace(/^\(?[a-z]\)[.]?\s+|^[•*-]\s+/i, ""));
+  if (p.length > 1) return p;
+  return [...new Intl.Segmenter("en-GB", { granularity: "sentence" }).segment(p[0] || "")].map(x => x.segment.trim()).filter(Boolean);
+}
+
 // The report as a list of lines of the page, in order. Each block: text runs, alignment, indent and spacing role.
 export function blocks(r) {
   const B = [];
@@ -34,6 +40,7 @@ export function blocks(r) {
   for (const [k, head] of SECTIONS) {
     B.push({ role: "head", runs: [{ text: head, bold: true }] });
     if (k === "recommendations") (r.recommendations || []).forEach((t, i) => B.push({ role: "rec", hang: true, label: letter(i), runs: [{ text: t }] }));
+    else if (k === "assessment") assessmentPoints(r[k]).forEach((t, i) => B.push({ role: "rec", hang: true, label: letter(i), runs: [{ text: t }] }));
     else paras(r[k]).forEach(t => B.push({ role: "body", runs: [{ text: t }] }));
   }
   const p = r.preparer || {};
