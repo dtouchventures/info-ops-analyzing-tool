@@ -24,10 +24,7 @@ export async function formalPanel(box, kind, id) {
         <label class="f" for="fr_recs">6. Recommendations <span class="req">*</span></label><textarea id="fr_recs" rows="5" ${ed ? "" : "disabled"}>${esc(c.recommendations.join("\n"))}</textarea>
         <div class="hint">One recommendation per line. They are lettered (a), (b), (c) when printed.</div>
         <label class="f" for="fr_conclusion">7. Conclusion <span class="req">*</span></label><textarea id="fr_conclusion" rows="3" ${ed ? "" : "disabled"}>${esc(c.conclusion)}</textarea>
-        <div class="fgrid" style="margin-top:4px"><div><label class="f" for="fr_rank">Rank</label><input type="text" id="fr_rank" maxlength="120" value="${esc(c.preparer.rank)}" ${ed ? "" : "disabled"}></div>
-          <div><label class="f" for="fr_name">Name</label><input type="text" id="fr_name" maxlength="120" value="${esc(c.preparer.name)}" ${ed ? "" : "disabled"}></div>
-          <div><label class="f" for="fr_appt">Appointment</label><input type="text" id="fr_appt" maxlength="120" value="${esc(c.preparer.appointment)}" ${ed ? "" : "disabled"}></div></div>
-        <div class="hint">Prepared by: left blank, to be completed by hand on the printed copy. Type in these fields only if you want them printed.</div>
+
       </div><div>
         <div id="frState">${state()}</div>
         <div class="row" style="margin:10px 0">${ed ? `<button class="btn" id="frGen" type="button">Generate Report</button><button class="btn primary" id="frSave" type="button">Save</button>` : ""}
@@ -44,10 +41,10 @@ export async function formalPanel(box, kind, id) {
       ${dirty ? `<div class="callout info" style="margin-top:8px"><div>Unsaved changes: save before downloading or printing.</div></div>` : ""}`;
   };
   const collect = () => ({ date: $("#fr_date").value, subject: $("#fr_subject").value, ...Object.fromEntries(FIELDS.map(([k]) => [k, $(`#fr_${k}`).value])), recommendations: $("#fr_recs").value.split("\n"), conclusion: $("#fr_conclusion").value,
-    preparer: { rank: $("#fr_rank").value, name: $("#fr_name").value, appointment: $("#fr_appt").value } });
+    preparer: R.content.preparer || {} });
   const gate = () => { const ok = R.saved && R.ready && !dirty; for (const s of ["#frDocx", "#frPdf", "#frPrint"]) { const b = $(s, box); if (!b) continue; b.classList.toggle("disabled", !ok); b.setAttribute("aria-disabled", String(!ok)); if (b.tagName === "BUTTON") b.disabled = !ok; } if ($("#frState", box)) $("#frState", box).innerHTML = state(); };
   async function generate() {
-    if (R.saved && !(await confirmBox("Generate the report again?", "Purpose, background, analysis, assessment, recommendations and conclusion are rewritten from the current records. Your subject and Prepared-by details are kept. Earlier versions stay on record.", "Generate"))) return;
+    if (R.saved && !(await confirmBox("Generate the report again?", "Purpose, background, analysis, assessment, recommendations and conclusion are rewritten from the current records. Your subject and internal author records are kept. Earlier versions stay on record.", "Generate"))) return;
     try { R = await api.post(`${base}/generate`, {}); dirty = false; draw(); toast(R.ready ? "Report generated. It fits on one A4 page." : "Report generated. Complete the missing fields before printing."); } catch (e) { fail(e); }
   }
   function wire() {

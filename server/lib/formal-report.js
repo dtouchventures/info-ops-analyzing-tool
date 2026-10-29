@@ -56,7 +56,7 @@ export function validate(r) {
   for (const k of SECTION_KEYS) if (!r[k]) missing.push(LABELS[k]);
   if (!r.recommendations?.length) missing.push(`${LABELS.recommendations} (at least one)`);
   // Rank, Name and Appointment are printed blank by default, to be completed by hand; they are optional
-  const placeholder = [r.subject, ...SECTION_KEYS.map(k => r[k]), ...(r.recommendations || []), ...Object.values(r.preparer || {})].some(t => /\[(rank|name|appointment|subject|insert[^\]]*)\]/i.test(t || ""));
+  const placeholder = [r.subject, ...SECTION_KEYS.map(k => r[k]), ...(r.recommendations || [])].some(t => /\[(rank|name|appointment|subject|insert[^\]]*)\]/i.test(t || ""));
   const badDate = r.date && !DTG_RE.test(r.date) ? [`Write the date-time group as DDHHMM, zone letter, month, year, for example ${dtg()}.`] : [];
   return [...(missing.length ? [`Complete: ${missing.join(", ")}.`] : []), ...badDate, ...(placeholder ? ["Replace the text in square brackets."] : [])];
 }

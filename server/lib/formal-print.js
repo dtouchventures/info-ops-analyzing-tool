@@ -43,11 +43,6 @@ export function blocks(r) {
     else if (k === "assessment") assessmentPoints(r[k]).forEach((t, i) => B.push({ role: "rec", hang: true, label: letter(i), runs: [{ text: t }] }));
     else paras(r[k]).forEach(t => B.push({ role: "body", runs: [{ text: t }] }));
   }
-  const p = r.preparer || {};
-  B.push({ role: "prep", runs: [{ text: "Prepared by:", bold: true }] });
-  B.push({ role: "prepline", runs: [{ text: "Rank: ", bold: true }, { text: p.rank || "" }] });
-  B.push({ role: "prepline", runs: [{ text: "Name: ", bold: true }, { text: p.name || "" }] });
-  B.push({ role: "prepline", runs: [{ text: "Appointment: ", bold: true }, { text: p.appointment || "" }] });
   return B;
 }
 // space before each block, in points, for a paragraph gap g
