@@ -9,7 +9,7 @@ export function informationTasks(verdict, judgement, { imageOnly = false, refere
     : "prepare an evidence-gap brief and treat the narrative as unverified";
   return [
     `There is a need to task authorised information operations staff to ${action}${reference ? ` ${reference}` : ""}; ${rationale}.`,
-    `There is a need to monitor ${imageOnly ? "public reuse of the image and changes in captions" : "related public narratives and recurring claims"}, record observed circulation, and report changes without presuming coordination.`,
-    "There is a need to preserve the supporting evidence, submit proposed communication tasks for authorised review, and reassess the judgement when new evidence becomes available."
+    `There is a need to monitor ${imageOnly ? "public reuse of the image and changes in captions" : "related public narratives and recurring claims"}, record observed circulation and source links in an IO monitoring log, and report material changes without presuming coordination.`,
+    "There is a need to submit the IO brief and proposed communication for authorised review before release, retain the evidence, and reassess the response when new evidence appears."
   ];
 }
