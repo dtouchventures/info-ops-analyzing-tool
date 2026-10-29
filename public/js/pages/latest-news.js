@@ -1,8 +1,8 @@
 import { api } from '../api.js';
 import { esc, fmtDT } from '../ui.js';
 
-export async function renderLatestNews(body) {
-  body.innerHTML = `<div class="card"><div class="hd"><h2>Latest Kenya news</h2><button class="btn sm ghost" id="newsRefresh">Refresh</button></div><div class="bd"><p>General headlines across the Kenya news edition. This feed is separate from keyword matches and alerts. It checks for updates every minute while open; indexing can delay new articles.</p><p class="small sub">Headlines are discovery leads, not verified findings. Open the source article and submit its link to Verify Information for an assessment.</p><p id="newsState" role="status">Loading latest headlines…</p><div id="newsItems"></div></div></div>`;
+export async function renderLatestNews(body, { security=false } = {}) {
+  body.innerHTML = `<div class="card"><div class="hd"><h2>${security ? "Kenya security news" : "Latest Kenya news"}</h2><button class="btn sm ghost" id="newsRefresh">Refresh</button></div><div class="bd"><p>${security ? "Security, defence, policing, terrorism, banditry and border-related headlines from the same Kenya news index." : "General headlines across the Kenya news edition."} This feed is separate from keyword matches and alerts. It checks for updates every minute while open; indexing can delay new articles.</p><p class="small sub">Headlines are discovery leads, not verified findings. Open the source article and submit its link to Verify Information for an assessment.</p><p id="newsState" role="status">Loading latest headlines…</p><div id="newsItems"></div></div></div>`;
   const panel=body.querySelector('#newsItems'),state=body.querySelector('#newsState'),button=body.querySelector('#newsRefresh');
   let timer=null,busy=false,signature='';
   async function update(){
@@ -11,7 +11,7 @@ export async function renderLatestNews(body) {
     if(document.hidden){timer=setTimeout(update,5000);return;}
     busy=true;button.disabled=true;
     try{
-      const data=await api.get('/api/watch/news/latest');if(!panel.isConnected)return;
+      const data=await api.get(security ? '/api/watch/news/security' : '/api/watch/news/latest');if(!panel.isConnected)return;
       state.textContent=(data.error ? `${data.error}${data.checked_at ? ' Last successful refresh: '+fmtDT(data.checked_at) : ''}` : '')||`Last refreshed: ${data.checked_at?fmtDT(data.checked_at):'not available'} · ${data.articles.length} headlines · Updates every minute`;
       state.className=data.stale?'small warn':'small sub';
       const next=JSON.stringify(data.articles);

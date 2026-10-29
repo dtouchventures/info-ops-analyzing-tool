@@ -59,16 +59,18 @@ export function parseLatestNews(xml) {
   }
   return out.sort((a,b)=>(Date.parse(b.published_at)||0)-(Date.parse(a.published_at)||0));
 }
-export function makeLatestKenyaNews({page=fetchPage,now=()=>Date.now(),ttl=60000}={}) {
+export function makeLatestKenyaNews({page=fetchPage,now=()=>Date.now(),ttl=60000,topic="general"}={}) {
   let cached=null,checked=0,pending=null;
   return {async get(){
     if(cached&&now()-checked<ttl)return cached;
     if(pending)return pending;
     pending=(async()=>{
       try{
-        const r=await page('https://news.google.com/rss/search?q=Kenya&hl=en-KE&gl=KE&ceid=KE:en',{allowXml:true});
+        const url=new URL('https://news.google.com/rss/search?hl=en-KE&gl=KE&ceid=KE:en');
+        url.searchParams.set('q',topic==='security'?'Kenya (security OR defence OR defense OR KDF OR police OR terrorism OR banditry OR insecurity OR "border security")':'Kenya');
+        const r=await page(url.href,{allowXml:true});
         if(!r.xml)throw Error();
-        cached={articles:parseLatestNews(r.xml),checked_at:new Date(now()).toISOString(),stale:false,error:null,refresh_seconds:60,source:'Google News — Kenya edition',note:'General Kenya-related headlines. Independent of watchlist keywords and alerts. Headlines are not verified findings. Indexing can lag publication; coverage is not exhaustive.'};
+        cached={articles:parseLatestNews(r.xml),checked_at:new Date(now()).toISOString(),stale:false,error:null,refresh_seconds:60,source:'Google News — Kenya edition',topic, note:(topic==='security'?'Security-related Kenya headlines.':'General Kenya-related headlines.')+' Independent of watchlist keywords and alerts. Headlines are not verified findings. Indexing can lag publication; coverage is not exhaustive.'};
       }catch{cached={...(cached||{articles:[],checked_at:null}),stale:true,error:'The latest-news feed could not be refreshed. Previously fetched headlines are retained.',refresh_seconds:60};}
       checked=now();return cached;
     })();try{return await pending;}finally{pending=null;}

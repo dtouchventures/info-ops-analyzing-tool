@@ -118,6 +118,7 @@ export function createApp(config) {
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
   const screenshots = makeScreenshots(db, { config, storage, audit, investigations, io, social, fetchPage, notify });
   const latestKenyaNews = makeLatestKenyaNews();
+  const securityKenyaNews = makeLatestKenyaNews({ topic: "security" });
   const tasks = makeCaseTasks(db, { cases, audit });
   tasks.register("analysis", async (user, id) => {
     await cases.startAnalysis(user, id);
@@ -155,7 +156,7 @@ export function createApp(config) {
     return { case_id: id, report_url: `/api/cases/${id}/automatic-report.html` };
   });
   tasks.start();
-  const ctx = { latestKenyaNews, tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const ctx = { securityKenyaNews, latestKenyaNews, tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -596,6 +597,7 @@ export function createApp(config) {
   // the template starts with the sources that are connected on this server (X recent search is kept so its status shows)
   const template = () => { const t = kdfTemplate(), ready = ["x_search", "youtube", "reddit", "bluesky", "mastodon", "threads", "instagram", "tiktok"].filter(s => watchCollector.sourcesReady(s));
     t.definition.sources = [...new Set([...(ready.length ? ready : ["x_search"]), ...(String(config.collect?.rssFeeds || "").trim() ? ["news"] : [])])]; return t; };
+  api.get("/watch/news/security", h(async (req,res) => res.json(await securityKenyaNews.get())));
   api.get("/watch/news/latest", h(async (req,res) => res.json(await latestKenyaNews.get())));
   api.get("/watch/overview", (req, res) => res.json({ status: watchCollector.status(), caveats: WATCH_CAVEATS, sources: WATCH_SOURCES, manual_sources: MANUAL_SOURCES, watchlists: watch.list(), template: template(), users: assignable(),
     alert_counts: Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts WHERE is_training = 0 GROUP BY status").all().map(r => [r.status, r.n])),
