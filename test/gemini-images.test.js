@@ -57,3 +57,17 @@ test("optional Gemini images: consent, metadata stripping, results, failures and
     await s.ctx.investigations.close(); s.ctx.tasks.close(); await s.close(); s.ctx.db.close();
   }
 });
+
+test('Gemini accepts a single wrapped image result and rejects ambiguous or invalid responses',async()=>{
+  const original=providers.gemini.complete;
+  const cfg={geminiImages:{apiKey:'secret',model:'test'}};
+  const image=await sharp({create:{width:20,height:20,channels:3,background:'#ffffff'}}).png().toBuffer();
+  try {
+    providers.gemini.complete=async()=>({text:JSON.stringify([{description:'One test image.',visible_text:'TEST'}])});
+    assert.equal((await describeWithGemini(cfg,image)).visible_text,'TEST');
+    for(const value of [[],[{description:'First'},{description:'Second'}],null,{description:''}]) {
+      providers.gemini.complete=async()=>({text:JSON.stringify(value)});
+      await assert.rejects(describeWithGemini(cfg,image),/Local checks continue/);
+    }
+  } finally {providers.gemini.complete=original;}
+});
