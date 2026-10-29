@@ -211,7 +211,7 @@ start();
 setInterval(async () => {
   if (!App.me || document.hidden || !document.getElementById("taskStatus")) return;
   try {
-    const data = await api.get("/api/tasks"), active = data.tasks.filter(t => ["pending", "processing"].includes(t.status)).length + (data.investigations || []).filter(t => ["Pending", "Processing"].includes(t.status_label)).length;
+    const data = await api.get("/api/tasks"), active = data.tasks.filter(t => ["pending", "processing"].includes(t.status)).length + (data.investigations || []).filter(t => ["Pending", "Processing"].includes(t.status_label)).length + (data.jobs || []).filter(t => ["Pending", "Processing"].includes(t.status_label)).length;
     const link = document.getElementById("taskStatus"); if (link) link.textContent = `Background tasks${active ? ` (${active})` : ""}`;
   } catch { /* The task page presents connection errors; do not disturb active editing. */ }
 }, 5000);

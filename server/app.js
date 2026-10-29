@@ -1,3 +1,4 @@
+import { backgroundOverview } from "./lib/background-overview.js";
 import { makeReverseImageSearch } from "./lib/reverse-image.js";
 import { serviceWritingReport as serviceReport, buildAssessment as serviceAssessment } from "./lib/ioassessment.js";
 import { makeFormalReports, fromCase as formalFromCase, fromDataset as formalFromDataset, normalise as formalNormalise, check as formalCheck, tooLong as formalTooLong } from "./lib/formal-report.js";
@@ -995,7 +996,7 @@ export function createApp(config) {
       FROM cases c LEFT JOIN users u ON u.id = c.assigned_to WHERE ${w.join(" AND ")} ORDER BY c.updated_at DESC LIMIT 500`).all(p);
     res.json({ cases: rows });
   });
-  api.get("/tasks", h((req, res) => res.json({ tasks: tasks.list(req.user, req.query.case_id || null), investigations: db.prepare("SELECT id,report_id,case_id,status FROM investigations WHERE created_by=? ORDER BY created_at DESC LIMIT 30").all(req.user.id).map(t => ({ ...t, status_label: ({ queued: "Pending", running: "Processing", done: "Completed", failed: "Failed" })[t.status] || t.status })) })));
+  api.get("/tasks", h((req, res) => res.json({ jobs: backgroundOverview(db, req.user), tasks: tasks.list(req.user, req.query.case_id || null), investigations: db.prepare("SELECT id,report_id,case_id,status,stage,subject,created_at FROM investigations WHERE created_by=? ORDER BY created_at DESC LIMIT 30").all(req.user.id).map(t => ({ ...t, status_label: ({ queued: "Pending", running: "Processing", done: "Completed", failed: "Failed" })[t.status] || t.status })) })));
   api.get("/tasks/:tid", h((req, res) => res.json(tasks.get(req.user, +req.params.tid))));
   api.post("/tasks/:tid/retry", h((req, res) => res.status(202).json(tasks.retry(req.user, +req.params.tid))));
   api.post("/cases/:id/tasks", heavy, h((req, res) => res.status(202).json(tasks.enqueue(req.user, req.params.id, req.body?.kind, req.body?.input || {}, { requestKey: req.body?.request_key || null }))));

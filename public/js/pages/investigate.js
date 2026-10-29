@@ -43,6 +43,7 @@ export async function render(el, params = []) {
       <p class="tiny sub" style="margin:10px 0 0">Results are AI-generated preliminary assessments, labelled as not reviewed. AI confidence is not proof; consequential decisions need human review.</p>
     </div></div>
     <div id="invRun" hidden>
+      <div class="callout"><div><p>Your work continues on the server while you open another procedure. Return through Background tasks to see its progress.</p><div class="row" style="flex-wrap:wrap"><a class="btn sm" href="#/reverse-image">Start another image search</a><a class="btn sm" href="#/reverse-video">Start another video search</a><a class="btn sm" href="#/investigate">New investigation</a><a class="btn sm ghost" href="#/tasks">View all background tasks</a></div></div></div>
       <div class="grid g2" style="align-items:start">
         <div class="card"><div class="hd"><h3>Extracted content</h3><span id="iplat" class="chip grey"></span></div><div class="bd" id="iprev"><span class="spin"></span> Waiting for the content…</div></div>
         <div class="card"><div class="hd"><h3>AI investigation progress</h3><span class="mono small" id="irid"></span></div><div class="bd"><ol class="istages" id="istages"></ol></div></div>
@@ -85,6 +86,7 @@ export async function render(el, params = []) {
     $("h1", el).textContent = title;
     $(".pagehead p", el).textContent = video ? "Upload a video to extract keyframes and compare footage with earlier cases. Online matching requires a configured search provider." : "Upload an image (JPG/JPEG, PNG, WebP, GIF, TIFF, AVIF or HEIC) or a video (MP4, MOV, AVI, WebM or 3GP). Videos are checked through extracted frames. Automatic online matching requires a configured search provider; manual image search is available in the case.";
     $("#imore").open = true;
+    $(".pagehead", el).insertAdjacentHTML("afterend", '<p class="small">You can start another search after submission. Each runs independently and remains in <a href="#/tasks">Background tasks</a>.</p>');
     files.accept = video ? "video/mp4,video/quicktime,video/x-msvideo,video/webm,.mp4,.mov,.avi,.webm" : "image/*,video/*,.jpg,.jpeg,.jfif,.png,.webp,.gif,.heic,.heif,.avif,.tif,.tiff,.mp4,.mov,.avi,.webm,.3gp";
     $("label[for=ifile]", el).textContent = video ? "Add video" : "Add image or video";
     $("#imore .tiny.sub").textContent = "Already uploaded? Open Cases, select the case and use the reverse search button beneath its image or video.";
@@ -276,7 +278,7 @@ async function follow(el, id) {
   $("#invForm").hidden = true; $("#invRun").hidden = false;
   const tick = async () => {
     if (!el.isConnected || !location.hash.includes(id)) return;
-    let inv; try { inv = await api.get(`/api/investigations/${encodeURIComponent(id)}`); } catch (e) { $("#istages").innerHTML = `<li class="warning">${esc(errMsg(e))}</li>`; return; }
+    let inv; try { inv = await api.get(`/api/investigations/${encodeURIComponent(id)}`); } catch (e) { if (!el.isConnected || !location.hash.includes(id)) return; $("#istages").innerHTML = `<li class="warning">Progress connection interrupted. Reconnecting… ${esc(errMsg(e))}</li>`; timer = setTimeout(tick, 3000); return; }
     if (!el.isConnected || !location.hash.includes(id)) return;
     $("#irid").textContent = inv.report_id; stages(inv.stages); preview(inv.preview);
     if (inv.status === "failed") {

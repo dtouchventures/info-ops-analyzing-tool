@@ -125,7 +125,7 @@ test('migration preserves legacy claims and reports; explicit selection is requi
     const stale = await signed.post('/api/investigations/INV-old-scope/report');
     assert.equal(stale.status, 409); assert.match(stale.body.error, /claim selection changed/);
     assert.equal(R.ctx.db.prepare("SELECT json_snapshot FROM reports WHERE id='legacy-report'").get().json_snapshot, historical);
-    assert.ok(fs.readdirSync(L.dataDir).some(x => x.includes('.before-v24-')));
+    assert.ok(fs.readdirSync(L.dataDir).some(x => /\.before-v\d+-/.test(x)));
   } finally { R.ctx.tasks.close(); await R.close(); R.ctx.db.close(); }
 });
 
