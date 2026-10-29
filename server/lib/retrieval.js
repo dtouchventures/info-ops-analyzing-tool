@@ -1,3 +1,4 @@
+import { makeKenyanNewsSearch } from "./kenyan-news.js";
 import { makeKdfOfficial } from "./kdf-official.js";
 // Evidence retrieval for claims. Each connector runs on the server; keys stay in server configuration.
 //   factcheck  Google Fact Check Tools API (ClaimReview records published by fact-checkers). Free key.
@@ -45,7 +46,9 @@ export function makeRetrieval(db, { config, audit, usage }) {
   const S = { timeoutMs: 10000, factcheckKey: "", factcheckBase: "https://factchecktools.googleapis.com", braveKey: "", braveBase: "https://api.search.brave.com", braveUsdPerRequest: null,
     gdelt: false, gdeltBase: "https://api.gdeltproject.org", wikipedia: false, wikipediaBase: "https://{lang}.wikipedia.org", ...(config.search || {}) };
   const kdfOfficial = makeKdfOfficial(config);
+  const kenyanNews = makeKenyanNewsSearch(config);
   const connectors = {
+    kenyan_news: { label: "Kenya news coverage (all indexed outlets)", configured: !!config.mediaCheck?.serpapiKey && !config.isTest, needs: "SERPAPI_API_KEY", external: "SerpApi Google News", async run(q) { return kenyanNews(q); } },
     kdf_official: { label: "Official KDF / Ministry of Defence checks", configured: !config.isTest, needs: config.isTest ? "External official checks disabled in isolated tests" : null, external: "Ministry of Defence; SerpApi if configured", async run(q) { return kdfOfficial(q); } },
     factcheck: { label: "Google Fact Check Tools (published fact-checks)", configured: !!S.factcheckKey, needs: "GOOGLE_FACTCHECK_API_KEY (free; create it in a Google Cloud project with the Fact Check Tools API enabled)", external: "Google",
       async run(q, { lang }) {
@@ -101,7 +104,10 @@ export function makeRetrieval(db, { config, audit, usage }) {
     const c = cases.mustCase(caseId); cases.requireEdit(user, c);
     // without an explicit list, the free public indexes (GDELT, Wikipedia) are not used: they are chosen explicitly (automatic investigations, or the search box)
     const want = (use && use.length ? use : Object.keys(connectors).filter(k => !["news", "reference"].includes(k))).filter(k => connectors[k]);
-    if (connectors.kdf_official.configured && !want.includes("kdf_official")) want.unshift("kdf_official");
+    // Keep official evidence first; broad news discovery supplements it.
+    for (const key of ["kenyan_news", "kdf_official"]) if (connectors[key].configured) {
+      const at=want.indexOf(key); if(at>=0)want.splice(at,1); want.unshift(key);
+    }
     const claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(caseId)
       .filter(cl => !claimIds?.length || claimIds.includes(cl.id));
     const checkable = claims.filter(cl => cl.kind !== "media" && (!cl.claim_type || cl.claim_type === "factual"));

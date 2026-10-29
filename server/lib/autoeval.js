@@ -1,3 +1,4 @@
+import { publisherIdentity } from "./kenyan-news.js";
 import { isKdfOfficial } from "./kdf-official.js";
 // Automatic evidence comparison and assessment for one-click investigations (AIVS 1.22).
 // Pure functions: no database, no network. Everything here is a fixed, explainable rule:
@@ -56,6 +57,7 @@ export function classify(e) {
   if (e.connector === "kb") return ["knowledge_base", e.source_publisher || null];
   if (e.connector === "holdings") return ["earlier_case", null];
   const url = String(e.source_url || ""), h = hostOf(url);
+  const publisher = publisherIdentity(url); if (publisher) return ["news", publisher.name];
   if (isKdfOfficial(url)) return ["official", "Kenya Ministry of Defence / KDF"];
   if (/reuters\.com\/fact-check/.test(url)) return ["fact_checker", "Reuters Fact Check"];
   for (const [d, n] of Object.entries(FACT_CHECKERS)) if (under(h, d)) return ["fact_checker", n];
@@ -125,7 +127,7 @@ export function compare(claims, evidence, { claimDate = null, aiStances = {} } =
       const [tier, outlet] = classify(e); e.tier = tier; e.tier_label = TIERS[tier][1];
       // a bare domain name is replaced by the organisation's name when AIVS knows it (e.g. health.go.ke -> Ministry of Health)
       e.publisher = outlet && (!e.source_publisher || /^[\w.-]+\.[a-z]{2,}$/i.test(e.source_publisher)) ? outlet : e.source_publisher || outlet || hostOf(e.source_url) || e.reference;
-      e.domain = e.source_url ? registrable(hostOf(e.source_url)) : `${e.connector}:${e.id}`;
+      e.domain = e.source_url ? (publisherIdentity(e.source_url)?.group || registrable(hostOf(e.source_url))) : `${e.connector}:${e.id}`;
       let [stance, strength, basis] = ruleStance(cl, e);
       if (isKdfOfficial(e.source_url) && /recruit|cadet|enlist|vacanc/i.test(cl.text)) {
         const published = Date.parse(e.source_published_at || ""), claimed = Date.parse(claimDate || ""), now = Date.now();

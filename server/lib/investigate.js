@@ -41,7 +41,7 @@ function thumbsOf(lk) {
   return out;
 }
 const SOCIAL = ["X (Twitter)", "Facebook", "Instagram", "TikTok", "YouTube", "Telegram", "Threads", "LinkedIn", "WhatsApp", "Reddit"];
-const CONNECTOR_LABEL = { kdf_official: "Official KDF / Ministry of Defence checks", factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
+const CONNECTOR_LABEL = { kenyan_news: "Kenya news coverage (all indexed outlets)", kdf_official: "Official KDF / Ministry of Defence checks", factcheck: "Google Fact Check Tools", web: "Web search (Brave)", official: "Official and fact-checking sources", kb: "AIVS knowledge base", holdings: "Earlier AIVS investigations", news: "GDELT news index", reference: "Wikipedia" };
 const kindOf = b => sniff(b)?.kind === "image" ? "image" : b.subarray(0, 4).toString("latin1") === "%PDF" ? "pdf" : b[0] === 0x50 && b[1] === 0x4b ? "docx" : "other";
 const avOf = (b, name) => (b.subarray(4, 8).toString("latin1") === "ftyp" || b.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || (b.subarray(0, 4).toString("latin1") === "RIFF" && /AVI |WAVE/.test(b.subarray(8, 12).toString("latin1"))) || b.subarray(0, 3).toString("latin1") === "ID3" || b.subarray(0, 4).toString("latin1") === "OggS" || /\.(mp4|mov|webm|3gp|m4a|mp3|wav|ogg|opus)$/i.test(name || "")) ? "av" : null;
 class Cancelled extends Error { constructor() { super("cancelled after the time limit"); } }

@@ -1,3 +1,4 @@
+import { publisherIdentity } from "./kenyan-news.js";
 import { informationTasks } from "../../shared/information-tasks.js";
 import { fit as serviceFit, html as serviceHtml, pdf as servicePdf, docx as serviceDocx } from "./formal-print.js";
 // AIVS — KDF Information Operations Assessment (1.25; four-section format and HOD approval 1.32): a one-page product.
@@ -51,7 +52,7 @@ export function evidenceJudgement(r) {
   const covered = principal.length && principal.every(p => evidence.some(e => e.claim_id === p.c.id));
   const opposing = relevant.some(e => verdict === "supported" ? ["contradicts", "misleading"].includes(e.stance) : e.stance === "supports");
   if (!target || !covered || opposing || !["moderate", "strong"].includes(r.overall?.strength)) return "Insufficient evidence to assess. The available material does not support a reliable likelihood judgement.";
-  const origins = new Set(evidence.map(e => { try { return new URL(e.source_url).hostname.replace(/^www\./, ""); } catch { return e.publisher || e.domain; } }).filter(Boolean));
+  const origins = new Set(evidence.map(e => { try { return publisherIdentity(e.source_url)?.group || new URL(e.source_url).hostname.replace(/^www\./, ""); } catch { return e.publisher || e.domain; } }).filter(Boolean));
   const high = r.overall.strength === "strong" && origins.size >= 2 && principal.every(p => p.a?.strength === "strong");
   return `It is ${high ? "highly likely" : "likely"} that the assessed claim${principal.length > 1 ? "s are" : " is"} ${target}, based on ${high ? "strong corroborating" : "the available substantive"} evidence addressing ${principal.length > 1 ? "each claim" : "the claim"}.`;
 }
@@ -140,7 +141,7 @@ export function buildAssessment(r, { priority = null } = {}) {
   const datedImage = imageResults.map(i=>i.reverse?.earliest_known).filter(Boolean).sort((a,b)=>a.date.localeCompare(b.date))[0];
   const imageNote = !imageResults.length ? null : datedImage ? `Image history: the earliest dated confirmed match among accessible returned pages is ${datedImage.date.slice(0,10)}; this does not establish the first upload. See Image verification for source links.` : imageResults.some(i=>i.reverse?.status!=="completed") ? "Image history: online earlier-post searching was not completed for all images; AI descriptions and local matching do not establish prior web postings." : "Image history: online reverse search completed, but no earliest dated confirmed match was established among returned results.";
   // 2. ANALYSIS (80–180 words): each principal claim, its evidence and the gaps
-  const SHORT = { kdf_official: "official KDF and Ministry of Defence pages", factcheck: "fact-check databases", web: "web search", official: "official and fact-checking sites", news: "a news index" };
+  const SHORT = { kenyan_news: "Kenya news coverage across indexed outlets", kdf_official: "official KDF and Ministry of Defence pages", factcheck: "fact-check databases", web: "web search", official: "official and fact-checking sites", news: "a news index" };
   const an = [ok.length ? `AIVS searched ${ok.map(s => SHORT[s.key] || s.label).join(", ")} automatically and compared ${plural(r.evidence.filter(e => !e.repeat_of && !["reference", "earlier_case"].includes(e.tier)).length, "independent item")}${r.evidence.some(e => e.page_read) ? `, reading the full text of ${plural(r.evidence.filter(e => e.page_read).length, "source")}` : ""}.`
     : `No independent evidence source could be searched${errored.length ? ` (${errored.map(s => s.label).join(", ")} returned errors)` : unconfigured.length ? " (no search service is configured)" : ""}, so the claims could not be compared with outside reporting.`];
   const official = (r.search || []).find(s => s.key === "kdf_official" || s.connector === "kdf_official");
