@@ -66,8 +66,9 @@ test("verify pasted text: case, claims and statement-type hints in one step", as
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.status, "analyst_review");
   const types = r.body.claims.map(c => c.claim_type);
-  assert.ok(types.includes("factual") && types.includes("opinion") && types.includes("prediction"), JSON.stringify(r.body.claims));
+  assert.ok(types.includes("factual") && types.includes("opinion") && r.body.claims.length === 2, JSON.stringify(r.body.claims));
   const agg = (await ana.get(`/api/cases/${r.body.id}`)).body;
+  assert.ok(agg.claimCandidates.some(c => classifyStatement(c.text).type === "prediction"), "additional statements remain review candidates, not extra case claims");
   assert.equal(agg.case.source_platform, "Pasted text"); assert.match(agg.case.claim_text_original, /^BREAKING/);
   assert.equal((await ana.post("/api/verify", { input: "   " })).status, 400);
   assert.equal((await view.post("/api/verify", { input: "Some claim about Nairobi today." })).status, 403, "viewers cannot start cases");
@@ -92,7 +93,8 @@ test("verify a link: page archived unchanged, dates and claims extracted, inject
   assert.equal(agg.case.published_at, "2018-10-14T08:30:00.000Z"); assert.match(agg.case.published_basis, /article:published_time/);
   assert.equal(agg.case.source_title, "Floods: KDF trucks & convoy stranded near Garissa");
   assert.ok(agg.evidence.some(e => /address automated or AI systems/.test(e.text) && e.status === "suggested"), "instruction-like text is flagged, never obeyed");
-  assert.ok(agg.claims.some(c => c.claim_type === "opinion") && agg.claims.some(c => c.claim_type === "prediction"));
+  assert.equal(agg.claims.length, 2);
+  assert.ok(agg.claimCandidates.some(c => classifyStatement(c.text).type === "opinion") && agg.claimCandidates.some(c => classifyStatement(c.text).type === "prediction"));
   const snap = await fetch(SP.base + `/api/cases/${r.body.id}/snapshot`, { headers: { cookie: anaP.cookie } });
   assert.equal(snap.status, 200); assert.match(snap.headers.get("content-disposition"), /attachment/); assert.match(snap.headers.get("content-security-policy"), /sandbox/);
   assert.equal(sha(Buffer.from(await snap.arrayBuffer())), r.body.source.sha256);

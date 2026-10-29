@@ -1,15 +1,17 @@
+import { reverseImageHtml } from "../lib/reverseview.js";
+import { formalPanel } from "../formal.js";
 // Verify Information (1.24): paste a link, press Analyse Automatically. AIVS extracts the post or article (text,
 // headline, images, author, date, hashtags, engagement, video details), detects the claims, searches for evidence,
 // compares sources, checks the images, assesses each claim and writes the report. The extracted content is shown as
 // soon as it is available. Text, screenshots and files can still be given when there is no link, or to correct an
 // incomplete extraction. Everything is labelled as an AI-generated preliminary assessment.
 import { videoResultHtml } from "../lib/videoview.js";
-import { api } from "../api.js";
+import { api, newTaskKey } from "../api.js";
 import { App, crumbs } from "../app.js";
-import { $, esc, errMsg, kb } from "../ui.js";
+import { $, esc, errMsg, kb, fail } from "../ui.js";
 
 // the automated workflow (1.33): each stage runs by itself; the list a saved investigation recorded is shown as it was
-const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (at most two principal claims)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
+const STAGES = [["source", "Source detection"], ["extract", "Content extraction"], ["analyse", "Claim identification (maximum two per case)"], ["search", "Evidence collection"], ["compare", "Evidence verification"], ["media", "Image and media checks"], ["assess", "AI analysis"], ["conclude", "Conclusion generation"], ["report", "Report generation (one-page A4 draft)"], ["submit", "Submission to the HOD approval queue"]];
 const VC = { supported: "sup", contradicted: "con", misleading: "mix", mixed: "grey", insufficient: "grey", not_verifiable: "grey", extraction_blocked: "warn", insufficient_content: "warn" };
 const STANCE = { supports: ["Supports", "sup"], contradicts: ["Contradicts", "con"], misleading: ["Misleading / missing context", "mix"], related: ["Related only", "grey"] };
 const eat = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00+03:00` : iso).toLocaleString("en-GB", { timeZone: "Africa/Nairobi", day: "2-digit", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? {} : { hour: "2-digit", minute: "2-digit" }) }) + (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? "" : " EAT") : "Not known";
@@ -35,10 +37,14 @@ export async function render(el, params = []) {
         <div class="tiny sub" style="margin-top:4px"><b>Reverse video search:</b> add an MP4, MOV or AVI file (or paste a link to the video file). AIVS extracts keyframes, reads on-screen text and speech, searches for earlier copies of the footage and compares them, automatically.</div>
       </details>
       ${App.training ? `<div class="callout train" style="margin-top:12px"><div>You are viewing Training records: this becomes a training investigation, kept apart from real cases.</div></div>` : ""}
+      <div class="callout" style="margin-top:12px"><div><label class="check"><input type="checkbox" id="geminiPublicImages" disabled> Use Google Gemini for these public images</label><p class="tiny sub" style="margin:6px 0">Optional. Sends copies of uploaded or linked images to Google. I confirm these images are public and cleared for external processing. Free-tier inputs and outputs may be used to improve Google products and reviewed by humans. Keep confidential material local. Gemini descriptions are unverified and do not establish authenticity or the original uploader.</p><span class="tiny sub" id="geminiStatus" role="status">Checking Gemini availability…</span></div></div>
+      <p class="small sub">Official-source verification: readable claims are checked against Ministry of Defence pages and, when configured, indexed official KDF social posts. Sources, dates and access gaps are recorded; no matching notice does not prove a claim false.</p>
+      <div id="reverseProviderState" class="small" role="status" style="margin-top:10px"></div>
       <div id="ierr" class="callout bad" style="margin-top:12px" hidden></div>
       <p class="tiny sub" style="margin:10px 0 0">Results are AI-generated preliminary assessments, labelled as not reviewed. AI confidence is not proof; consequential decisions need human review.</p>
     </div></div>
     <div id="invRun" hidden>
+      <div class="callout"><div><p>Your work continues on the server while you open another procedure. Return through Background tasks to see its progress.</p><div class="row" style="flex-wrap:wrap"><a class="btn sm" href="#/reverse-image">Start another image search</a><a class="btn sm" href="#/reverse-video">Start another video search</a><a class="btn sm" href="#/investigate">New investigation</a><a class="btn sm ghost" href="#/tasks">View all background tasks</a></div></div></div>
       <div class="grid g2" style="align-items:start">
         <div class="card"><div class="hd"><h3>Extracted content</h3><span id="iplat" class="chip grey"></span></div><div class="bd" id="iprev"><span class="spin"></span> Waiting for the content…</div></div>
         <div class="card"><div class="hd"><h3>AI investigation progress</h3><span class="mono small" id="irid"></span></div><div class="bd"><ol class="istages" id="istages"></ol></div></div>
@@ -47,29 +53,47 @@ export async function render(el, params = []) {
       <div id="ires"></div>
       <div id="invOut" hidden>
         <div class="row" style="margin:12px 0 8px;flex-wrap:wrap;gap:8px" id="iacts"></div>
-        <div id="iappr"></div>
+        <div id="iappr"></div><div id="formalInvestigation" style="margin:12px 0"></div>
         <div class="card"><div class="hd"><h3>Information Operations Assessment</h3><span class="small muted">One-page assessment · full evidence in Supporting evidence</span></div><div class="bd" style="padding:0">
           <iframe id="irep" title="Information Operations Assessment" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" style="width:100%;height:78vh;min-height:520px;border:0;border-radius:0 0 10px 10px;background:#fff"></iframe></div></div>
       </div>
     </div>`;
   const files = $("#ifile"), err = $("#ierr");
+  api.get("/api/gemini-images/status").then(s => { if (!el.isConnected || !$("#geminiStatus", el)) return; $("#geminiPublicImages", el).disabled = !s.configured; $("#geminiStatus", el).textContent = s.configured ? `Available: ${s.model}. Off unless you select it for this submission.` : "Not configured. An administrator must set GEMINI_API_KEY and GEMINI_IMAGE_MODEL on the server. Local checks remain available."; }).catch(() => { if ($("#geminiStatus", el)) $("#geminiStatus", el).textContent = "Gemini availability could not be checked. Local checks remain available."; });
+  api.get("/api/reverse-images/status").then(s=>{const box=$("#reverseProviderState",el);if(box)box.textContent=s.configured?`Prior-posting search is configured: uploaded images are sent to ${s.service} to find matching web pages. Results are limited to its index.`:"Prior-posting search is not configured. Local image descriptions and archive matching do not search the web. Add SERPAPI_API_KEY or GOOGLE_VISION_API_KEY on the server to enable online matches.";}).catch(()=>{});
   files.onchange = () => { $("#ifiles").textContent = [...files.files].map(f => `${f.name} (${kb(f.size)})`).join(", "); };
   $("#iv").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#igo").click(); } };
+  const submissionKey = newTaskKey();
   $("#igo").onclick = async () => {
     err.hidden = true;
     const v = $("#iv").value.trim(), t = $("#itext").value.trim();
     if (!v && !t && !files.files.length) { err.innerHTML = "<div>Paste a link or some text, or add a file.</div>"; err.hidden = false; return; }
-    const fd = new FormData();
+    if ($("#igo").disabled) return;
+    const fd = new FormData(); fd.append("request_key", submissionKey);
     if (/^https?:\/\/\S+$/i.test(v)) fd.append("url", v);
     else if (v && /^(www\.|[\w-]+\.[a-z]{2,}\/)/i.test(v)) { err.innerHTML = "<div>Links must start with https:// or http://.</div>"; err.hidden = false; return; }
     else if (v) fd.append("text", v);
     if (t) fd.append("text", t);
     for (const f of [...files.files].slice(0, 5)) fd.append("files", f);
+    if ($("#geminiPublicImages", el).checked) fd.append("gemini_public_images", "true");
     if (App.training) fd.append("is_training", "true");
     $("#igo").disabled = true; $("#igo").textContent = "Starting…";
     try { const r = await api.upload("/api/investigations", fd); location.hash = `#/investigate/${r.id}`; }
     catch (e) { err.innerHTML = `<div>${esc(errMsg(e))}</div>`; err.hidden = false; $("#igo").disabled = false; $("#igo").textContent = "Analyse Automatically"; }
   };
+  if (["image", "video"].includes(params[0])) {
+    const video = params[0] === "video", title = video ? "Reverse video search" : "Reverse image search";
+    crumbs(`<b>${title}</b>`);
+    $("h1", el).textContent = title;
+    $(".pagehead p", el).textContent = video ? "Upload a video to extract keyframes and compare footage with earlier cases. Online matching requires a configured search provider." : "Upload an image (JPG/JPEG, PNG, WebP, GIF, TIFF, AVIF or HEIC) or a video (MP4, MOV, AVI, WebM or 3GP). Videos are checked through extracted frames. Automatic online matching requires a configured search provider; manual image search is available in the case.";
+    $("#imore").open = true;
+    $(".pagehead", el).insertAdjacentHTML("afterend", '<p class="small">You can start another search after submission. Each runs independently and remains in <a href="#/tasks">Background tasks</a>.</p>');
+    files.accept = video ? "video/mp4,video/quicktime,video/x-msvideo,video/webm,.mp4,.mov,.avi,.webm" : "image/*,video/*,.jpg,.jpeg,.jfif,.png,.webp,.gif,.heic,.heif,.avif,.tif,.tiff,.mp4,.mov,.avi,.webm,.3gp";
+    $("label[for=ifile]", el).textContent = video ? "Add video" : "Add image or video";
+    $("#imore .tiny.sub").textContent = "Already uploaded? Open Cases, select the case and use the reverse search button beneath its image or video.";
+    $("#imore").insertAdjacentHTML("beforeend", '<p><a class="btn" href="#/cases">Open cases</a></p>');
+    return;
+  }
   if (params[0] === "capture") return captureView(el);
   if (params[0]) follow(el, params[0]);
 }
@@ -233,7 +257,7 @@ function results(inv) {
       ${a.corrected_from ? `<p class="tiny" style="margin:0 0 6px"><span class="chip warn">verdict corrected automatically</span> The preliminary reading was not carried by the accepted evidence.</p>` : ""}
       ${rel.length ? `<details class="small"><summary>${valid ? "Context and other sources found" : "Related sources"} (${rel.length})</summary><ul style="margin:4px 0 6px 18px">${rel.map(evRow).join("")}</ul></details>` : ""}</div></div>`; }).join("");
   const imgs = (r.media?.images || []).map(i => `<div class="row" style="gap:12px;align-items:flex-start;margin:8px 0;flex-wrap:wrap"><img src="/api/media/${encodeURIComponent(i.media_id)}/thumb" alt="${esc(i.name)}" style="max-width:160px;max-height:120px;border:1px solid var(--line);border-radius:6px">
-    <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul></div>`).join("");
+    <ul class="small" style="flex:1;min-width:220px;margin:0 0 0 18px">${i.observations.map(x => `<li>${esc(x.text)}${x.strength === "ai" ? ' <span class="chip grey">AI, not verified</span>' : x.kind === "reuse" ? ' <span class="chip mix">possible reuse</span>' : ""}</li>`).join("")}</ul><div style="width:100%">${reverseImageHtml(i.reverse)}</div></div>`).join("");
   const cred = Object.entries(r.evidence.filter(e => !e.repeat_of).reduce((m, e) => (m[e.tier_label] = (m[e.tier_label] || 0) + 1, m), {}));
   return `${pv}<div class="card" style="margin-top:12px;border-left:6px solid var(--${VC[o.verdict] === "grey" ? "line" : VC[o.verdict]})"><div class="bd">
       <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><div><div class="tiny sub">Overall preliminary verdict</div><h2 style="margin:2px 0">${esc(o.label)}</h2></div><span class="chip ${VC[o.verdict]}" style="font-size:13px">Strength of the evidence: ${esc(o.strength_label)}</span></div>
@@ -255,9 +279,14 @@ async function follow(el, id) {
   $("#invForm").hidden = true; $("#invRun").hidden = false;
   const tick = async () => {
     if (!el.isConnected || !location.hash.includes(id)) return;
-    let inv; try { inv = await api.get(`/api/investigations/${encodeURIComponent(id)}`); } catch (e) { $("#istages").innerHTML = `<li class="warning">${esc(errMsg(e))}</li>`; return; }
+    let inv; try { inv = await api.get(`/api/investigations/${encodeURIComponent(id)}`); } catch (e) { if (!el.isConnected || !location.hash.includes(id)) return; $("#istages").innerHTML = `<li class="warning">Progress connection interrupted. Reconnecting… ${esc(errMsg(e))}</li>`; timer = setTimeout(tick, 3000); return; }
+    if (!el.isConnected || !location.hash.includes(id)) return;
     $("#irid").textContent = inv.report_id; stages(inv.stages); preview(inv.preview);
-    if (inv.status === "failed") { $("#ires").innerHTML = `<div class="callout bad" style="margin-top:10px"><div>The investigation stopped: ${esc(inv.error || "unknown error")}. <a href="#/investigate">Start again</a>.</div></div>`; return; }
+    if (inv.status === "failed") {
+      $("#ires").innerHTML = `<div class="callout bad" style="margin-top:10px"><div>The investigation stopped: ${esc(inv.error || "unknown error")}. ${inv.case_id ? `<a href="#/case/${encodeURIComponent(inv.case_id)}/claims">Open the existing case</a>` : ""} <button class="btn sm" id="retryInvestigation">Retry</button></div></div>`;
+      $("#retryInvestigation").onclick = async e => { e.target.disabled = true; try { await api.post(`/api/investigations/${encodeURIComponent(id)}/retry`); await tick(); } catch (er) { e.target.disabled = false; const msg = document.createElement("p"); msg.setAttribute("role", "alert"); msg.textContent = er.message; $("#ires").append(msg); } };
+      return;
+    }
     if (inv.status !== "done") { timer = setTimeout(tick, 1200); return; }
     const r = inv.result, base = `/api/investigations/${encodeURIComponent(inv.id)}/report`;
     if (!inv.preview) preview({ platform: r.source.platform, url: r.source.url, title: r.source.title, text: r.content, claims: r.claims, notes: r.source.notes });
@@ -267,6 +296,7 @@ async function follow(el, id) {
       <a class="btn sm ghost" id="idet" href="${base.replace(/report$/, "details")}.html" target="_blank" rel="noopener">Supporting evidence</a><a class="btn sm ghost" href="${base.replace(/report$/, "details")}.pdf" download>Evidence (PDF)</a>
       ${inv.case_id ? `<a class="btn sm ghost" href="#/case/${esc(inv.case_id)}">Open case ${esc(inv.case_id)}</a>` : ""}<a class="btn sm ghost" href="#/investigate">New investigation</a>
       ${App.can("case.approve") && !r.review?.at && inv.created_by !== App.me.id ? `<button class="btn sm ghost" id="irev">Record a review</button>` : ""}`;
+    if (!r.blocked) formalPanel($("#formalInvestigation",el), "investigation", inv.id).catch(fail);
     $("#irep").srcdoc = await (await fetch(`${base}.html`, { credentials: "same-origin" })).text();
     if (!r.blocked) approvalPanel(inv, base, () => follow(el, id)).catch(e => { $("#iappr").innerHTML = `<div class="callout bad"><div>${esc(errMsg(e))}</div></div>`; });
     $("#invOut").hidden = false;

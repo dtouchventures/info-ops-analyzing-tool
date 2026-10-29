@@ -146,7 +146,7 @@ export function renderSteps(el, step, ctx) {
   el.innerHTML = head + `<div class="gbody">${html}</div>`;
 
   // ------------------------------------------------------------ wiring
-  const run = $("#gRun"); if (run) run.onclick = () => act(() => api.post(`/api/cases/${c.id}/analyse`), "Checks started.");
+  const run = $("#gRun"); if (run) run.onclick = () => act(() => api.queueTask(c.id, "analysis"), "Checks started.");
   const dz = $("#gdz"), fi = $("#gfi");
   if (dz) {
     const send = async files => { const box = $("#gup"); for (const f of files) { box.innerHTML = `<span class="spin"></span> Uploading ${esc(f.name)}…`; const fd = new FormData(); fd.append("files", f, f.name);

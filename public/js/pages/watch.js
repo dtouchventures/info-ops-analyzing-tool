@@ -1,3 +1,4 @@
+import { renderLatestNews } from "./latest-news.js";
 // KDF Mention Watch: the analyst alert queue, saved watchlists (terms, include and exclude rules, preview before
 // activation) and the status of each collection source. Everything shown comes from the server's stored records;
 // counts a platform did not report are shown as "not reported", and no reach figure is estimated.
@@ -48,10 +49,12 @@ export async function render(el, [tab = "overview", id]) {
   const ov = await overview(true), nNew = ov.alert_counts.new || 0;
   SRCLABEL = { ...Object.fromEntries(Object.entries(ov.sources).map(([k, v]) => [k, v.label])), ...ov.manual_sources };
   crumbs(`AI Watchlist${tab === "list" ? " / Watchlist" : ""}`);
-  const tabs = [["overview", "Overview"], ["alerts", `Alerts${nNew ? `<span class="count">${nNew}</span>` : ""}`], ["lists", "Watchlists"], ["sources", "Sources and status"]];
+  const tabs = [["overview", "Overview"], ["news", "Latest news"], ["security", "Security news"], ["alerts", `Alerts${nNew ? `<span class="count">${nNew}</span>` : ""}`], ["lists", "Watchlists"], ["sources", "Sources and status"]];
   el.innerHTML = `<div class="pagehead"><div><h1>AI Watchlist</h1><p>Watch topics, keywords and hashtags in public posts collected through permitted APIs and feeds, or imported from datasets. Alerts are leads for an analyst to check; they are not findings.</p></div></div>
     <nav class="tabs">${tabs.map(([k, l]) => `<a href="#/watch/${k}" class="${k === tab || (tab === "list" && k === "lists") ? "on" : ""}">${l}</a>`).join("")}</nav><div id="wb"></div>`;
   const body = $("#wb", el);
+  if (tab === "security") return renderLatestNews(body, { security: true });
+  if (tab === "news") return renderLatestNews(body);
   if (tab === "lists") return lists(body, ov);
   if (tab === "list") return listView(body, ov, id);
   if (tab === "sources") return sources(body, ov);

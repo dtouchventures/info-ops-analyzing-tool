@@ -58,6 +58,7 @@ export function validate(e, principalIds) {
 // compared: the investigation's compared evidence; assessments: the preliminary per-claim results (same order as claims)
 export function makeAutoComplete(db, { cases }) {
   function complete(user, { caseId, claims, otherClaims = [], compared, assessments, searched, connectors = [], media = null, source = {}, aiState = null }) {
+    cases.assertReportClaims(caseId);
     const principalIds = new Set(claims.map(c => c.id)), checks = new Map();
     for (const e of compared) checks.set(e.id, validate(e, principalIds));
     for (const cl of claims) {   // at most two accepted evidence items per claim
@@ -126,8 +127,7 @@ export function makeAutoComplete(db, { cases }) {
 
     const now = nowISO();
     cases.change(user, caseId, `Completed automatically by the AIVS investigation pipeline: ${plural(claims.length, "principal claim")}, ${plural(nAcc, "evidence item")} accepted, conclusion “${CONCLUSION_LABELS[conclusion] || "—"}”`, () => {
-      // claims: principal ones assessed; the others recorded but not prioritised (kept, not deleted)
-      for (const cl of otherClaims) db.prepare("UPDATE claims SET removed = 1, rationale = ? WHERE id = ? AND removed = 0").run("Recorded but not prioritised: AIVS assesses at most two principal claims per investigation.", cl.id);
+      // Never remove saved claims automatically to make room or to rank them.
       claims.forEach((cl, i) => db.prepare("UPDATE claims SET assessment = ?, rationale = ?, assessed_by = ?, assessed_at = ?, assessed_auto = 1 WHERE id = ?").run(TO_CASE[finals[i].verdict], rationale[i], user.id, now, cl.id));
       // evidence: every retrieved suggestion decided by the rules, with the rule results kept on the item
       const byId = new Map(compared.map(e => [e.id, e]));

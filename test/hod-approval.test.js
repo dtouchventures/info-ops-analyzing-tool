@@ -57,8 +57,8 @@ const pdfText = async (client, url) => { const f = await fetch(`${S.base}${url}`
 test("KDF recruitment case: at most two principal claims, automatic evidence with the source read in full, False with a fact-check, AI used, KDF IO assessment, four sections, one page", async () => {
   const inv = await investigate(ana, TEXT), r = inv.result; invId = inv.id;
   assert.equal(inv.status, "done", inv.error);
-  assert.ok(r.claims.length >= 1 && r.claims.length <= 2, `principal claims: ${r.claims.map(c => c.text)}`); assert.equal(r.principal_by, "ai"); assert.ok(AI.calls.includes("rank"));
-  assert.ok(r.claims.some(c => /KSh 2,000/.test(c.text))); assert.ok(r.other_claims.length >= 1, "the other statements are kept"); assert.ok(!r.claims.some(c => /respected institution/.test(c.text)), "background is not a principal claim");
+  assert.ok(r.claims.length >= 1 && r.claims.length <= 2, `principal claims: ${r.claims.map(c => c.text)}`); assert.equal(r.principal_by, "case records");
+  assert.ok(r.claims.some(c => /KSh 2,000/.test(c.text))); assert.equal(r.other_claims.length, 0, "reports contain only the saved case claims"); assert.ok(S.ctx.db.prepare("SELECT COUNT(*) n FROM claim_candidates WHERE case_id=?").get(inv.case_id).n > 2, "additional statements are retained as review candidates"); assert.ok(!r.claims.some(c => /respected institution/.test(c.text)), "background is not a principal claim");
   assert.equal(inv.stages.find(s => s.key === "search").status, "done"); assert.ok(r.search.some(s => s.key === "factcheck" && s.status === "ok"), "evidence searched automatically");
   const fc = r.evidence.find(e => e.connector === "factcheck"); assert.ok(fc.page_read, "the fact-check article itself was read"); assert.match(fc.passage, /pay KSh 2,000|free of charge/);
   assert.equal(r.overall.verdict, "contradicted"); assert.equal(r.ai.used, true);
@@ -68,9 +68,9 @@ test("KDF recruitment case: at most two principal claims, automatic evidence wit
   assert.match(a.assessment, /misinformation/); assert.match(a.assessment, /KDF/); assert.doesNotMatch(a.assessment, /\bis disinformation\b|hostile|coordinated campaign/i);
   assert.ok(a.recommendations.length >= 3 && a.recommendations.length <= 5 && a.recommendations.every(x => x.startsWith("There is a need to ")));
   assert.ok(a.claims.length <= 2 && a.claims[0].contradicting.length, "the claim's contradicting evidence is cited");
-  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.equal((html.match(/<h2>/g) || []).length, 4); assert.match(html, /DRAFT — NOT APPROVED/); assert.doesNotMatch(html, /APPROVED BY HEAD OF DEPARTMENT/);
-  const p = await pdfText(ana, `/api/investigations/${inv.id}/report.pdf`); assert.equal(p.pages, 1, "one A4 page"); assert.match(p.text, /DRAFT - NOT APPROVED/);
-  for (const h of ["EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "ANALYSIS", "ASSESSMENT", "RECOMMENDATIONS"]) assert.ok(p.text.includes(h), h);
+  const html = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; for (const h of ["1. PURPOSE","2. BACKGROUND","3. ANALYSIS","5. ASSESSMENT","6. RECOMMENDATIONS","7. CONCLUSION"]) assert.ok(html.includes(h)); assert.match(html, /DRAFT — NOT APPROVED/); assert.doesNotMatch(html, /APPROVED BY HEAD OF DEPARTMENT/);
+  const p = await pdfText(ana, `/api/investigations/${inv.id}/report.pdf`); assert.equal(p.pages, 1, "one A4 page"); assert.match(p.text, /DRAFT [-—] NOT APPROVED/);
+  for (const h of ["PURPOSE", "BACKGROUND", "ANALYSIS", "ASSESSMENT", "RECOMMENDATIONS", "CONCLUSION"]) assert.ok(p.text.includes(h), h);
   assert.ok(!/KEY REFERENCES|LIMITATIONS|REPORT STATUS|METHODOLOGY/.test(p.text), "no extra body sections");
 });
 
@@ -92,7 +92,8 @@ test("automatic completion and submission: the case is completed by AIVS (no man
   assert.equal(c.status, "awaiting_approval"); assert.equal(c.approval_route, "hod"); assert.ok(c.auto_completed_at);
   assert.equal(c.conclusion, "contradicted", JSON.stringify({ c: c.conclusion, cls: S.ctx.db.prepare("SELECT seq, assessment, removed, rationale FROM claims WHERE case_id = ?").all(c.id), st: c.status })); assert.match(c.conclusion_rationale, /Determined automatically from/); assert.match(c.conclusion_rationale, /Confidence: (High|Medium|Low)/); assert.ok(c.uncertainties.trim().length > 10);
   assert.ok(cls.length >= 1 && cls.length <= 2, "at most two principal claims stay in the case");
-  assert.ok(db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id = ? AND removed = 1 AND rationale LIKE 'Recorded but not prioritised%'").get(c.id).n >= 1, "the other statements are kept, not deleted");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM claims WHERE case_id=?").get(c.id).n, cls.length, "automation never removes saved claims to make room");
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM claim_candidates WHERE case_id=?").get(c.id).n > 2, "additional statements remain candidates");
   for (const cl of cls) { assert.equal(cl.assessed_auto, 1); assert.notEqual(cl.assessment, "unassessed"); assert.match(cl.rationale, /^Observed: .*Interpretation \(AIVS rules\)/); assert.doesNotMatch(cl.rationale, /^ok$/i); }
   const ev = db.prepare("SELECT * FROM evidence WHERE case_id = ?").all(c.id);
   assert.equal(ev.filter(e => e.status === "suggested").length, 0, "every suggestion was decided by the rules");
@@ -140,7 +141,7 @@ test("HOD approval: permissions, return for revision, revision rules, approval, 
   const html = (await ana.get(`/api/investigations/${invId}/report.html`)).body; assert.match(html, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(html, /Head of Department, Information Operations/); assert.doesNotMatch(html, /DRAFT — NOT APPROVED/);
   const p1 = await pdfText(ana, `/api/investigations/${invId}/report.pdf`), p2 = await pdfText(rev, `/api/investigations/${invId}/report.pdf`);
   assert.equal(p1.pages, 1); assert.ok(p1.buf.equals(p2.buf), "the stored approved PDF is served unchanged");
-  assert.match(p1.text, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(p1.text, /Approved by HOD, Head of Department, Information Operations/); assert.match(p1.text, new RegExp(ap.body.approval_ref)); assert.doesNotMatch(p1.text, /DRAFT - NOT APPROVED/);
+  assert.match(p1.text, /APPROVED BY HEAD OF DEPARTMENT/); assert.match(p1.text, /Approved by HOD, Head of Department, Information Operations/); assert.match(p1.text, new RegExp(ap.body.approval_ref)); assert.doesNotMatch(p1.text, /DRAFT [-—] NOT APPROVED/);
   const code = /Verification code ([0-9A-F-]{19})/.exec(p1.text)?.[1]; assert.ok(code, p1.text.slice(-400));
   const v = (await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=${code}`).then(r => r.json())); assert.equal(v.valid, true); assert.equal(v.approved_by, "HOD"); assert.equal(v.analysis, undefined, "no report content is exposed");
   assert.equal((await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=0000-0000-0000-0000`).then(r => r.json())).valid, false);
@@ -148,7 +149,7 @@ test("HOD approval: permissions, return for revision, revision rules, approval, 
   // a material change after approval invalidates it
   const edit = await ana.put(`/api/investigations/${invId}/assessment`, { assessment: `${cur.assessment} The post remains in circulation.` }); assert.equal(edit.status, 200); assert.equal(edit.body.status, "draft");
   assert.match((await ana.get(`/api/investigations/${invId}/report.html`)).body, /DRAFT — NOT APPROVED/);
-  assert.match((await pdfText(ana, `/api/investigations/${invId}/report.pdf`)).text, /DRAFT - NOT APPROVED/);
+  assert.match((await pdfText(ana, `/api/investigations/${invId}/report.pdf`)).text, /DRAFT [-—] NOT APPROVED/);
   assert.equal((await fetch(`${S.base}/api/public/verify-report?ref=${ap.body.approval_ref}&code=${code}`).then(r => r.json())).valid, false, "the old approval no longer verifies");
   // the record: events, versions, audit and an intact hash chain
   const st = (await ana.get(`/api/investigations/${invId}/approval`)).body;

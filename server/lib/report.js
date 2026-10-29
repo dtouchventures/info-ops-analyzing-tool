@@ -15,6 +15,7 @@ const CONNECTOR = { factcheck: "Google Fact Check Tools", web: "Web search (Brav
 
 export function makeReports(db, { cases, storage }) {
   function data(caseId) {
+    cases.assertReportClaims(caseId);
     const a = cases.aggregate(caseId), c = a.case, u = id => (id ? a.users[id] || "unknown" : null);
     const claims = a.claims.filter(x => !x.removed);
     const accepted = a.evidence.filter(e => e.status === "accepted");

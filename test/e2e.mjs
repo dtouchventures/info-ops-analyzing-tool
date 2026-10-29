@@ -35,8 +35,8 @@ const shot = async (p, n) => shots && p.screenshot({ path: path.join(shots, n + 
 // ---- analyst
 const a = await session("ana");
 await a.waitForSelector(".svc");
-check("the main menu has the seven services", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "Live Monitoring", "AI Watchlist", "Reports", "Settings"]));
-check("the dashboard shows three service cards with server figures, recent investigations and recent alerts", (await a.$$(".svc")).length === 3 && (await a.textContent("#page")).includes("Recent investigations") && (await a.textContent("#page")).includes("No alerts"));
+check("the main menu preserves the seven services and adds Background tasks", JSON.stringify(await a.$$eval(".nav > a span:first-of-type", x => x.map(e => e.textContent))) === JSON.stringify(["Dashboard", "Verify Information", "Social Media Analysis", "Live Monitoring", "AI Watchlist", "Reports", "Settings", "Background tasks"]));
+check("the dashboard shows four service cards including reports and cases access, without recent report or investigation panels", (await a.$$(".svc")).length === 4 && !(await a.textContent("#page")).includes("Recent investigations") && !(await a.textContent("#page")).includes("Recent automatic reports") && !!(await a.$('[data-svc="reports"] a[href="#/cases"]')) && (await a.textContent("#page")).includes("No alerts"));
 await shot(a, "00a-dashboard-home");
 await a.goto(S.base + "/#/status"); await a.waitForSelector(".module");
 check("start page lists the eight modules with honest statuses", (await a.$$(".module")).length === 8 && (await a.textContent(".modules")).includes("Available") && (await a.textContent(".modules")).includes("Partly available"));
@@ -146,7 +146,7 @@ await r.click('a[href="#/dashboard"]'); await r.waitForSelector(".kpis"); await 
 check("dashboard counts come from records", (await r.textContent(".kpis")).includes("Approved") && /\b1\b/.test(await r.textContent(".kpi:last-child .v")));
 // ---- admin
 const ad = await session("admin");
-await ad.click('.nav a[href="#/settings"]'); await ad.waitForSelector('a[href="#/status"]'); check("Settings lists the hidden tools and links to administration", (await ad.textContent("#page")).includes("Other tools") && (await ad.textContent("#page")).includes("Reference archive"));
+await ad.click('.nav a[href="#/settings"]'); await ad.waitForSelector('a[href="#/status"]'); check("Settings omits the removed Other tools section and preserves administration", !(await ad.textContent("#page")).includes("Other tools") && !!(await ad.$('a[href="#/admin"]')));
 await ad.click('#page a[href="#/models"]'); await ad.waitForSelector("table.cm");
 check("AI models shows the trained classifier with its data source, test scores, baselines and confusion matrix", (await ad.textContent("#page")).includes("TweetEval") && (await ad.textContent("#page")).includes("Word list used before") && (await ad.$$("table.cm td")).length === 9);
 await ad.fill("form[data-try] textarea", "The new hospital is wonderful and the nurses were so kind"); await ad.click("form[data-try] button"); await ad.waitForFunction(() => /positive/.test(document.querySelector(".tryout")?.textContent || ""));
@@ -206,10 +206,12 @@ await a.goto(S.base + "/#/verify"); await a.waitForSelector("#vi"); await a.eval
 await a.click("#vres a.btn.primary"); await a.waitForSelector(".gsteps");
 check("guided mode shows the case in four steps with one main action", (await a.$$(".gsteps li")).length === 4 && (await a.$$(".gnav .btn.primary")).length === 1 && /\/step2$/.test(await a.evaluate(() => location.hash)));
 { const vid = (await a.evaluate(() => location.hash)).match(/C-\d{4}-\d{4}/)[0];
-  await a.goto(S.base + `/#/case/${vid}/claims`); await a.waitForSelector("#srchAll"); await a.click("#srchAll"); await a.waitForSelector(".modal", { timeout: 20000 });
-  const mt = await a.textContent(".modal");
-  check("evidence search reports unconfigured services instead of inventing results", mt.includes("AIVS knowledge base") && mt.includes("Earlier AIVS investigations") && !/https?:\/\//.test(mt));
-  await shot(a, "19c-evidence-search"); await a.click(".modal .btn.primary");
+  await a.goto(S.base + `/#/case/${vid}/claims`); await a.waitForSelector("#srchAll"); await a.click("#srchAll");
+  await a.goto(S.base + "/#/tasks"); await a.waitForSelector("#taskList article");
+  await a.waitForFunction(() => document.querySelector('#taskList article')?.textContent.includes('Completed'), null, { timeout: 20000 });
+  const mt = await a.textContent("#taskList article");
+  check("background evidence search reports services instead of inventing results", mt.includes("AIVS knowledge base") && mt.includes("Earlier AIVS investigations") && !/https?:\/\//.test(mt));
+  await shot(a, "19c-evidence-search");
   await a.goto(S.base + `/#/case/${vid}/evidence`); await a.waitForSelector(".ev");
   check("red-flag leads explain which official source to check", /official|Ministry of Health|health\.go\.ke/i.test(await a.textContent("#tabBody")));
   await a.goto(S.base + `/#/case/${vid}`); await a.waitForSelector(".gsteps"); }
@@ -280,7 +282,7 @@ check("posts can be filtered by account", (await a.$$eval("table.t tbody tr", r 
   check("video upload: keyframes extracted and the video verification shown, stating that internet-wide reverse search was not completed", /Video verification/.test(out) && /3 keyframe/.test(out) && /Internet-wide reverse search was not completed/.test(out), out.slice(0, 160));
   const invId = (await a.evaluate(() => location.hash)).match(/INV-\d+/)[0], cid = await a.evaluate(async id => (await (await fetch(`/api/investigations/${id}`)).json()).result.case_id, invId);
   await a.goto(S.base + `/#/case/${cid}/media`); await a.waitForSelector("[data-rvs]");
-  check("Reverse video search sits on the video beside Reverse image search on its keyframes", (await a.textContent("[data-rvs]")).trim() === "Reverse video search" && (await a.$$("[data-web]")).length >= 3 && (await a.textContent("[data-web]")).trim() === "Reverse image search");
+  check("Reverse video search sits on the video beside Reverse image search on its keyframes", (await a.textContent("[data-rvs]")).trim() === "Reverse video search" && (await a.$$("[data-web]")).length >= 3 && (await a.textContent("[data-web]")).trim() === "Manual reverse search");
   await a.waitForFunction(() => /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 30000 });
   await a.click("[data-rvs]"); await a.waitForFunction(() => /VC-000002/.test(document.querySelector("[data-rvsbox]")?.textContent || "") && /Completed/.test(document.querySelector("[data-rvsbox]")?.textContent || ""), null, { timeout: 240000 });
   const box = await a.textContent("[data-rvsbox]");
@@ -465,8 +467,8 @@ if (await a.$("#ksample")) { check("analysts cannot import datasets (button hidd
   const doc = await up(pdfBuf, "bulletin.pdf"), aud = await up(tone, "voice.wav");
   await ax.post(`/api/cases/${cid}/analyse?wait=1`, {});
   const g = (await ax.get(`/api/cases/${cid}`)).body; for (const e of g.evidence.filter(x => x.status === "suggested")) await ax.patch(`/api/evidence/${e.id}`, { status: "dismissed" });
-  for (const c of g.claims.filter(c => !c.removed)) await ax.del(`/api/claims/${c.id}`);
-  const c1 = (await ax.post(`/api/cases/${cid}/claims`, { text: "SYNTHETIC: The bridge collapsed." })).body.id, c2 = (await ax.post(`/api/cases/${cid}/claims`, { text: "SYNTHETIC: Schools were closed." })).body.id;
+  const activeClaims = g.claims.filter(c => !c.removed);
+  const c1 = activeClaims[0].id, c2 = activeClaims[1].id;
   await ax.post(`/api/cases/${cid}/evidence`, { kind: "source_claim", text: "SYNTHETIC: Bulletin page 2 describes a lane closure only.", reference: "Bulletin p2", media_id: doc.id, loc_page: 2, links: [{ claim_id: c1, stance: "contradicts" }] });
   await ax.post(`/api/cases/${cid}/evidence`, { kind: "lead", text: "SYNTHETIC: Recording mentions schools at 0:01.", reference: "Recording", media_id: aud.id, loc_start_s: 1.5, loc_end_s: 3, links: [{ claim_id: c2, stance: "context" }] });
   await ax.post(`/api/cases/${cid}/evidence`, { kind: "inference", text: "SYNTHETIC: Schools often close in floods.", reference: "Analyst note", links: [{ claim_id: c2, stance: "context" }] });
@@ -598,7 +600,7 @@ const audit = async (p, where) => (await p.evaluate(() => [...document.querySele
 // ---- Guided mode (1.19): one clearly labelled SYNTHETIC case through the four steps, analyst then a different reviewer
 let guidedDead = [], guidedSeen = 0;
 { const g = await session("ana2", "guided");
-  check("guided menu shows the seven services and no secondary tools", (await g.$$(".nav > a")).length === 7 && !(await g.$("#navMore")) && !(await g.isVisible('a[href="#/dashboard"]')));
+  check("guided menu shows the services and Background tasks with no secondary tools", (await g.$$(".nav > a")).length === 8 && !(await g.$("#navMore")) && !(await g.isVisible('a[href="#/dashboard"]')));
   await g.click('.nav a[data-nav="verify"]'); await g.waitForSelector("#igo");
   check("Verify Information opens the one-click page, with sub-tabs for analysis, cases and the review queue", (await g.$$eval(".subnav a", x => x.map(e => e.textContent))).join("|") === "Analyze information|Cases|Review queue" && (await g.textContent("#igo")).trim() === "Analyse Automatically" && (await g.getAttribute("#iv", "placeholder")) === "https://example.com/news/article");
   await g.click('a[href="#/start"]'); await g.waitForSelector("#sGo");
@@ -785,7 +787,7 @@ let watchDead = [], watchSeen = 0;
   await p.waitForSelector("#wMon.ok"); check("the AI Watchlist overview shows monitoring active with the last analysis and posts checked", /Monitoring active.*last successful analysis .*1,000 posts checked/.test(await p.textContent("#wMon")), await p.textContent("#wMon"));
   const saved = (await p.evaluate(() => fetch("/api/watch/alerts?status=all&limit=200").then(r => r.json()))).alerts.filter(a => ["new", "acknowledged"].includes(a.status)).length;
   f = await figs(); check("after importing matching posts with a spike, open alerts rise to the number of saved alerts", f.active === "1" && Number(f.open) > 0 && Number(f.open) === saved, `${JSON.stringify(f)} saved=${saved}`);
-  check("the dashboard reports the last analysis time and 1,000 posts checked", /Monitoring active.*last analysis .*1,000 posts checked/.test(f.mon), f.mon);
+  check("the dashboard reports the last analysis time and 1,000 posts checked", /Analysis completed.*last analysis .*1,000 posts checked/.test(f.mon), f.mon);
   await shot(p, "01b-dashboard-watchlist-after-import");
   await ctx.close(); await SD.close();
 }
@@ -845,8 +847,10 @@ let watchDead = [], watchSeen = 0;
   wrow = await p.textContent('tr:has-text("TEST Isiolo projects")'); check("a watchlist's keywords can be edited and it is re-activated", /Isiolo OR Marsabit/.test(wrow) && /active/.test(wrow), wrow.replace(/\s+/g, " ").slice(0, 200));
   const kdfRow = await p.$('tr:has-text("draft")'); check("a draft explains why it is not running", !kdfRow || /Not running/.test(await kdfRow.textContent()));
   await p.click('tr:has-text("TEST Isiolo projects") [data-act="pause"]'); await p.waitForSelector('.toast:has-text("Paused")');
+  await p.waitForFunction(() => [...document.querySelectorAll('#lb tr')].some(row => row.textContent.includes('TEST Isiolo projects') && /paused/.test(row.textContent)), null, { timeout: 10000 });
   check("a watchlist can be paused", /paused/.test(await p.textContent('tr:has-text("TEST Isiolo projects")')));
   await p.click('tr:has-text("TEST Isiolo projects") [data-act="delete"]'); await p.click('.modal .btn.danger'); await p.waitForSelector('.toast:has-text("Deleted")');
+  await p.waitForFunction(() => ![...document.querySelectorAll('#lb tr')].some(row => row.textContent.includes('TEST Isiolo projects')), null, { timeout: 10000 });
   check("a watchlist can be deleted", !(await p.$('tr:has-text("TEST Isiolo projects")')));
   await p.goto(SL.base + "/#/live/sources"); await p.waitForSelector("#lb table");
   check("the sources tab separates connected, restricted, unavailable and not-configured sources and names the access limits", /Connected/.test(await p.textContent("#lb")) && /Not configured/.test(await p.textContent("#lb")) && /cannot search all public Facebook posts/.test(await p.textContent("#lb")));
@@ -924,7 +928,7 @@ let watchDead = [], watchSeen = 0;
   await a.goto(S.base + "/#/reports"); await a.waitForSelector("#rauto table"); check("Reports lists the automatic report by date", (await a.textContent("#rauto")).includes("AIVS-"));
   const t = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); await a.fill("#rfrom", "2020-01-01"); await a.fill("#rto", "2020-01-02"); await a.click("#rfilt button"); await a.waitForFunction(() => /No automatic reports/.test(document.querySelector("#rauto").textContent));
   await a.fill("#rfrom", t); await a.fill("#rto", t); await a.click("#rfilt button"); await a.waitForSelector("#rauto table"); check("the date filter narrows the automatic reports", true);
-  await a.goto(S.base + "/#/home"); await a.waitForSelector(".svcs"); check("the dashboard shows recent automatic reports", (await a.textContent("#page")).includes("Recent automatic reports") && (await a.textContent("#page")).includes("AIVS-"));
+  await a.goto(S.base + "/#/home"); await a.waitForSelector(".svcs"); check("the dashboard keeps reports and cases in the Reports card", !!(await a.$('[data-svc="reports"] a[href="#/reports"]')) && !!(await a.$('[data-svc="reports"] a[href="#/cases"]')) && !(await a.textContent("#page")).includes("Recent automatic reports"));
   const ph = await (await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true })).newPage();
   ph.on("pageerror", e => errors.push(`phone: ${e.message}`));
   await ph.goto(S.base); await ph.fill("#lu", "ana"); await ph.fill("#lp", PW); await ph.click("#lb"); await ph.waitForSelector(".shell");

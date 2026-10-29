@@ -35,7 +35,7 @@ test("a claim the preliminary reading calls Supported, without accepted supporti
   const { cases, autocomplete, db } = S.ctx;
   const caseId = cases.create(user, { title: "TEST FIXTURE automatic completion", claim_text: "TEST FIXTURE: The county opened a new water project in Isiolo on 20 October 2026.", received_at: "2026-10-21T08:00:00Z", priority: "routine" });
   const c1 = cases.addClaim(user, caseId, { text: "The county opened a new water project in Isiolo on 20 October 2026" }), c2 = cases.addClaim(user, caseId, { text: "Thousands of residents attended the opening" });
-  const c3 = cases.addClaim(user, caseId, { text: "Share this with everyone" });
+  cases.proposeClaims(caseId, [{ text: "Share this with everyone", kind: "statement" }], "test extraction");
   const ins = db.prepare("INSERT INTO evidence(id,case_id,kind,origin,status,text,reference,source_url,source_title,source_publisher,source_published_at,connector,retrieved_at,claim_id,created_by,created_at) VALUES (?,?,?,'retrieval','suggested',?,?,?,?,?,?,?,?,?,?,?)");
   const mk = (id, cl, url, title, pub) => ins.run(id, caseId, "source_claim", title, url, url, title, pub, "2026-10-20", "web", "2026-10-21T08:00:00Z", cl, user.id, "2026-10-21T08:00:00Z");
   mk("E-T1", c1, "https://en.wikipedia.org/wiki/Isiolo", "TEST FIXTURE Isiolo county water project opened", "Wikipedia");
@@ -45,13 +45,14 @@ test("a claim the preliminary reading calls Supported, without accepted supporti
   const ev = db.prepare("SELECT * FROM evidence WHERE case_id = ?").all(caseId).map(e => ({ ...e, snippet: e.text }));
   const compared = compare(claims.slice(0, 2), ev);
   const pre = claims.slice(0, 2).map(c => assessClaim(c, compared, true)); pre[0] = { ...pre[0], verdict: "supported", strength: "moderate", reason: "TEST: a preliminary reading of supported." };
-  const out = autocomplete.complete(user, { caseId, claims: claims.slice(0, 2), otherClaims: [claims[2]], compared, assessments: pre, searched: true,
+  const out = autocomplete.complete(user, { caseId, claims: claims.slice(0, 2), otherClaims: [], compared, assessments: pre, searched: true,
     connectors: [{ key: "web", label: "Web search (Brave)", status: "error", errors: ["HTTP 429 rate limited"], results: 0 }, { key: "news", label: "GDELT news index", status: "ok", results: 0 }], source: {}, aiState: { ok: false, reason: "AI not configured" } });
   const cl = db.prepare("SELECT * FROM claims WHERE case_id = ? ORDER BY seq").all(caseId), c = db.prepare("SELECT * FROM cases WHERE id = ?").get(caseId);
   assert.notEqual(cl[0].assessment, "supported", "never Supported without accepted supporting evidence"); assert.equal(cl[0].assessment, "insufficient");
   assert.ok(out.corrected.some(x => x.seq === 1 && x.from === "supported"));
   assert.match(cl[0].rationale, /^Observed: 2 items retrieved for this claim; 0 items accepted .*not from a reliable source type/); assert.match(cl[0].rationale, /corrected to “Insufficient evidence”/);
-  assert.equal(cl[2].removed, 1); assert.match(cl[2].rationale, /not prioritised/);
+  assert.equal(cl.length, 2);
+  assert.equal(db.prepare("SELECT text FROM claim_candidates WHERE case_id=?").get(caseId).text, "Share this with everyone");
   assert.equal(db.prepare("SELECT COUNT(*) n FROM evidence WHERE case_id = ? AND status = 'suggested'").get(caseId).n, 0);
   assert.equal(JSON.parse(db.prepare("SELECT validation FROM evidence WHERE id = 'E-T1'").get().validation).failed[0], "reliable");
   assert.ok(c.conclusion && c.conclusion_rationale && c.uncertainties); assert.match(c.conclusion_rationale, /Confidence: Low/);

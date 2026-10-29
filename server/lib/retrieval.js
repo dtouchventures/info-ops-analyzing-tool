@@ -1,3 +1,5 @@
+import { makeKenyanNewsSearch } from "./kenyan-news.js";
+import { makeKdfOfficial } from "./kdf-official.js";
 // Evidence retrieval for claims. Each connector runs on the server; keys stay in server configuration.
 //   factcheck  Google Fact Check Tools API (ClaimReview records published by fact-checkers). Free key.
 //   web        Brave Search API (web results). Paid key.
@@ -43,7 +45,11 @@ const isHttp = u => { try { return /^https?:$/.test(new URL(u).protocol); } catc
 export function makeRetrieval(db, { config, audit, usage }) {
   const S = { timeoutMs: 10000, factcheckKey: "", factcheckBase: "https://factchecktools.googleapis.com", braveKey: "", braveBase: "https://api.search.brave.com", braveUsdPerRequest: null,
     gdelt: false, gdeltBase: "https://api.gdeltproject.org", wikipedia: false, wikipediaBase: "https://{lang}.wikipedia.org", ...(config.search || {}) };
+  const kdfOfficial = makeKdfOfficial(config);
+  const kenyanNews = makeKenyanNewsSearch(config);
   const connectors = {
+    kenyan_news: { label: "Kenya news coverage (all indexed outlets)", configured: !!config.mediaCheck?.serpapiKey && !config.isTest, needs: "SERPAPI_API_KEY", external: "SerpApi Google News", async run(q) { return kenyanNews(q); } },
+    kdf_official: { label: "Official KDF / Ministry of Defence checks", configured: !config.isTest, needs: config.isTest ? "External official checks disabled in isolated tests" : null, external: "Ministry of Defence; SerpApi if configured", async run(q) { return kdfOfficial(q); } },
     factcheck: { label: "Google Fact Check Tools (published fact-checks)", configured: !!S.factcheckKey, needs: "GOOGLE_FACTCHECK_API_KEY (free; create it in a Google Cloud project with the Fact Check Tools API enabled)", external: "Google",
       async run(q, { lang }) {
         const u = new URL("/v1alpha1/claims:search", S.factcheckBase); u.searchParams.set("query", q); u.searchParams.set("pageSize", "10"); u.searchParams.set("key", S.factcheckKey); if (lang) u.searchParams.set("languageCode", lang);
@@ -98,6 +104,10 @@ export function makeRetrieval(db, { config, audit, usage }) {
     const c = cases.mustCase(caseId); cases.requireEdit(user, c);
     // without an explicit list, the free public indexes (GDELT, Wikipedia) are not used: they are chosen explicitly (automatic investigations, or the search box)
     const want = (use && use.length ? use : Object.keys(connectors).filter(k => !["news", "reference"].includes(k))).filter(k => connectors[k]);
+    // Keep official evidence first; broad news discovery supplements it.
+    for (const key of ["kenyan_news", "kdf_official"]) if (connectors[key].configured) {
+      const at=want.indexOf(key); if(at>=0)want.splice(at,1); want.unshift(key);
+    }
     const claims = db.prepare("SELECT * FROM claims WHERE case_id = ? AND removed = 0 ORDER BY seq").all(caseId)
       .filter(cl => !claimIds?.length || claimIds.includes(cl.id));
     const checkable = claims.filter(cl => cl.kind !== "media" && (!cl.claim_type || cl.claim_type === "factual"));
@@ -118,6 +128,8 @@ export function makeRetrieval(db, { config, audit, usage }) {
         try {
           if (key === "holdings") results = similarCases(c, cl);
           else results = await con.run(q, { lang, training: !!c.is_training });
+          if (results.coverage) row.coverage = { ...results.coverage, social_matches: (row.coverage?.social_matches || 0) + results.coverage.social_matches };
+          if (results.coverage_errors?.length) row.errors.push(...results.coverage_errors);
           logR.run(caseId, cl.id, key, q, "ok", null, results.length, user.id, nowISO()); row.queries++;
         } catch (e) { row.errors.push(`Claim ${cl.seq}: ${e.message}`); logR.run(caseId, cl.id, key, q, "error", String(e.message).slice(0, 300), 0, user.id, nowISO()); if (key !== "holdings") usageFail(key); continue; }
         row.results += results.length;
@@ -136,7 +148,7 @@ export function makeRetrieval(db, { config, audit, usage }) {
           row.stored++; added.total++;
         }
       }
-      row.status = row.errors.length && !row.queries ? "error" : row.errors.length ? "partial" : "ok";
+      row.status = key === "kdf_official" && !row.queries && !row.errors.length ? "not_applicable" : row.errors.length && !row.queries ? "error" : row.errors.length ? "partial" : "ok";
     }
     suggestVerdicts(caseId);
     cases.change(user, caseId, `Evidence search: ${added.total} suggestion(s) from ${report.filter(r => r.status === "ok" || r.status === "partial").map(r => r.connector).join(", ") || "no configured service"}`, () => {}, { report: report.map(({ connector, status, queries, results, stored }) => ({ connector, status, queries, results, stored })) });

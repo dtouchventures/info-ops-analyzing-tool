@@ -51,7 +51,7 @@ const sha = t => crypto.createHash("sha256").update(t).digest("hex");
 
 export function makeSessions(db, config) {
   const COOKIE = "aivs_session";
-  const getS = db.prepare("SELECT s.*, u.id AS uid, u.username, u.display_name, u.role, u.active, u.must_change_password, u.ui_mode FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?");
+  const getS = db.prepare("SELECT s.*, u.id AS uid, u.username, u.display_name, u.role, u.active, u.must_change_password, u.ui_mode, u.rank, u.appointment FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?");
   const touch = db.prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?");
   const del = db.prepare("DELETE FROM sessions WHERE token_hash = ?");
   const cookieOpts = maxAge => `Path=/; HttpOnly; SameSite=Strict${config.cookieSecure ? "; Secure" : ""}; Max-Age=${maxAge}`;
@@ -70,7 +70,7 @@ export function makeSessions(db, config) {
     if (t) {
       const s = getS.get(sha(t));
       if (s && s.active && new Date(s.expires_at) > new Date()) {
-        req.user = { id: s.uid, username: s.username, display_name: s.display_name, role: s.role, must_change_password: !!s.must_change_password, ui_mode: s.ui_mode || "guided" };
+        req.user = { id: s.uid, username: s.username, display_name: s.display_name, role: s.role, must_change_password: !!s.must_change_password, ui_mode: s.ui_mode || "guided", rank: s.rank || "", appointment: s.appointment || "" };
         if (Date.now() - new Date(s.last_seen_at).getTime() > 60e3) touch.run(nowISO(), s.token_hash);
       } else if (s) del.run(s.token_hash);
     }

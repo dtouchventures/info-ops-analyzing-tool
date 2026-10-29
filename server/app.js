@@ -1,3 +1,13 @@
+import { makeBriefReports } from "./lib/brief-reports.js";
+import { briefHtml, briefPdf, briefDocx } from "./lib/brief-print.js";
+import { makeLatestKenyaNews } from "./lib/kenyan-news.js";
+import { backgroundOverview } from "./lib/background-overview.js";
+import { makeReverseImageSearch } from "./lib/reverse-image.js";
+import { serviceWritingReport as serviceReport, buildAssessment as serviceAssessment } from "./lib/ioassessment.js";
+import { makeFormalReports, fromCase as formalFromCase, fromDataset as formalFromDataset, normalise as formalNormalise, check as formalCheck, tooLong as formalTooLong } from "./lib/formal-report.js";
+import { docx as formalDocx, pdf as formalPdf, html as formalHtml } from "./lib/formal-print.js";
+import { makeCaseTasks } from "./lib/case-tasks.js";
+import { CLAIM_LIMIT_MESSAGE } from "../shared/claim-limit.js";
 // Express application factory. `createApp(config)` is used by server/index.js and the test suite.
 import express from "express";
 import multer from "multer";
@@ -109,7 +119,47 @@ export function createApp(config) {
   investigations.useFacebook(url => live.facebookForVerification(url, { resolveShare: link => social.resolveFacebookShare(link) }));
   const keywords = makeKeywordSearch(db, { watch, watchCollector, investigations, storage, audit, config, version: VERSION0, live, ai, approvals });
   const screenshots = makeScreenshots(db, { config, storage, audit, investigations, io, social, fetchPage, notify });
-  const ctx = { videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
+  const latestKenyaNews = makeLatestKenyaNews();
+  const securityKenyaNews = makeLatestKenyaNews({ topic: "security" });
+  const tasks = makeCaseTasks(db, { cases, audit });
+  tasks.register("analysis", async (user, id) => {
+    await cases.startAnalysis(user, id);
+    const c = cases.mustCase(id); if (c.status === "analysis_failed") throw new HttpError(422, c.analysis_error);
+    const official_check = await retrieval.retrieve(user, id, { use: ["kdf_official"] }, cases);
+    return { case_id: id, claims: cases.claimCapacity(id), official_check };
+  });
+  const reverseImages = makeReverseImageSearch(config);
+  tasks.register("collection", async (user, id, b) => {
+    if(b.reverse_image) {
+      if(b.confirm_external !== true) throw new HttpError(400,"Confirm this image is cleared for external reverse-image search.");
+      const m=db.prepare("SELECT * FROM media WHERE id=? AND case_id=? AND kind='image'").get(b.media_id,id);
+      if(!m) throw new HttpError(404,"Image not found in this case.");
+      if(!reverseImages.status().configured) throw new HttpError(503,reverseImages.status().needs);
+      audit(user,"Image sent to online reverse-image search","case",id,{media:m.id,sha256:m.sha256,provider:reverseImages.status().service});
+      const reverse_image = await reverseImages.search(fs.readFileSync(storage.pathOf(m.sha256)));
+      const official_check = await retrieval.retrieve(user, id, { use: ["kdf_official"] }, cases);
+      return { reverse_image, official_check, media_id:m.id };
+    }
+    const result = await retrieval.retrieve(user, id, { claimIds: b.claim_ids, use: b.use }, cases);
+    const configured = (result.connectors || []).filter(c => c.configured);
+    if (configured.length && configured.every(c => c.errors?.length)) throw new HttpError(422, "Evidence collection failed for the configured services. Existing evidence was retained. Retry or check service status.");
+    return result;
+  });
+  tasks.register("verification", async (user, id, b) => {
+    const r = await ai.request(user, id, b); await r.job;
+    const run = db.prepare("SELECT status,error FROM ai_runs WHERE id=?").get(r.id);
+    if (run.status !== "completed") throw new HttpError(422, run.error || "AI verification failed. Retry the task.");
+    return { run_id: r.id };
+  });
+  tasks.register("report", async (user, id, b) => {
+    cases.assertReportClaims(id);
+    const r = automaticReports.start(user, id, b); await r.job;
+    const result = automaticReports.get(id); if (result.status !== "completed") throw new HttpError(422, result.error);
+    return { case_id: id, report_url: `/api/cases/${id}/automatic-report.html` };
+  });
+  tasks.start();
+  const briefs = makeBriefReports(db, { audit, notify });
+  const ctx = { briefs, securityKenyaNews, latestKenyaNews, tasks, videoCheck, screenshots, approvals, autocomplete, notify, db, audit, storage, media, cases, reports, automaticReports, ai, sessions, config, retrieval, usage, transcriber, coverage, watch, watchCollector, investigations, live, keywords };
 
   const app = express();
   app.disable("x-powered-by");
@@ -227,6 +277,14 @@ export function createApp(config) {
   api.use(general);
   api.use((req, res, next) => (req.method === "POST" && HEAVY.test(req.path) ? heavy(req, res, next) : next()));
 
+  // rank and appointment for the "Prepared by" block of formal reports
+  api.patch("/me/profile", h((req, res) => {
+    const b = req.body || {}, set = {};
+    for (const k of ["rank", "appointment"]) if (b[k] !== undefined) set[k] = String(b[k] ?? "").trim().slice(0, 120) || null;
+    if (!Object.keys(set).length) return res.json({ ok: true });
+    db.prepare(`UPDATE users SET ${Object.keys(set).map(k => `${k} = @${k}`).join(", ")} WHERE id = @id`).run({ ...set, id: req.user.id });
+    audit(req.user, "Profile updated (rank, appointment)", "user", String(req.user.id), set); res.json({ ok: true, ...set });
+  }));
   api.patch("/me/preferences", h((req, res) => {
     const m = req.body?.ui_mode; if (!["guided", "advanced"].includes(m)) throw new HttpError(400, "Mode must be guided or advanced.");
     db.prepare("UPDATE users SET ui_mode = ? WHERE id = ?").run(m, req.user.id); res.json({ ok: true, ui_mode: m });
@@ -280,6 +338,7 @@ export function createApp(config) {
     let search = null;
     const ext = retrieval.status().filter(s => s.sends_to).map(s => s.key);   // unconfigured services report "not configured"
     if (b.search !== false) { try { search = await retrieval.retrieve(req.user, id, { use: ["kb", "holdings", ...(b.search ? ext : [])] }, cases); } catch (e) { search = { error: e.message }; } }
+    if (b.search === false) { try { search = await retrieval.retrieve(req.user, id, { use: ["kdf_official"] }, cases); } catch (e) { search = { error: e.message }; } }
     res.status(201).json({ ...verifyResult(id, search), truncated,
       source: page ? { title: page.title, site: page.site, final_url: page.finalUrl, published: page.published, published_basis: page.publishedBasis, modified: page.modified, sha256: snap.sha256, bytes: page.raw.length } : null });
   }));
@@ -541,6 +600,8 @@ export function createApp(config) {
   // the template starts with the sources that are connected on this server (X recent search is kept so its status shows)
   const template = () => { const t = kdfTemplate(), ready = ["x_search", "youtube", "reddit", "bluesky", "mastodon", "threads", "instagram", "tiktok"].filter(s => watchCollector.sourcesReady(s));
     t.definition.sources = [...new Set([...(ready.length ? ready : ["x_search"]), ...(String(config.collect?.rssFeeds || "").trim() ? ["news"] : [])])]; return t; };
+  api.get("/watch/news/security", h(async (req,res) => res.json(await securityKenyaNews.get())));
+  api.get("/watch/news/latest", h(async (req,res) => res.json(await latestKenyaNews.get())));
   api.get("/watch/overview", (req, res) => res.json({ status: watchCollector.status(), caveats: WATCH_CAVEATS, sources: WATCH_SOURCES, manual_sources: MANUAL_SOURCES, watchlists: watch.list(), template: template(), users: assignable(),
     alert_counts: Object.fromEntries(db.prepare("SELECT status, COUNT(*) n FROM watch_alerts WHERE is_training = 0 GROUP BY status").all().map(r => [r.status, r.n])),
     datasets: db.prepare("SELECT id, name, posts, first_at, last_at, is_sample, imported_at FROM io_datasets ORDER BY id DESC").all(),
@@ -947,21 +1008,36 @@ export function createApp(config) {
       FROM cases c LEFT JOIN users u ON u.id = c.assigned_to WHERE ${w.join(" AND ")} ORDER BY c.updated_at DESC LIMIT 500`).all(p);
     res.json({ cases: rows });
   });
+  api.get("/tasks", h((req, res) => res.json({ jobs: backgroundOverview(db, req.user), tasks: tasks.list(req.user, req.query.case_id || null), investigations: db.prepare("SELECT id,report_id,case_id,status,stage,subject,created_at FROM investigations WHERE created_by=? ORDER BY created_at DESC LIMIT 30").all(req.user.id).map(t => ({ ...t, status_label: ({ queued: "Pending", running: "Processing", done: "Completed", failed: "Failed" })[t.status] || t.status })) })));
+  api.get("/tasks/:tid", h((req, res) => res.json(tasks.get(req.user, +req.params.tid))));
+  api.post("/tasks/:tid/retry", h((req, res) => res.status(202).json(tasks.retry(req.user, +req.params.tid))));
+  api.post("/cases/:id/tasks", heavy, h((req, res) => res.status(202).json(tasks.enqueue(req.user, req.params.id, req.body?.kind, req.body?.input || {}, { requestKey: req.body?.request_key || null }))));
+  api.post("/cases/:id/claims/select", requirePerm("case.edit"), h((req, res) => { cases.selectClaims(req.user, req.params.id, req.body?.claim_ids); res.json({ ok: true }); }));
   api.post("/cases", requirePerm("case.create"), h((req, res) => res.status(201).json({ id: cases.create(req.user, req.body || {}) })));
   api.get("/cases/:id", (req, res) => res.json(cases.aggregate(req.params.id, { forUser: req.user })));
   api.patch("/cases/:id", requirePerm("case.edit"), h((req, res) => res.json({ version: cases.update(req.user, req.params.id, req.body || {}, req.headers["if-match"]) })));
   api.post("/cases/:id/assign", h((req, res) => { cases.assign(req.user, req.params.id, req.body?.user_id || null); res.json({ ok: true }); }));
   api.post("/cases/:id/analyse", requirePerm("case.edit"), h(async (req, res) => {
-    const done = cases.startAnalysis(req.user, req.params.id);
-    if (req.query.wait === "1") await done;
-    res.status(202).json({ status: cases.getCase(req.params.id).status });
+    if (req.query.wait === "1") {
+      await cases.startAnalysis(req.user, req.params.id);
+      return res.status(202).json({ status: cases.getCase(req.params.id).status });
+    }
+    const task = tasks.enqueue(req.user, req.params.id, "analysis", {}, { requestKey: req.body?.request_key || null });
+    res.status(202).json({ task, status: cases.getCase(req.params.id).status });
   }));
   api.get("/cases/:id/readiness", (req, res) => res.json(cases.readiness(cases.mustCase(req.params.id).id)));
   api.post("/cases/:id/automatic-report", requirePerm("case.edit"), heavy, h((req, res) => {
-    automaticReports.start(req.user, req.params.id, { search_external: req.body?.search_external === true, confirm_external: req.body?.confirm_external === true });
-    res.status(202).json({ status: 'running' });
+    const task = tasks.enqueue(req.user, req.params.id, "report", { search_external: req.body?.search_external === true, confirm_external: req.body?.confirm_external === true }, { requestKey: req.body?.request_key || null });
+    res.status(202).json({ status: task.status, task });
   }));
-  api.get("/cases/:id/automatic-report", (req, res) => res.json(automaticReports.get(req.params.id)));
+  api.get("/cases/:id/automatic-report", (req, res) => {
+    cases.mustCase(req.params.id);
+    const latest = db.prepare("SELECT id,status,error FROM case_tasks WHERE case_id=? AND kind='report' AND (created_by=? OR ?='admin') ORDER BY id DESC LIMIT 1").get(req.params.id, req.user.id, req.user.role);
+    const saved = automaticReports.get(req.params.id);
+    if (latest && ['pending','processing'].includes(latest.status)) return res.json({ ...saved, task: latest, status: 'running', stage: saved?.status === 'running' ? saved.stage : latest.status });
+    if (latest?.status === 'failed') return res.json({ ...saved, task: latest, status: 'failed', error: latest.error });
+    res.json(saved ? { ...saved, task: latest || null } : null);
+  });
   api.get("/cases/:id/automatic-report.:fmt(html|json)", h((req, res) => {
     const saved = automaticReports.get(req.params.id);
     if (!saved?.report) throw new HttpError(404, 'No automatic report has been generated yet.');
@@ -1210,10 +1286,11 @@ export function createApp(config) {
   // ---------------------------------------------------------------- automatic investigations (one click: extract, analyse, search, compare, assess, report)
   api.post("/investigations", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     const b = req.body || {};
-    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true })); }
+    try { res.status(202).json(investigations.start(req.user, { text: b.text, url: b.url, files: req.files || [], isTraining: b.is_training === "true" || b.is_training === true, requestKey: b.request_key || null, geminiPublicImages: b.gemini_public_images === "true" || b.gemini_public_images === true })); }
     catch (e) { cleanup(req.files || []); throw e; }
   }));
   // ---------------------------------------------------------------- reverse video search and verification (1.35)
+  api.get("/reverse-images/status", (req,res)=>res.json(reverseImages.status()));
   api.get("/video-checks/status", (req, res) => res.json(videoCheck.status()));
   api.post("/media/:id/video-check", requirePerm("case.edit"), h((req, res) => res.status(202).json(videoCheck.start(req.user, req.params.id))));
   api.get("/media/:id/video-checks", (req, res) => res.json({ analyses: videoCheck.forMedia(req.params.id) }));
@@ -1255,7 +1332,9 @@ export function createApp(config) {
   api.post("/monitor/reports/:id/submit", requirePerm("report.submit"), h((req, res) => res.json(keywords.submitReport(req.user, +req.params.id, req.body || {}))));
   api.post("/monitor/reports/:id/decision", requirePerm("report.hod"), h(async (req, res) => res.json(await keywords.decideReport(req.user, +req.params.id, req.body || {}))));
   api.put("/monitor/reports/:id/assessment", requirePerm("report.submit"), h((req, res) => res.json(keywords.editAssessment(req.user, +req.params.id, req.body || {}))));
+  api.get("/gemini-images/status", h((req, res) => res.json({ configured: !!(config.geminiImages?.apiKey && config.geminiImages?.model), model: config.geminiImages?.model || null })));
   api.post("/investigations/capture", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.capture(req.user, req.body || {}))));
+  api.post("/investigations/:id/retry", requirePerm("case.create"), h((req, res) => res.status(202).json(investigations.retry(req.user, req.params.id))));
   api.post("/investigations/:id/report", requirePerm("case.create"), h(async (req, res) => res.json(await investigations.regenerate(req.user, req.params.id))));
   api.post("/investigations/:id/rerun", requirePerm("case.create"), upload.array("files", 5), h((req, res) => {
     try { res.status(202).json(investigations.rerun(req.user, req.params.id, { text: req.body?.text, files: req.files || [], source_url: req.body?.source_url })); } catch (e) { cleanup(req.files || []); throw e; }
@@ -1313,6 +1392,80 @@ export function createApp(config) {
   api.post("/live/instagram/test", requirePerm("watch.manage"), h(async (req, res) => res.json(await live.testInstagram(req.user))));
   api.post("/live/training/sample", requirePerm("case.create"), h(async (req, res) => { if (scopeOf(req) !== 1) throw new HttpError(400, "Practice posts can only be loaded in Training mode."); res.status(201).json(await live.loadPractice(req.user)); }));
 
+  // ---------------------------------------------------------------- formal one-page report (UNIT: STRATEGIC COMMUNICATION)
+  // Generate a draft from the case or dataset records, edit it, then download it as Word or PDF or print it. Downloads
+  // and printing are refused until every required field is filled and the text is measured to fit one A4 page.
+  const formal = makeFormalReports(db, { audit });
+  // "Prepared by" is left blank in the draft (completed by hand on the printed copy); the author may type it in
+  const preparerOf = user => { const p = db.prepare("SELECT rank, display_name, appointment FROM users WHERE id=?").get(user.id); return { rank: p?.rank || "", name: p?.display_name || "", appointment: p?.appointment || "" }; };
+  function formalSource(req) {
+    const { kind, id } = req.params;
+    if (kind === "investigation") {
+      const inv = investigations.get(id, req.user);
+      if (inv.case_id && !can(req.user,"case.read")) throw new HttpError(403,"You cannot read investigations.");
+      else if (inv.created_by !== req.user.id && !can(req.user,"case.approve")) throw new HttpError(403,"You cannot read this investigation.");
+      if (!inv.result || inv.status !== "done") throw new HttpError(409,"Wait for the investigation to complete.");
+      return { kind, id, title: inv.subject || inv.report_id, canEdit: can(req.user,"case.create") && (inv.created_by === req.user.id || can(req.user,"case.approve")), draft: () => ({...serviceReport(serviceAssessment(inv.result)),preparer:preparerOf(req.user)}) };
+    }
+    if (kind === "case") {
+      const c = cases.mustCase(id);
+      return { kind, id: c.id, title: c.title, canEdit: cases.canEditCase(req.user, c) || can(req.user, "case.approve"), draft: () => formalFromCase(reports.render(c.id).data, preparerOf(req.user)) };
+    }
+    if (kind === "dataset") {
+      const d = io.getDataset(id);
+      return { kind, id: String(d.id), title: d.name, canEdit: can(req.user, "io.import"), draft: () => formalFromDataset(buildReport(db, { dataset: d, filters: {}, user: req.user, version: VERSION }), preparerOf(req.user)) };
+    }
+    throw new HttpError(404, "Unknown report source.");
+  }
+  const formalView = (src, row) => { const content = row?.content || null; return { source: { kind: src.kind, id: src.id, title: src.title }, can_edit: src.canEdit, saved: !!row, revision: row?.revision || 0, updated_at: row?.updated_at || null, content, ...(content ? formalCheck(content) : { problems: [], layout: null, ready: false }) }; };
+  api.get("/formal/:kind(case|dataset|investigation)/:id", h((req, res) => { const src = formalSource(req); res.json(formalView(src, formal.get(src.kind, src.id))); }));
+  api.post("/formal/:kind(case|dataset|investigation)/:id/generate", h((req, res) => {
+    const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot prepare the report for this record.");
+    const cur = formal.get(src.kind, src.id), d = src.draft();
+    // regenerating keeps what the author already typed for the subject and the "Prepared by" details, unless asked to replace everything
+    const keep = cur && !req.body?.replace_all ? { subject: cur.content.subject || d.subject, preparer: { ...d.preparer, ...Object.fromEntries(Object.entries(cur.content.preparer || {}).filter(([, v]) => v)) } } : {};
+    const row = formal.save(req.user, src.kind, src.id, formalNormalise({ ...d, ...keep }, d), "Formal report generated from the records");
+    res.status(201).json(formalView(src, row));
+  }));
+  api.put("/formal/:kind(case|dataset|investigation)/:id", h((req, res) => {
+    const src = formalSource(req); if (!src.canEdit) throw new HttpError(403, "You cannot edit the report for this record.");
+    const cur = formal.get(src.kind, src.id); if (!cur) throw new HttpError(409, "Generate the report first.");
+    if (req.body?.revision != null && Number(req.body.revision) !== cur.revision) throw new HttpError(409, "Someone else saved this report since you opened it. Reload it, then make your changes again.");
+    const over = formalTooLong(req.body?.content || {}); if (over.length) throw new HttpError(400, `Too long: ${over.join(", ")}. Shorten it; the whole report must fit on one A4 page.`);
+    const row = formal.save(req.user, src.kind, src.id, formalNormalise(req.body?.content || {}, cur.content), "Formal report edited");
+    res.json(formalView(src, row));
+  }));
+  api.get("/formal/:kind(case|dataset|investigation)/:id/report.:fmt(docx|pdf|html)", h(async (req, res) => {
+    const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
+    const { problems, layout, ready } = formalCheck(row.content), fmt = req.params.fmt, name = `AIVS-${src.kind}-${String(src.id).replace(/[^\w-]/g, "")}-formal-report`;
+    if (fmt === "html") { res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'"); res.setHeader("X-Frame-Options", "SAMEORIGIN"); return res.type("html").send(formalHtml(row.content, layout, { problems, fits: layout.fits })); }
+    if (!ready) throw new HttpError(409, [!layout.fits ? `The report is about ${layout.over_lines} line(s) longer than one A4 page. Shorten the text, then try again.` : null, ...problems].filter(Boolean).join(" "));
+    audit(req.user, `Formal report downloaded (${fmt})`, src.kind === "case" ? "case" : "io_dataset", String(src.id), { revision: row.revision, font_pt: layout.size, margin_cm: layout.marginCm });
+    res.setHeader("Content-Disposition", `attachment; filename="${name}.${fmt}"`);
+    if (fmt === "pdf") return res.type("application/pdf").send(await formalPdf(row.content, layout));
+    res.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document").send(formalDocx(row.content, layout));
+  }));
+  // print: recorded in the audit log when the author presses Print Report (the browser does the printing)
+  api.post("/formal/:kind(case|dataset|investigation)/:id/printed", h((req, res) => {
+    const src = formalSource(req), row = formal.get(src.kind, src.id); if (!row) throw new HttpError(404, "No formal report has been generated yet.");
+    const { ready } = formalCheck(row.content); if (!ready) throw new HttpError(409, "The report is not ready to print.");
+    audit(req.user, "Formal report printed", src.kind === "case" ? "case" : "io_dataset", String(src.id), { revision: row.revision }); res.json({ ok: true });
+  }));
+
+  // ---------------------------------------------------------------- reports
+  api.get("/briefs", requirePerm("case.read"), (req,res)=>res.json({reports:briefs.list(scopeOf(req)===1),schedule:briefs.status()}));
+  api.get("/briefs/candidates", requirePerm("case.read"), (req,res)=>res.json({verifications:briefs.candidates(scopeOf(req)===1)}));
+  api.post("/briefs/daily", heavy, requirePerm("report.submit"), h((req,res)=>res.status(201).json(briefs.daily(req.user,{training:scopeOf(req)===1}))));
+  api.post("/briefs/consolidated", heavy, requirePerm("report.submit"), h((req,res)=>res.status(201).json(briefs.consolidate(req.user,req.body?.ids,{training:scopeOf(req)===1,title:req.body?.title}))));
+  api.get("/briefs/:id/file.:fmt(html|pdf|docx|json)", requirePerm("case.read"), h(async(req,res)=>{
+    const r=briefs.get(Number(req.params.id));const snap={...r.snapshot,is_training:!!r.is_training};
+    res.set('Cache-Control','private, no-store');
+    if(req.params.fmt==='html'){res.set('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'self'");return res.type('html').send(briefHtml(snap));}
+    res.attachment(`${r.reference}.${req.params.fmt}`);
+    if(req.params.fmt==='json')return res.json({reference:r.reference,sha256:r.sha256,snapshot:snap});
+    if(req.params.fmt==='pdf')return res.type('application/pdf').send(await briefPdf(snap));
+    return res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(briefDocx(snap));
+  }));
   api.get("/reports", (req, res) => {
     const t = scopeOf(req);
     res.json({
@@ -1400,6 +1553,7 @@ export function createApp(config) {
   // errors: JSON for the API, never stack traces
   app.use((err, req, res, _next) => {
     let status = err.status || 500, message = err.message || "Unexpected error.";
+    if (err.message === CLAIM_LIMIT_MESSAGE) { status = 409; audit(req.user, "Claim creation rejected: database limit", "case", req.params?.id || null); }
     if (err instanceof multer.MulterError) { status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400; message = err.code === "LIMIT_FILE_SIZE" ? `A file is larger than the ${config.maxUploadMb} MB limit.` : `Upload problem: ${err.message}.`; }
     if (err.type === "entity.too.large") { status = 413; message = "Request too large."; }
     if (status >= 500 && !(err instanceof HttpError)) { console.error(err); message = "Something went wrong on the server. The error has been logged."; }

@@ -59,9 +59,15 @@ async function makeCase() {
   await ana.post(`/api/cases/${id}/analyse?wait=1`, {});
   const agg = (await ana.get(`/api/cases/${id}`)).body;
   for (const e of agg.evidence.filter(x => x.status === "suggested")) await ana.patch(`/api/evidence/${e.id}`, { status: "dismissed" });
-  for (const c of agg.claims.filter(c => !c.removed)) await ana.del(`/api/claims/${c.id}`);
-  const cl = async t => (await ana.post(`/api/cases/${id}/claims`, { text: t })).body.id;
+  // Simulate a pre-limit historical case so coverage of preserved legacy records
+  // remains tested. New records use the API and are limited in separate tests.
+  S.ctx.db.prepare("DELETE FROM claims WHERE case_id=?").run(id);
+  const trigger = S.ctx.db.prepare("SELECT sql FROM sqlite_master WHERE name='claims_case_limit_insert'").get().sql;
+  S.ctx.db.exec('DROP TRIGGER claims_case_limit_insert');
+  let legacySeq = 0;
+  const cl = async text => { const cid = `CL-legacy-${++legacySeq}`; S.ctx.db.prepare("INSERT INTO claims(id,case_id,seq,text,origin,kind,created_by,created_at) VALUES (?,?,?,?,'analyst','statement',?,?)").run(cid,id,legacySeq,text,S.ctx.db.prepare("SELECT id FROM users WHERE username='ana'").get().id,new Date().toISOString()); return cid; };
   const C = { sup: await cl("SYNTHETIC: Ferries stopped on Monday."), con: await cl("SYNTHETIC: The Kipini bridge collapsed."), mix: await cl("SYNTHETIC: The road is closed for a month."), ins: await cl("SYNTHETIC: A voice note from the engineer confirms it."), flag: await cl("SYNTHETIC: Schools were closed.") };
+  S.ctx.db.exec(trigger);
   const ev = async b => { const r = await ana.post(`/api/cases/${id}/evidence`, b); assert.equal(r.status, 201, JSON.stringify(r.body)); return r.body.id; };
   const E = {
     sup: await ev({ kind: "observation", text: "SYNTHETIC: Ferry timetable shows no sailings Monday.", reference: "Ferry office notice, https://example.org/synthetic/ferry", links: [{ claim_id: C.sup, stance: "supports" }] }),
@@ -232,8 +238,10 @@ test("demonstration case loads once, labelled synthetic", async () => {
   assert.equal((await ana.post("/api/admin/training/coverage-demo")).status, 403);
   const D = await cov(ad, r.body.case_id); assert.equal(D.case.is_training, true); assert.match(D.case.title, /SYNTHETIC/);
   assert.ok(D.claims.every(c => [...c.supports, ...c.contradicts, ...c.context].every(e => /SYNTHETIC/.test(e.text))));
-  assert.deepEqual(D.claims.map(c => c.assessment), ["contradicted", "contradicted", "insufficient", "supported", "supported"]);
-  assert.equal(D.claims[3].flagged, true); assert.ok(D.claims[0].suggestions.length === 1);
+  assert.deepEqual(D.claims.map(c => c.assessment), ["contradicted", "contradicted"]);
+  assert.equal(r.body.case_ids.length, 3);
+  const second = await cov(ad, r.body.case_ids[1]);
+  assert.equal(second.claims.length, 2); assert.equal(second.claims[1].flagged, true); assert.ok(D.claims[0].suggestions.length === 1);
 });
 
 test("migration 10 keeps existing records and gives old transcript evidence its time range", async () => {

@@ -77,10 +77,12 @@ test("documents in a case: stored, leads from properties and text, claims from t
   assert.ok(keys.some(k => k.startsWith(`flag:doc:${mid}:payment`)), "payment red flag found in the document text");
   assert.ok(keys.includes(`docdate:${mid}`), "the document states a date after its creation date");
   const before = agg.claims.filter(x => !x.removed).length;
-  const cl = await ana.post(`/api/media/${mid}/claims`, {}); assert.equal(cl.status, 200); assert.ok(cl.body.added >= 1);
-  agg = (await ana.get(`/api/cases/${id}`)).body; assert.equal(agg.claims.filter(x => !x.removed).length, before + cl.body.added);
-  assert.ok(agg.claims.some(x => /M-Pesa|recruit/i.test(x.text)));
-  assert.equal((await ana.post(`/api/media/${mid}/claims`, {})).body.added, 0, "the same claims are not added twice");
+  const cl = await ana.post(`/api/media/${mid}/claims`, {});
+  assert.equal(cl.status, 409, 'a document cannot add a third claim');
+  assert.equal(cl.body.error, 'This case has reached the maximum limit of two claims.');
+  agg = (await ana.get(`/api/cases/${id}`)).body;
+  assert.equal(agg.claims.length, before);
+  assert.ok(agg.claimCandidates.some(x => /M-Pesa|recruit/i.test(x.text)), 'unselected document statements are retained for review');
   assert.equal((await view.post(`/api/media/${mid}/claims`, {})).status, 403);
   const txt = await view.get(`/api/media/${mid}/text`); assert.equal(txt.status, 200); assert.match(txt.body, /RECRUITMENT NOTICE/); assert.match(txt.headers.get("content-disposition"), /attachment/);
   const raw = await fetch(S.base + `/api/media/${mid}/content`, { headers: { cookie: ana.cookie } }); assert.match(raw.headers.get("content-disposition"), /^attachment/, "documents are never shown inline");

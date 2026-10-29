@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Automatic investigation (1.22): the ten required scenarios plus AI, failure and security cases. Each runs the whole
 // pipeline through the API against local test doubles (a news site, Google Fact Check, Brave, GDELT, Wikipedia, the X
 // embed service and an Ollama server), so the expected outcome of every scenario is known in advance. OCR (Tesseract.js),
@@ -51,7 +52,7 @@ const png = async lines => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000
 const form = (fields, files = []) => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, v); for (const [name, buf, type] of files) fd.append("files", new Blob([buf], { type }), name); return fd; };
 
 async function investigate(client, fields, files) {
-  const r = await client.post("/api/investigations", undefined, { form: form(fields, files) });
+  const r = await client.post("/api/investigations", undefined, { form: form({ ...fields, request_key: crypto.randomUUID() }, files) });
   assert.equal(r.status, 202, JSON.stringify(r.body));
   for (let i = 0; i < 600; i++) { const g = await client.get(`/api/investigations/${r.body.id}`); if (["done", "failed"].includes(g.body.status)) return g.body; await new Promise(ok => setTimeout(ok, 100)); }
   throw new Error("investigation did not finish");
@@ -71,10 +72,10 @@ async function common(client, inv) {
   }
   // the one-page Information Operations Assessment
   const html = (await client.get(`/api/investigations/${inv.id}/report.html`)).body, plain = html.replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  // 1.32: exactly four body sections, KDF IO orientation, at most two principal claims, recommendations "There is a need to…", draft marking
-  for (const h of ["AIVS — KDF INFORMATION OPERATIONS ASSESSMENT", "1. EXECUTIVE SUMMARY / BACKGROUND INFORMATION", "2. ANALYSIS", "3. ASSESSMENT", "4. RECOMMENDATIONS", inv.report_id, "DRAFT — NOT APPROVED", "Head of Department approval is required"]) assert.ok(plain.includes(h), h);
+  // Current service-writing format; the assessment and recommendations use lettered points.
+  for (const h of ["UNIT: STRATEGIC COMMUNICATION", "1. PURPOSE", "2. BACKGROUND", "3. ANALYSIS", "5. ASSESSMENT", "6. RECOMMENDATIONS", "7. CONCLUSION", inv.report_id, "DRAFT — NOT APPROVED", "authorised review before release"]) assert.ok(plain.includes(h), h);
   for (const h of ["KEY REFERENCES", "LIMITATIONS", "REPORT STATUS", "METHODOLOGY", "ADDITIONAL FINDINGS", "APPROVED BY HEAD OF DEPARTMENT"]) assert.ok(!plain.includes(h), `no ${h}`);
-  assert.equal((html.match(/<h2>/g) || []).length, 4, "exactly four body sections");
+  assert.ok(plain.includes("(a)"), "lettered report points");
   const a = (await client.get(`/api/investigations/${inv.id}/report.json`)).body, W = t => String(t).trim().split(/\s+/).filter(Boolean).length;
   assert.ok(W(a.background) <= 80 && W(a.analysis) <= 180 && W(a.assessment) <= 130 && W(a.recommendations.join(" ")) <= 115, JSON.stringify([W(a.background), W(a.analysis), W(a.assessment), W(a.recommendations.join(" "))]));
   assert.ok(a.recommendations.length >= 3 && a.recommendations.length <= 5 && a.references.length <= 4, JSON.stringify(a.recommendations));
@@ -159,7 +160,7 @@ test("2. Facebook link: restricted, nothing invented, qualified report asks for 
   // nothing readable: the investigation stops, says "Extraction blocked", and no later step claims to have run
   assert.equal(r.overall.verdict, "extraction_blocked"); assert.equal(r.overall.label, "Extraction blocked"); assert.ok(r.sections.recommendations.some(s => /screenshot/i.test(s)));
   assert.equal(inv.stages.find(s => s.key === "extract").status, "warning", "a platform restriction is not a system failure"); assert.ok(["analyse", "search", "compare", "media", "assess"].every(k => inv.stages.find(s => s.key === k).status === "skipped"));
-  assert.equal(r.ai.used, false); const rep = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.match(rep, /content could not be read, so no claim could be verified/); assert.match(rep, /Verdict: Insufficient Evidence/);
+  assert.equal(r.ai.used, false); const rep = (await ana.get(`/api/investigations/${inv.id}/report.html`)).body; assert.match(rep, /no checkable claim could be identified|original content could not be fully retrieved/); assert.match(rep, /Overall finding: Insufficient Evidence/);
 });
 // 2a ---- 1.30: a Facebook post the Meta API cannot read; the analyst continues with pasted text or a screenshot
 async function continueWith(client, id, fields, files = []) {
@@ -309,7 +310,7 @@ test("no evidence service reachable: insufficient, with the failed searches list
 });
 test("unreadable page and blank image: qualified reports, nothing invented", async () => {
   const a = await common(ana, await investigate(ana, { url: `${F}/news/empty` })); assert.equal(a.source.access, "failed"); assert.ok(a.source.fallback);
-  const b = await common(ana, await investigate(ana, {}, [["blank.png", await png([]), "image/png"]])); assert.equal(b.overall.verdict, "extraction_blocked"); assert.equal(a.overall.verdict, "extraction_blocked");
+  const b = await common(ana, await investigate(ana, {}, [["blank.png", await png([]), "image/png"]])); assert.equal(b.overall.verdict, "not_verifiable"); assert.equal(b.claims.length, 0); assert.equal(a.overall.verdict, "extraction_blocked");
 });
 
 // ---- security, roles and records
@@ -438,4 +439,15 @@ test("image downloads refuse private addresses and files that are not images", a
   await assert.rejects(fetchImage(`${F}/img/thumb.jpg`), /private or local/);
   await assert.rejects(fetchImage(`${F}/news/cholera`, { allowPrivate: true }), /JPEG, PNG, WebP or GIF/);
   assert.equal((await fetchImage(`${F}/img/thumb.jpg`, { allowPrivate: true })).mime, "image/jpeg");
+});
+
+test("images without writing continue visual verification: PNG, JPEG, TIFF and AVIF", async () => {
+  for (const format of ["png", "jpeg", "tiff", "avif"]) {
+    const buf = await sharp({ create: { width: 180, height: 120, channels: 3, background: "#137c84" } }).toFormat(format).toBuffer();
+    const inv = await investigate(ana, {}, [[`no-writing.${format}`, buf, `image/${format}`]]);
+    assert.equal(inv.status, "done", inv.error);
+    assert.ok(!inv.result.blocked, JSON.stringify(inv.result.blocked));
+    assert.equal(inv.result.claims.length, 0, "no factual claim invented from the image description");
+    assert.equal(inv.result.media.images.length, 1, "image checked and preserved");
+  }
 });

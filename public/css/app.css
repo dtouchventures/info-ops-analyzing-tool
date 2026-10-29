@@ -49,6 +49,8 @@ h1 { font-size: 22px; font-weight: 700; } h2 { font-size: 17px; font-weight: 700
 .topbar .crumbs { font-size: 13px; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .crumbs b { color: var(--text); }
 .topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.ai-availability { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; overflow-wrap: anywhere; }
+.ai-availability[data-available="true"] { color: #086b60; background: #eaf7f3; }
 .scope { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; }
 .scope button { border: 0; background: var(--surface); padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
 .scope button.on { background: var(--navy-900); color: #fff; }
@@ -263,14 +265,43 @@ table.t td.n { text-align: right; font-variant-numeric: tabular-nums; }
 pre.box { white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-family: var(--mono); font-size: 12px; max-height: 320px; overflow: auto; margin: 6px 0 0; }
 
 /* ---------- login */
-.login { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 480px); background: var(--navy-900); }
-.login .art { color: #dbe6f0; padding: 56px; display: flex; flex-direction: column; justify-content: space-between; background:
-  radial-gradient(circle at 20% 15%, rgba(19,148,143,.28), transparent 45%), linear-gradient(160deg, var(--navy-900), var(--navy-950)); }
-.login .art h1 { color: #fff; font-size: 30px; max-width: 18ch; margin-top: 24px; }
-.login .art p { max-width: 52ch; color: #b4c6d6; }
-.login .art ul { padding-left: 18px; color: #b4c6d6; max-width: 56ch; } .login .art li { margin: 6px 0; }
-.login .form { background: var(--surface); padding: 56px 44px; display: flex; flex-direction: column; justify-content: center; }
-.login .notice { font-size: 12px; color: var(--sub); margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.login { min-height: 100vh; min-height: 100svh; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: #fff; }
+.login .art { position: relative; isolation: isolate; overflow: hidden; color: white; padding: clamp(24px, 3vw, 56px); display: flex; flex-direction: column; min-height: 720px; background: #112c39; }
+/* The lower-left portion of the supplied mockup contains the operations scene;
+   crop it in CSS so its illustrated logo and form never become the working UI. */
+.login .art::before { content: ""; position: absolute; z-index: -2; inset: 0; background: url('/assets/login/operations-reference.png') left bottom / auto 1800px no-repeat; }
+.login .art::after { content: ""; position: absolute; z-index: -1; inset: 0; background: linear-gradient(180deg, rgba(4,25,33,.92), rgba(4,25,33,.25) 50%, rgba(4,25,33,.9)); }
+.login-brand { display: flex; align-items: center; gap: 22px; }
+.stratcom-mark { flex: 0 0 138px; background: #fff; border-radius: 12px; padding: 8px 12px 12px; }
+.stratcom-mark svg { display: block; width: 100%; height: 35px; overflow: visible; }
+.stratcom-mark text { font: bold 21px sans-serif; letter-spacing: 2px; fill: #073c32; }
+.stratcom-mark img { display: block; width: 100%; height: auto; }
+.login .art h1 { font-size: clamp(32px, 4vw, 64px); line-height: 1; color: #fff; margin: 0 0 14px; letter-spacing: -.04em; }
+.login .art h1 span { color: #eac57d; }
+.login-brand p { text-transform: uppercase; font-size: 12px; letter-spacing: .17em; line-height: 1.7; margin: 0; }
+.kenya-stripe { width: 100px; height: 6px; margin-top: 16px; background: linear-gradient(to right, #111 32%, white 32% 34%, #bb2229 34% 66%, white 66% 68%, #008550 68%); }
+.login-motto { font-size: 11px; letter-spacing: .17em; text-transform: uppercase; margin-top: 26px; }
+.login-context { margin: 16px 0 0; font-size: 12px; color: #52617c; }
+.login .form { background: #fff; color: #101d31; padding: 30px clamp(24px, 4.5vw, 80px) 48px; display: flex; flex-direction: column; min-width: 0; }
+.dmi-emblem { align-self: flex-end; width: 150px; height: auto; object-fit: contain; margin-bottom: 20px; }
+.login-fields { width: 100%; max-width: 540px; margin: auto; }
+.login h2 { font-size: 40px; line-height: 1.1; margin: 0 0 16px; color: #101d31; }
+.login-intro { color: #52617c; margin-bottom: 32px; }
+.login label.f { margin-top: 22px; color: #101d31; }
+.login input { width: 100%; min-height: 54px; background: #f2f5fa; border: 1px solid #b5c2d5; border-radius: 7px; color: #101d31; }
+.login-password { position: relative; }
+.login-password input { padding-right: 122px; }
+.login-password button { position: absolute; right: 6px; top: 5px; min-height: 44px; border: 0; border-radius: 5px; background: transparent; color: #314a64; font: inherit; font-size: 12px; cursor: pointer; }
+.login #lb { width: 100%; min-height: 56px; margin-top: 20px; background: #005949; justify-content: center; gap: 16px; font-size: 17px; }
+.login #lb:hover { background: #004438; }
+.login #lb:disabled { opacity: .7; cursor: wait; }
+.login #lerr { margin-top: 16px; }
+.login :focus-visible { outline: 3px solid #007e94; outline-offset: 3px; }
+.login .notice { font-size: 13px; color: #52617c; margin-top: 32px; border-top: 1px solid #d2dae6; padding-top: 22px; }
+.login-audit { font-size: 12px; color: #52617c; line-height: 1.6; }
+@media (min-width: 861px) and (max-width: 1150px) { .login-brand { gap: 14px; } .stratcom-mark { flex-basis: 100px; } .login-brand p { font-size: 10px; } }
+@media (max-width: 860px) { .login .art { min-height: 290px; } .dmi-emblem { width: 100px; margin-bottom: 24px; } .login-fields { margin: 0 auto; } .login .form { min-height: 580px; } }
+@media (max-width: 400px) { .login-brand { gap: 12px; } .stratcom-mark { flex-basis: 90px; } .login-brand p { font-size: 9px; } .login-motto { font-size: 9px; letter-spacing: .08em; } }
 
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .dash, .split { grid-template-columns: 1fr; } .kindlegend { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 860px) {
@@ -444,7 +475,7 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 @media (max-width: 640px) { .xprev .xmeta { grid-template-columns: 1fr; } .xprev .xmeta dt { margin-top: 4px; } }
 
 /* 1.21 dashboard: three service cards; Verify Information sub-tabs */
-.svcs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.svcs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .svc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); min-width: 0; }
 .svc .svc-top { display: flex; align-items: center; gap: 10px; } .svc h2 { margin: 0; font-size: 17px; } .svc p { margin: 0; flex: 1; }
 .svc .mic { display: inline-flex; width: 34px; height: 34px; border-radius: 8px; align-items: center; justify-content: center; background: var(--teal-50); color: var(--teal-700); }
@@ -506,3 +537,30 @@ details#more > summary { cursor: pointer; padding: 6px 0; }
 .pagehead .aiind { margin-left: auto; text-align: right; min-width: 180px; }
 .pagehead .aiind .chip { font-weight: 600; }
 @media (max-width: 700px) { .pagehead .aiind { margin-left: 0; text-align: left; } }
+
+/* JICHO AI dashboard: compact cards and clear source status. */
+.brand .brand-ai { font-size: inherit; color: #eac57d; }
+.brand-emblem { width: 56px; height: 44px; object-fit: contain; flex: none; background: #fff; border-radius: 6px; padding: 3px; }
+.dashboard-eyebrow { text-transform: uppercase; font-size: 11px; letter-spacing: .1em; font-weight: 700; color: var(--teal-700); margin-bottom: 8px !important; }
+.svcs { align-items: start; }
+.svc p { flex: none; min-height: 78px; }
+.svc-figs { margin-top: 6px; }
+.svc .btn { margin-top: 6px; }
+.watch-source-details { display: inline; overflow-wrap: anywhere; }
+.watch-source-details summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.dashboard-load-warning { margin-bottom: 16px; }
+@media (max-width: 1100px) { .svcs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .svc p { min-height: 0; } }
+@media (max-width: 600px) { .svcs { grid-template-columns: minmax(0, 1fr); } .topbar .right { flex-wrap: wrap; margin-left: 0; } }
+
+
+.case-search .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.case-task-summary { align-items: baseline; }
+
+/* formal one-page report */
+.btn.disabled { opacity: .5; cursor: not-allowed; }
+.frm-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.frm-grid textarea { width: 100%; }
+.frm-prev { width: 100%; aspect-ratio: 210 / 297; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-sm); background: #e9ecef; position: relative; container-type: inline-size; }
+.frm-prev iframe { position: absolute; top: 0; left: 0; width: 820px; height: 1160px; border: 0; transform-origin: 0 0; transform: scale(calc(100cqw / 820px)); }
+@supports not (transform: scale(calc(100cqw / 820px))) { .frm-prev iframe { transform: scale(.55); } }
+@media (max-width: 900px) { .frm-grid { grid-template-columns: 1fr; } }
