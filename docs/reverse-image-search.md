@@ -62,3 +62,10 @@ Google's [setup guide](https://docs.cloud.google.com/vision/docs/setup) covers p
 ## Validation completed
 
 Tests used a simulated provider to verify matching pages, local visual comparison, publication-date ordering, inaccessible-page handling, HTTP-200 provider error detection, absent-key handling, secret redaction and durable case results. Browser testing covered the image action, external-processing confirmation, background task and dated source links without script errors. No live Google search has been verified because the institution's Cloud Vision key has not been supplied.
+
+## No matches and service failures
+A successful Google Lens response can contain an `error` field saying it returned no results. JICHO AI treats only this exact no-result response, with HTTP success and provider status Success, as a completed search with no matches. It is not proof that the image is original. Missing or malformed responses, account errors, rate/quota limits and timeouts remain failures, with private error messages.
+
+Google Lens searches have a separate 60-second default timeout, configurable through `SERPAPI_SEARCH_TIMEOUT_MS` (1–120 seconds). This avoids applying the shorter text-search timeout to image matching. No automatic paid retry or search-provider purchase is performed.
+
+Live checks of this fix used a generated geometric image (completed with zero matches) and the previously used public military photo (three returned, locally confirmed matches). Case images were not automatically resent during troubleshooting.
